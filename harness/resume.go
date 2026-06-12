@@ -22,11 +22,12 @@ func (a *Agent) RunFrom(ctx context.Context, prior *State, input string) (*State
 
 // Resume continues prior as-is — no new input, no reset — until termination.
 // It is the primitive for finishing an interrupted run. A terminal prior
-// (Done == true) is returned unchanged (no-op): the returned pointer is the
-// same prior that was passed in, so callers can detect the no-op with
-// got == prior and should be mindful of that aliasing before mutating the
-// result. prior must be non-nil; a nil prior returns a fresh empty State and an
-// error, honoring the Run-family contract that the returned *State is never nil.
+// (Done == true) is returned unchanged (no-op). In every case Resume returns the
+// same *State that was passed in — it runs in place rather than copying — so the
+// result aliases prior; treat them as one object, and check prior.Done before
+// the call if you need to know whether a turn actually ran. prior must be
+// non-nil; a nil prior returns a fresh empty State and an error, honoring the
+// Run-family contract that the returned *State is never nil.
 //
 // Note: the in-repo checkpointer saves only at PhaseEnd (terminal state), so
 // resuming a loaded checkpoint is typically a no-op. True mid-run crash recovery

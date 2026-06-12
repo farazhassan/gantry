@@ -168,6 +168,10 @@ func TestResumeTerminalIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
+	// Terminal Resume runs in place and returns the same *State (documented).
+	if got != prior {
+		t.Error("Resume(terminal): returned a different pointer, want the same prior")
+	}
 	if got.FinalOutput != "already final" {
 		t.Errorf("FinalOutput = %q, want unchanged %q", got.FinalOutput, "already final")
 	}
