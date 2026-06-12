@@ -1,6 +1,9 @@
 package session
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/farazhassan/gantry/components/checkpointer"
@@ -18,3 +21,51 @@ type Session struct {
 
 // ID returns the session's id.
 func (s *Session) ID() string { return s.id }
+
+// Run executes one turn: Load(id) -> agent.RunFrom(prior, input) -> Save(id),
+// serialized per session by the mutex.
+//
+//   - A not-found load is treated as the first turn (prior = nil). Any other
+//     load error is returned before running, with a nil State.
+//   - A RunFrom error is returned with the non-nil partial State, unsaved.
+//   - A save failure returns the terminal State plus ErrSaveFailed (wrapped):
+//     the turn completed but was not persisted, so the caller can retry or alert
+//     while still having the answer.
+func (s *Session) Run(ctx context.Context, input string) (*harness.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prior, err := s.store.Load(ctx, s.id)
+	if err != nil {
+		if !errors.Is(err, checkpointer.ErrNotFound) {
+			return nil, fmt.Errorf("gantry/session: load %q: %w", s.id, err)
+		}
+		prior = nil // first turn
+	}
+
+	state, err := s.agent.RunFrom(ctx, prior, input)
+	if err != nil {
+		return state, err
+	}
+
+	if err := s.store.Save(ctx, s.id, state); err != nil {
+		return state, fmt.Errorf("%w: %v", ErrSaveFailed, err)
+	}
+	return state, nil
+}
+
+// History returns the persisted transcript for this session, or an empty slice
+// if the session does not exist yet.
+func (s *Session) History(ctx context.Context) ([]harness.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prior, err := s.store.Load(ctx, s.id)
+	if err != nil {
+		if errors.Is(err, checkpointer.ErrNotFound) {
+			return []harness.Message{}, nil
+		}
+		return nil, fmt.Errorf("gantry/session: load %q: %w", s.id, err)
+	}
+	return prior.Messages, nil
+}
