@@ -1,6 +1,9 @@
 package harness
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // RunFrom starts a new turn seeded from prior, appends input as a new user
 // message, and runs the normal phase loop. It carries the conversation
@@ -15,6 +18,25 @@ func (a *Agent) RunFrom(ctx context.Context, prior *State, input string) (*State
 		return a.Run(ctx, input)
 	}
 	return a.run(ctx, newStateFrom(prior, input))
+}
+
+// Resume continues prior as-is — no new input, no reset — until termination.
+// It is the primitive for finishing an interrupted run. A terminal prior
+// (Done == true) is returned unchanged (no-op). prior must be non-nil; a nil
+// prior returns a fresh empty State and an error, honoring the Run-family
+// contract that the returned *State is never nil.
+//
+// Note: the in-repo checkpointer saves only at PhaseEnd (terminal state), so
+// resuming a loaded checkpoint is typically a no-op. True mid-run crash recovery
+// requires a mid-run checkpointer, which is out of scope.
+func (a *Agent) Resume(ctx context.Context, prior *State) (*State, error) {
+	if prior == nil {
+		return NewState(""), errors.New("gantry: Resume requires a non-nil prior state")
+	}
+	if prior.Done {
+		return prior, nil
+	}
+	return a.run(ctx, prior)
 }
 
 // newStateFrom builds the next turn's State from prior. Messages are copied into

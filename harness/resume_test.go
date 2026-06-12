@@ -154,3 +154,60 @@ func TestRunFromCumulativeUsageAcrossTurns(t *testing.T) {
 		t.Errorf("r2 Usage = %+v, want cumulative {20 10 0}", r2.Usage)
 	}
 }
+
+func TestResumeTerminalIsNoOp(t *testing.T) {
+	llm := eval.NewMockLLMClient(respWith("should not be used", 0, 0))
+	a, _ := harness.New(harness.WithLLM(llm))
+
+	prior := harness.NewState("done input")
+	prior.Done = true
+	prior.DoneReason = harness.DoneNoToolCalls
+	prior.FinalOutput = "already final"
+
+	got, err := a.Resume(context.Background(), prior)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got.FinalOutput != "already final" {
+		t.Errorf("FinalOutput = %q, want unchanged %q", got.FinalOutput, "already final")
+	}
+	if len(llm.Requests()) != 0 {
+		t.Errorf("LLM was called %d times on a terminal Resume; want 0", len(llm.Requests()))
+	}
+}
+
+func TestResumeContinuesNonTerminal(t *testing.T) {
+	llm := eval.NewMockLLMClient(respWith("resumed answer", 4, 4))
+	a, _ := harness.New(harness.WithLLM(llm))
+
+	prior := harness.NewState("orig")
+	prior.Messages = []harness.Message{{Role: harness.RoleUser, Content: "orig"}}
+	prior.Done = false
+
+	got, err := a.Resume(context.Background(), prior)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !got.Done || got.DoneReason != harness.DoneNoToolCalls {
+		t.Errorf("Done=%v DoneReason=%q, want true / %q", got.Done, got.DoneReason, harness.DoneNoToolCalls)
+	}
+	if got.FinalOutput != "resumed answer" {
+		t.Errorf("FinalOutput = %q, want %q", got.FinalOutput, "resumed answer")
+	}
+	if len(llm.Requests()) != 1 {
+		t.Errorf("LLM called %d times, want 1", len(llm.Requests()))
+	}
+}
+
+func TestResumeNilPriorReturnsError(t *testing.T) {
+	llm := eval.NewMockLLMClient(respWith("x", 0, 0))
+	a, _ := harness.New(harness.WithLLM(llm))
+
+	got, err := a.Resume(context.Background(), nil)
+	if err == nil {
+		t.Error("Resume(nil): want error, got nil")
+	}
+	if got == nil {
+		t.Error("Resume(nil): want non-nil State (Run-family contract), got nil")
+	}
+}
