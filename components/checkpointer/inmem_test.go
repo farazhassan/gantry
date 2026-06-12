@@ -2,6 +2,7 @@ package checkpointer_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/farazhassan/gantry/components/checkpointer"
@@ -34,4 +35,12 @@ func TestInMemoryCheckpointerLoadUnknown(t *testing.T) {
 
 func TestCheckpointerInterface(t *testing.T) {
 	var _ checkpointer.Checkpointer = checkpointer.NewInMemory()
+}
+
+func TestInMemoryCheckpointerLoadUnknownIsErrNotFound(t *testing.T) {
+	c := checkpointer.NewInMemory()
+	_, err := c.Load(context.Background(), "ghost")
+	if !errors.Is(err, checkpointer.ErrNotFound) {
+		t.Errorf("Load unknown id: got %v, want errors.Is(..., ErrNotFound)", err)
+	}
 }
