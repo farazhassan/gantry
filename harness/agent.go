@@ -218,7 +218,17 @@ func (a *Agent) MiddlewareNames(phase Phase) []string {
 // Inspect state.DoneReason for the terminal reason in all cases; use errors.Is
 // for the blocking sentinels.
 func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
-	state := NewState(input)
+	return a.run(ctx, NewState(input))
+}
+
+// run executes the phase loop over an already-prepared state. Run and RunFrom
+// both funnel through here so the loop, tracer resolution, and termination
+// contract live in exactly one place. The state.Trace guard lets a state loaded
+// from a store (whose trace may be nil) run safely.
+func (a *Agent) run(ctx context.Context, state *State) (*State, error) {
+	if state.Trace == nil {
+		state.Trace = NewTrace()
+	}
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
 	// tracer that writes to state.Trace.
