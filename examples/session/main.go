@@ -48,9 +48,10 @@ func RunExample(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 
-	// One shared durable store stands in for Redis/SQL. Both managers point at
-	// it; the in-memory store is process-local, so sharing the instance is how
-	// the example demonstrates the cross-process resume round-trip.
+	// One shared durable store stands in for Redis/SQL — the API is identical;
+	// swap NewInMemory for a durable backend and mgr2 could run in a separate
+	// process. The resume works because the transcript round-trips through the
+	// store, not because the two managers happen to share an agent in-process.
 	store := checkpointer.NewInMemory()
 
 	mgr := session.NewManager(agent, store)
