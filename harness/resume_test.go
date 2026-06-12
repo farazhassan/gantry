@@ -208,6 +208,10 @@ func TestResumeNilPriorReturnsError(t *testing.T) {
 		t.Error("Resume(nil): want error, got nil")
 	}
 	if got == nil {
-		t.Error("Resume(nil): want non-nil State (Run-family contract), got nil")
+		t.Fatal("Resume(nil): want non-nil State (Run-family contract), got nil")
+	}
+	// The returned State should be a fresh empty one, not a partial stub.
+	if got.Input != "" || got.Done || got.DoneReason != "" {
+		t.Errorf("Resume(nil): want fresh empty State, got %+v", got)
 	}
 }
