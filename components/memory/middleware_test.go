@@ -1,0 +1,56 @@
+package memory_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/eval"
+	"github.com/farazhassan/gantry/harness"
+)
+
+func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
+	store := memory.NewInMemoryStore()
+	store.Append(context.Background(), harness.Message{Role: harness.RoleUser, Content: "earlier turn"})
+
+	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
+	a, _ := harness.New(harness.WithLLM(mock))
+	memory.WithMemory(a, store)
+
+	if _, err := a.Run(context.Background(), "now"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(reqs))
+	}
+	msgs := reqs[0].Messages
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages (history + current); got %+v", msgs)
+	}
+	if msgs[0].Content != "earlier turn" {
+		t.Errorf("history not prepended; messages[0] = %+v", msgs[0])
+	}
+}
+
+func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
+	store := memory.NewInMemoryStore()
+	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "hello", StopReason: harness.StopReasonEnd})
+	a, _ := harness.New(harness.WithLLM(mock))
+	memory.WithMemory(a, store)
+
+	if _, err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got, _ := store.Read(context.Background())
+	// Expect: user("hi"), assistant("hello")
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2; got %+v", len(got), got)
+	}
+	if got[0].Role != harness.RoleUser || got[0].Content != "hi" {
+		t.Errorf("got[0] = %+v", got[0])
+	}
+	if got[1].Role != harness.RoleAssistant || got[1].Content != "hello" {
+		t.Errorf("got[1] = %+v", got[1])
+	}
+}

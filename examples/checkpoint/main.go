@@ -1,0 +1,59 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/eval"
+	"github.com/farazhassan/gantry/harness"
+)
+
+// Result bundles the live run with the state reloaded from the checkpointer, so
+// the test can assert the round-trip preserved the run.
+type Result struct {
+	Live   *harness.State
+	Loaded *harness.State
+}
+
+// RunExample attaches an in-memory checkpointer, runs the agent once (the
+// checkpointer saves the final state during PhaseEnd), then loads the saved
+// state back by id.
+func RunExample(ctx context.Context) (*Result, error) {
+	const runID = "run-1"
+
+	llm := eval.NewMockLLMClient(harness.LLMResponse{
+		Content:    "The answer is 42.",
+		StopReason: harness.StopReasonEnd,
+	})
+
+	a, err := harness.New(harness.WithLLM(llm))
+	if err != nil {
+		return nil, err
+	}
+
+	cp := checkpointer.NewInMemory()
+	checkpointer.WithCheckpointer(a, cp, runID)
+
+	live, err := a.Run(ctx, "what is the answer?")
+	if err != nil {
+		return nil, err
+	}
+
+	loaded, err := cp.Load(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Result{Live: live, Loaded: loaded}, nil
+}
+
+func main() {
+	res, err := RunExample(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("live   : input=%q final=%q\n", res.Live.Input, res.Live.FinalOutput)
+	fmt.Printf("loaded : input=%q final=%q\n", res.Loaded.Input, res.Loaded.FinalOutput)
+}

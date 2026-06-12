@@ -1,0 +1,21 @@
+# Binaries
+*.exe
+*.test
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Coverage
+coverage.out
+*.coverprofile
+
+# Internal planning/design docs (not published)
+docs/superpowers/
