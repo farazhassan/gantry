@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,52 @@ func TestStreamChunkOmitsEmptyFields(t *testing.T) {
 	}
 	if got := string(b); got != `{"text_delta":"x"}` {
 		t.Errorf("StreamChunk JSON = %s, want {\"text_delta\":\"x\"}", got)
+	}
+}
+
+func TestEventToolFieldsJSONShape(t *testing.T) {
+	ev := Event{
+		Type:      EventToolCall,
+		Iteration: 1,
+		ToolCall:  &ToolCall{ID: "c1", Name: "calc", Input: json.RawMessage(`{"a":2}`)},
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{`"tool_call":`, `"id":"c1"`, `"name":"calc"`, `"input":{"a":2}`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Event JSON %s missing %s", got, want)
+		}
+	}
+	// No PascalCase keys leaked through.
+	for _, bad := range []string{`"ID"`, `"Name"`, `"Input"`, `"CallID"`, `"IsError"`, `"Err"`} {
+		if strings.Contains(got, bad) {
+			t.Errorf("Event JSON %s leaked PascalCase key %s", got, bad)
+		}
+	}
+
+	res := Event{
+		Type:       EventToolResult,
+		ToolResult: &ToolResult{CallID: "c1", Content: "5", IsError: false},
+	}
+	rb, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	for _, want := range []string{`"call_id":"c1"`, `"content":"5"`, `"is_error":false`} {
+		if !strings.Contains(string(rb), want) {
+			t.Errorf("ToolResult JSON %s missing %s", string(rb), want)
+		}
+	}
+	// Round-trip the tool_result event back into an Event.
+	var back Event
+	if err := json.Unmarshal(rb, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.ToolResult == nil || back.ToolResult.CallID != "c1" || back.ToolResult.Content != "5" {
+		t.Errorf("round-trip mismatch: %+v", back.ToolResult)
 	}
 }
 

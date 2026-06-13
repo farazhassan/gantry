@@ -6,9 +6,9 @@ import "encoding/json"
 // ID uniquely identifies this call within a response so the tool result
 // can be linked back via ToolResult.CallID.
 type ToolCall struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 // ToolResult is the outcome of executing a single ToolCall.
@@ -16,10 +16,10 @@ type ToolCall struct {
 // that the tool failed. The Content field carries either the success payload
 // or a human/LLM-readable error description.
 type ToolResult struct {
-	CallID  string
-	Content string
-	IsError bool
-	Err     error // optional; preserved for middleware introspection
+	CallID  string `json:"call_id"`
+	Content string `json:"content"`
+	IsError bool   `json:"is_error"`
+	Err     error  `json:"-"` // optional; preserved for middleware introspection, not serialized
 }
 
 // ToolDef describes a tool to the LLM. Schema is a JSON Schema document
