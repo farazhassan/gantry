@@ -215,6 +215,7 @@ together" reference once the pieces click.
 | **rag** | Retrieval-augmented context via `retriever.WithRetriever` | `go run ./examples/rag` |
 | **guardrail** | Termination: active block (sentinel error) vs. budget stop (nil error) | `go run ./examples/guardrail` |
 | **checkpoint** | Persisting and restoring run state by id | `go run ./examples/checkpoint` |
+| **streaming** | Streaming a whole run as JSON events over SSE via `RunStream` | `go run ./examples/streaming` |
 | **e2e** | Every component wired onto one agent | `go run ./examples/e2e` |
 
 ## Eval
@@ -311,6 +312,9 @@ built-ins and adapters. More ideas, feature requests or contributions toward any
 - [ ] Custom tracer hooks
 - [ ] Logging to terminal
 - [ ] Logging to file
+
+**Streaming**
+- [x] Optional `StreamingLLMClient` + `RunStream` whole-run event stream
 
 ## Contributing
 

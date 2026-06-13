@@ -40,7 +40,10 @@ const (
 // Event is a single whole-run observation emitted by RunStream. It is
 // JSON-serializable with a Type discriminator so a web server can forward it
 // over SSE/WebSocket verbatim. Only the fields relevant to Type are set; the
-// rest are omitted.
+// rest are omitted. Note on ordering: EventToolCall and EventToolResult events
+// are emitted after the phase_end event of the phase that produced them,
+// because they are derived from State and only become available once that
+// phase's handler has returned.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
