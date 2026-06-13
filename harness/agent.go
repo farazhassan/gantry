@@ -218,7 +218,18 @@ func (a *Agent) MiddlewareNames(phase Phase) []string {
 // Inspect state.DoneReason for the terminal reason in all cases; use errors.Is
 // for the blocking sentinels.
 func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
+	return a.run(ctx, input, nil)
+}
+
+// run is the shared agent loop used by both Run (sink == nil) and RunStream
+// (sink != nil). With a nil sink, every emit is a no-op and behavior is
+// identical to the pre-streaming Run.
+func (a *Agent) run(ctx context.Context, input string, sink EventSink) (*State, error) {
 	state := NewState(input)
+
+	if sink != nil {
+		ctx = withSink(ctx, sink)
+	}
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
 	// tracer that writes to state.Trace.
@@ -254,6 +265,9 @@ func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
 			if err := a.runPhase(ctx, tracer, ph, state); err != nil {
 				return state, wrap(err)
 			}
+			if err := a.emitPhaseEffects(ctx, ph, state); err != nil {
+				return state, wrap(err)
+			}
 		}
 		state.Iteration++
 	}
@@ -268,14 +282,29 @@ func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
 		return state, wrap(err)
 	}
 
+	if err := emit(ctx, Event{
+		Type:        EventDone,
+		Iteration:   state.Iteration,
+		DoneReason:  state.DoneReason,
+		FinalOutput: state.FinalOutput,
+	}); err != nil {
+		return state, wrap(err)
+	}
+
 	return state, nil
 }
 
 // runPhase resolves the inner handler for the phase, composes the chain,
-// opens a span, and invokes the result.
+// opens a span, and invokes the result. When a sink is present (RunStream) it
+// emits a phase_start before and a phase_end after the handler.
 func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state *State) error {
 	ctx, span := tracer.StartSpan(ctx, "phase:"+string(phase))
 	span.SetAttr("iteration", state.Iteration)
+
+	if err := emit(ctx, Event{Type: EventPhaseStart, Iteration: state.Iteration, Phase: phase}); err != nil {
+		span.End(err)
+		return err
+	}
 
 	inner := a.resolveInner(phase)
 	mws := make([]Middleware, len(a.chains[phase]))
@@ -290,7 +319,10 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 		span.SetAttr("done_reason", string(state.DoneReason))
 	}
 	span.End(err)
-	return err
+	if err != nil {
+		return err
+	}
+	return emit(ctx, Event{Type: EventPhaseEnd, Iteration: state.Iteration, Phase: phase})
 }
 
 // resolveInner returns the built-in inner handler for the given phase.
