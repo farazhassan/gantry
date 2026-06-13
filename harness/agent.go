@@ -282,6 +282,10 @@ func (a *Agent) run(ctx context.Context, input string, sink EventSink) (*State, 
 		return state, wrap(err)
 	}
 
+	// The done event's Iteration is the final loop counter, i.e. one past the
+	// last in-loop iteration on a normal finish (phase/tool events carry the
+	// in-loop value). It reports how many iterations ran, not the index of the
+	// last one.
 	if err := emit(ctx, Event{
 		Type:        EventDone,
 		Iteration:   state.Iteration,
