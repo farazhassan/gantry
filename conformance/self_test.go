@@ -28,6 +28,14 @@ func TestMockLLMClientConformance(t *testing.T) {
 	})
 }
 
+func TestMockStreamingLLMClientConformance(t *testing.T) {
+	conformance.StreamingLLMClientSuite(t, func() harness.StreamingLLMClient {
+		return eval.NewMockLLMClient(
+			harness.LLMResponse{Content: "hello world", StopReason: harness.StopReasonEnd},
+		)
+	})
+}
+
 func TestInMemoryMemoryConformance(t *testing.T) {
 	conformance.MemorySuite(t, func() memory.Memory {
 		return memory.NewInMemoryStore()
