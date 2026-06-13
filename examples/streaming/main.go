@@ -76,6 +76,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// X-Accel-Buffering disables response buffering in nginx and similar
+	// reverse proxies, which otherwise defeats live SSE streaming.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	enc := json.NewEncoder(w)
 	sink := func(ev harness.Event) error {
@@ -95,6 +98,8 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// RunStream follows the request context: if the browser disconnects,
 	// cancellation propagates and the run stops.
+	// The final state is discarded here: its FinalOutput was already sent to
+	// the client as the terminal done event.
 	if _, err := a.RunStream(r.Context(), "what is 2 + 3?", sink); err != nil {
 		log.Printf("run stream: %v", err)
 	}
