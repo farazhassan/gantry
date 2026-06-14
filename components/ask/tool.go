@@ -112,17 +112,18 @@ func validate(req Request) error {
 		return fmt.Errorf("ask: questions must have 1-4 items, got %d", n)
 	}
 	for i, q := range req.Questions {
+		qi := i + 1
 		switch {
 		case q.Header == "":
-			return fmt.Errorf("ask: question %d: header is required", i)
+			return fmt.Errorf("ask: question %d: header is required", qi)
 		case len([]rune(q.Header)) > 12:
-			return fmt.Errorf("ask: question %d: header must be <= 12 chars", i)
+			return fmt.Errorf("ask: question %d: header must be <= 12 chars", qi)
 		case q.Text == "":
-			return fmt.Errorf("ask: question %d: text is required", i)
+			return fmt.Errorf("ask: question %d: text is required", qi)
 		case len(q.Options) > 0 && (len(q.Options) < 2 || len(q.Options) > 4):
-			return fmt.Errorf("ask: question %d: options must have 2-4 items when present, got %d", i, len(q.Options))
+			return fmt.Errorf("ask: question %d: options must have 2-4 items when present, got %d", qi, len(q.Options))
 		case q.MultiSelect && len(q.Options) == 0:
-			return fmt.Errorf("ask: question %d: multiSelect requires options", i)
+			return fmt.Errorf("ask: question %d: multiSelect requires options", qi)
 		}
 	}
 	return nil
