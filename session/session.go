@@ -86,5 +86,7 @@ func (s *Session) History(ctx context.Context) ([]harness.Message, error) {
 		}
 		return nil, fmt.Errorf("gantry/session: load %q: %w", s.id, err)
 	}
-	return prior.Messages, nil
+	msgs := make([]harness.Message, len(prior.Messages))
+	copy(msgs, prior.Messages)
+	return msgs, nil
 }
