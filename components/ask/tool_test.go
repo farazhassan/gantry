@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry/components/ask"
+	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/conformance"
 )
 
 func TestDefinitionDefaultNameAndValidSchema(t *testing.T) {
@@ -42,6 +44,12 @@ func TestNewToolPanicsOnNilPrompter(t *testing.T) {
 
 // compile-time assertion lives with the implementation; this keeps ctx import used.
 var _ = context.Background
+
+func TestAskUserConformsToToolSuite(t *testing.T) {
+	conformance.ToolSuite(t, func() tool.Tool {
+		return ask.NewTool(ask.NewAuto(ask.Response{Answers: []ask.Answer{}}))
+	})
+}
 
 func TestInvokeHappyPathReturnsResponseJSON(t *testing.T) {
 	var gotReq ask.Request
