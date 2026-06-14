@@ -218,14 +218,20 @@ func (a *Agent) MiddlewareNames(phase Phase) []string {
 // Inspect state.DoneReason for the terminal reason in all cases; use errors.Is
 // for the blocking sentinels.
 func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
-	return a.run(ctx, input, nil)
+	return a.run(ctx, NewState(input), nil)
 }
 
-// run is the shared agent loop used by both Run (sink == nil) and RunStream
-// (sink != nil). With a nil sink, every emit is a no-op and behavior is
-// identical to the pre-streaming Run.
-func (a *Agent) run(ctx context.Context, input string, sink EventSink) (*State, error) {
-	state := NewState(input)
+// run executes the phase loop over an already-prepared state. The whole Run
+// family funnels through here so the loop, tracer resolution, and termination
+// contract live in exactly one place: Run/RunStream pass a fresh NewState,
+// RunFrom a state seeded from a prior turn, and Resume the prior state itself.
+// A nil sink makes every emit a no-op (plain Run); a non-nil sink streams
+// whole-run Events (RunStream). The state.Trace guard lets a state loaded from
+// a store (whose trace may be nil) run safely.
+func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (*State, error) {
+	if state.Trace == nil {
+		state.Trace = NewTrace()
+	}
 
 	if sink != nil {
 		ctx = withSink(ctx, sink)

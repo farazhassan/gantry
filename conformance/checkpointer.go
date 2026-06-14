@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/farazhassan/gantry/components/checkpointer"
@@ -32,7 +33,10 @@ func CheckpointerSuite(t *testing.T, factory func() checkpointer.Checkpointer) {
 		c := factory()
 		_, err := c.Load(context.Background(), "ghost")
 		if err == nil {
-			t.Errorf("expected error for unknown id")
+			t.Fatalf("expected error for unknown id")
+		}
+		if !errors.Is(err, checkpointer.ErrNotFound) {
+			t.Errorf("expected error to wrap checkpointer.ErrNotFound, got %v", err)
 		}
 	})
 

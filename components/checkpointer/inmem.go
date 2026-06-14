@@ -34,7 +34,7 @@ func (c *InMemoryCheckpointer) Load(_ context.Context, id string) (*harness.Stat
 	defer c.mu.Unlock()
 	s, ok := c.states[id]
 	if !ok {
-		return nil, fmt.Errorf("gantry: no checkpoint with id %q", id)
+		return nil, fmt.Errorf("%w: id %q", ErrNotFound, id)
 	}
 	copied := *s
 	return &copied, nil
