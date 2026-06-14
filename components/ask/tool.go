@@ -77,10 +77,47 @@ func (t *Tool) Definition() harness.ToolDef {
 	}
 }
 
-// Invoke is implemented in Task 4.
+// Invoke parses the questions, validates them, prompts the human, and returns
+// the answers as JSON for the model's next turn. A validation failure returns
+// an error, which the tool middleware surfaces to the LLM as an error result
+// (the run continues); the Prompter is not called in that case.
 func (t *Tool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
-	_ = ctx
-	_ = input
-	_ = fmt.Sprintf
-	return nil, fmt.Errorf("ask: not implemented")
+	var req Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return nil, fmt.Errorf("ask: invalid input: %w", err)
+	}
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	resp, err := t.p.Prompt(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ask: prompt: %w", err)
+	}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("ask: marshal response: %w", err)
+	}
+	return out, nil
+}
+
+func validate(req Request) error {
+	n := len(req.Questions)
+	if n < 1 || n > 4 {
+		return fmt.Errorf("ask: questions must have 1-4 items, got %d", n)
+	}
+	for i, q := range req.Questions {
+		switch {
+		case q.Header == "":
+			return fmt.Errorf("ask: question %d: header is required", i)
+		case len([]rune(q.Header)) > 12:
+			return fmt.Errorf("ask: question %d: header must be <= 12 chars", i)
+		case q.Text == "":
+			return fmt.Errorf("ask: question %d: text is required", i)
+		case len(q.Options) > 0 && (len(q.Options) < 2 || len(q.Options) > 4):
+			return fmt.Errorf("ask: question %d: options must have 2-4 items when present, got %d", i, len(q.Options))
+		case q.MultiSelect && len(q.Options) == 0:
+			return fmt.Errorf("ask: question %d: multiSelect requires options", i)
+		}
+	}
+	return nil
 }
