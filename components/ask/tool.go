@@ -71,6 +71,9 @@ func NewTool(p Prompter, opts ...Option) *Tool {
 	for _, o := range opts {
 		o(t)
 	}
+	if t.name == "" {
+		panic("ask: tool name must be non-empty")
+	}
 	return t
 }
 
