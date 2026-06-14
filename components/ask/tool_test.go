@@ -42,8 +42,6 @@ func TestNewToolPanicsOnNilPrompter(t *testing.T) {
 	_ = ask.NewTool(nil)
 }
 
-// compile-time assertion lives with the implementation; this keeps ctx import used.
-var _ = context.Background
 
 func TestAskUserConformsToToolSuite(t *testing.T) {
 	conformance.ToolSuite(t, func() tool.Tool {
