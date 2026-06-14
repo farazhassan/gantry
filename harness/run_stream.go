@@ -46,6 +46,28 @@ func (a *Agent) RunFromStream(ctx context.Context, prior *State, input string, s
 	return a.run(ctx, newStateFrom(prior, input), sink)
 }
 
+// ResumeStream is the streaming counterpart of Resume: it continues a
+// non-terminal prior in place until termination, emitting whole-run Events to
+// sink (see RunStream for the event-pairing and cancellation contract). As with
+// Resume, a terminal prior (Done == true) is returned unchanged with no events,
+// and the result aliases prior.
+//
+// sink must be non-nil; use Resume for the non-streaming case. prior must be
+// non-nil; a nil prior returns a fresh empty State and an error, honoring the
+// Run-family contract that the returned *State is never nil.
+func (a *Agent) ResumeStream(ctx context.Context, prior *State, sink EventSink) (*State, error) {
+	if sink == nil {
+		return NewState(""), errors.New("gantry: ResumeStream requires a non-nil EventSink")
+	}
+	if prior == nil {
+		return NewState(""), errors.New("gantry: ResumeStream requires a non-nil prior state")
+	}
+	if prior.Done {
+		return prior, nil
+	}
+	return a.run(ctx, prior, sink)
+}
+
 // emitPhaseEffects emits the State-derived events produced by a phase: tool
 // calls become visible after PhasePostLLM (state.PendingToolCalls), and tool
 // results after PhaseToolExec (state.ToolResults, before PhaseObserve clears
