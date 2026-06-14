@@ -92,7 +92,9 @@ func TestInvokeTriStateRoundTrip(t *testing.T) {
 		t.Fatalf("Invoke: %v", err)
 	}
 	var resp ask.Response
-	_ = json.Unmarshal(out, &resp)
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if resp.Answers[0].Status != ask.StatusDeclined || resp.Answers[1].Status != ask.StatusCancelled {
 		t.Fatalf("tri-state not preserved: %+v", resp)
 	}
