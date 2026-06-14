@@ -46,6 +46,11 @@ func TestMapResult(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "audio becomes placeholder",
+			res:  &mcp.CallToolResult{Content: []mcp.Content{&mcp.AudioContent{MIMEType: "audio/wav"}}},
+			want: "[audio: audio/wav omitted]",
+		},
+		{
 			name:    "IsError returns a Go error",
 			res:     &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "boom"}}},
 			wantErr: true,
