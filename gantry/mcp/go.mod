@@ -2,7 +2,10 @@ module github.com/farazhassan/gantry/mcp
 
 go 1.25.0
 
-require github.com/modelcontextprotocol/go-sdk v1.6.1
+require (
+	github.com/farazhassan/gantry v0.0.0-00010101000000-000000000000
+	github.com/modelcontextprotocol/go-sdk v1.6.1
+)
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
