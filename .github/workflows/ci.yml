@@ -1,9 +1,13 @@
 name: CI
 
+# Automatic push/pull_request triggers are disabled to minimize GitHub Actions
+# usage costs. Run manually from the Actions tab ("Run workflow") when needed.
+# To re-enable, restore:
+#   push:
+#     branches: [main]
+#   pull_request:
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

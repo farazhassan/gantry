@@ -1,8 +1,12 @@
 name: Release
 
+# Automatic tag-push trigger is disabled to minimize GitHub Actions usage costs.
+# Run manually from the Actions tab ("Run workflow") when needed. To re-enable
+# tag-triggered releases, restore:
+#   push:
+#     tags: ['v*']
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
