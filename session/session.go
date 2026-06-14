@@ -68,7 +68,7 @@ func (s *Session) run(ctx context.Context, input string, sink harness.EventSink)
 	}
 
 	if err := s.store.Save(ctx, s.id, state); err != nil {
-		return state, fmt.Errorf("%w: %v", ErrSaveFailed, err)
+		return state, fmt.Errorf("%w: save %q: %w", ErrSaveFailed, s.id, err)
 	}
 	return state, nil
 }
