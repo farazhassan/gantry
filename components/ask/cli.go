@@ -36,8 +36,11 @@ func (c *CLI) Prompt(_ context.Context, req Request) (Response, error) {
 	for i, q := range req.Questions {
 		c.render(q)
 		line, err := c.in.ReadString('\n')
-		if line == "" && err != nil {
-			// Nothing read (EOF/error) before this question: cancel everything.
+		if err != nil && err != io.EOF {
+			return resp, err
+		}
+		if err == io.EOF && line == "" {
+			// Nothing read (EOF) before this question: cancel everything.
 			for j := range resp.Answers {
 				resp.Answers[j].Status = StatusCancelled
 				resp.Answers[j].Values = nil
