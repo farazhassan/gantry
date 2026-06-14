@@ -54,6 +54,64 @@ func (m *MockLLMClient) Generate(ctx context.Context, req harness.LLMRequest) (h
 	return turn.Response, turn.Err
 }
 
+// chunkSize is the number of runes per streamed text delta from the mock.
+const chunkSize = 6
+
+// GenerateStream consumes one turn from the script, streaming its Content as a
+// sequence of text-delta chunks followed by a final chunk carrying StopReason
+// and Usage. Concatenating every TextDelta reconstructs Content exactly.
+func (m *MockLLMClient) GenerateStream(ctx context.Context, req harness.LLMRequest, yield func(harness.StreamChunk) error) (harness.LLMResponse, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, req)
+	if m.pos >= len(m.script) {
+		m.mu.Unlock()
+		return harness.LLMResponse{}, ErrMockExhausted
+	}
+	turn := m.script[m.pos]
+	m.pos++
+	m.mu.Unlock()
+
+	if turn.Err != nil {
+		return turn.Response, turn.Err
+	}
+	if err := ctx.Err(); err != nil {
+		return harness.LLMResponse{}, err
+	}
+
+	for _, delta := range chunkRunes(turn.Response.Content, chunkSize) {
+		if err := ctx.Err(); err != nil {
+			return harness.LLMResponse{}, err
+		}
+		if err := yield(harness.StreamChunk{TextDelta: delta}); err != nil {
+			return harness.LLMResponse{}, err
+		}
+	}
+
+	usage := turn.Response.Usage
+	if err := yield(harness.StreamChunk{StopReason: turn.Response.StopReason, Usage: &usage}); err != nil {
+		return harness.LLMResponse{}, err
+	}
+	return turn.Response, nil
+}
+
+// chunkRunes splits s into fixed-size rune chunks. Concatenating the result
+// reproduces s exactly (including whitespace). Returns nil for the empty string.
+func chunkRunes(s string, size int) []string {
+	if s == "" {
+		return nil
+	}
+	runes := []rune(s)
+	var out []string
+	for i := 0; i < len(runes); i += size {
+		end := i + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, string(runes[i:end]))
+	}
+	return out
+}
+
 // Requests returns a copy of every LLMRequest the mock has seen.
 func (m *MockLLMClient) Requests() []harness.LLMRequest {
 	m.mu.Lock()

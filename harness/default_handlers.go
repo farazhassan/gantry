@@ -17,14 +17,40 @@ func DefaultStartHandler(ctx context.Context, state *State) error {
 }
 
 // DefaultLLMCallHandler builds the inner handler for PhaseLLMCall using the
-// supplied LLMClient. The Agent uses this internally; users can substitute
-// it by passing a custom Handler via WithInnerHandler (Plan 2).
+// supplied LLMClient. The Agent uses this internally; users can substitute it
+// by passing a custom Handler via WithInnerHandler (Plan 2).
+//
+// When a RunStream sink is active AND the client implements StreamingLLMClient,
+// the handler streams, emitting an EventTextDelta per non-empty chunk. In all
+// other cases (plain Run, or a non-streaming client) it falls back to Generate
+// — identical to the pre-streaming behavior.
 func DefaultLLMCallHandler(client LLMClient) Handler {
 	return func(ctx context.Context, state *State) error {
 		req := LLMRequest{
 			System:   state.System,
 			Messages: state.Messages,
 			Tools:    state.Tools,
+		}
+		if sink := sinkFrom(ctx); sink != nil {
+			if sc, ok := client.(StreamingLLMClient); ok {
+				resp, err := sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
+					if ch.TextDelta == "" {
+						return nil
+					}
+					return sink(Event{
+						Type:      EventTextDelta,
+						Iteration: state.Iteration,
+						Phase:     PhaseLLMCall,
+						TextDelta: ch.TextDelta,
+					})
+				})
+				if err != nil {
+					return err
+				}
+				state.LastResponse = &resp
+				state.Usage = state.Usage.Add(resp.Usage)
+				return nil
+			}
 		}
 		resp, err := client.Generate(ctx, req)
 		if err != nil {
