@@ -25,12 +25,18 @@ const schema = `{
       "items": {
         "type": "object",
         "properties": {
-          "header": {"type": "string", "maxLength": 12},
-          "text": {"type": "string"},
-          "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+          "header": {"type": "string", "minLength": 1, "maxLength": 12},
+          "text": {"type": "string", "minLength": 1},
+          "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
           "multiSelect": {"type": "boolean"}
         },
-        "required": ["header", "text"]
+        "required": ["header", "text"],
+        "allOf": [
+          {
+            "if": {"properties": {"multiSelect": {"const": true}}},
+            "then": {"required": ["options"]}
+          }
+        ]
       }
     }
   },
