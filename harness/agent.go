@@ -218,16 +218,23 @@ func (a *Agent) MiddlewareNames(phase Phase) []string {
 // Inspect state.DoneReason for the terminal reason in all cases; use errors.Is
 // for the blocking sentinels.
 func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
-	return a.run(ctx, NewState(input))
+	return a.run(ctx, NewState(input), nil)
 }
 
-// run executes the phase loop over an already-prepared state. Run and RunFrom
-// both funnel through here so the loop, tracer resolution, and termination
-// contract live in exactly one place. The state.Trace guard lets a state loaded
-// from a store (whose trace may be nil) run safely.
-func (a *Agent) run(ctx context.Context, state *State) (*State, error) {
+// run executes the phase loop over an already-prepared state. The whole Run
+// family funnels through here so the loop, tracer resolution, and termination
+// contract live in exactly one place: Run/RunStream pass a fresh NewState,
+// RunFrom a state seeded from a prior turn, and Resume the prior state itself.
+// A nil sink makes every emit a no-op (plain Run); a non-nil sink streams
+// whole-run Events (RunStream). The state.Trace guard lets a state loaded from
+// a store (whose trace may be nil) run safely.
+func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (*State, error) {
 	if state.Trace == nil {
 		state.Trace = NewTrace()
+	}
+
+	if sink != nil {
+		ctx = withSink(ctx, sink)
 	}
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
@@ -264,6 +271,9 @@ func (a *Agent) run(ctx context.Context, state *State) (*State, error) {
 			if err := a.runPhase(ctx, tracer, ph, state); err != nil {
 				return state, wrap(err)
 			}
+			if err := a.emitPhaseEffects(ctx, ph, state); err != nil {
+				return state, wrap(err)
+			}
 		}
 		state.Iteration++
 	}
@@ -278,14 +288,33 @@ func (a *Agent) run(ctx context.Context, state *State) (*State, error) {
 		return state, wrap(err)
 	}
 
+	// The done event's Iteration is the final loop counter, i.e. one past the
+	// last in-loop iteration on a normal finish (phase/tool events carry the
+	// in-loop value). It reports how many iterations ran, not the index of the
+	// last one.
+	if err := emit(ctx, Event{
+		Type:        EventDone,
+		Iteration:   state.Iteration,
+		DoneReason:  state.DoneReason,
+		FinalOutput: state.FinalOutput,
+	}); err != nil {
+		return state, wrap(err)
+	}
+
 	return state, nil
 }
 
 // runPhase resolves the inner handler for the phase, composes the chain,
-// opens a span, and invokes the result.
+// opens a span, and invokes the result. When a sink is present (RunStream) it
+// emits a phase_start before and a phase_end after the handler.
 func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state *State) error {
 	ctx, span := tracer.StartSpan(ctx, "phase:"+string(phase))
 	span.SetAttr("iteration", state.Iteration)
+
+	if err := emit(ctx, Event{Type: EventPhaseStart, Iteration: state.Iteration, Phase: phase}); err != nil {
+		span.End(err)
+		return err
+	}
 
 	inner := a.resolveInner(phase)
 	mws := make([]Middleware, len(a.chains[phase]))
@@ -300,7 +329,10 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 		span.SetAttr("done_reason", string(state.DoneReason))
 	}
 	span.End(err)
-	return err
+	if err != nil {
+		return err
+	}
+	return emit(ctx, Event{Type: EventPhaseEnd, Iteration: state.Iteration, Phase: phase})
 }
 
 // resolveInner returns the built-in inner handler for the given phase.

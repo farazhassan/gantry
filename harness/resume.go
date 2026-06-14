@@ -17,7 +17,7 @@ func (a *Agent) RunFrom(ctx context.Context, prior *State, input string) (*State
 	if prior == nil {
 		return a.Run(ctx, input)
 	}
-	return a.run(ctx, newStateFrom(prior, input))
+	return a.run(ctx, newStateFrom(prior, input), nil)
 }
 
 // Resume continues prior as-is — no new input, no reset — until termination.
@@ -39,7 +39,7 @@ func (a *Agent) Resume(ctx context.Context, prior *State) (*State, error) {
 	if prior.Done {
 		return prior, nil
 	}
-	return a.run(ctx, prior)
+	return a.run(ctx, prior, nil)
 }
 
 // newStateFrom builds the next turn's State from prior. Messages are copied into
