@@ -1,0 +1,39 @@
+name: Release
+
+# Automatic tag-push trigger is disabled to minimize GitHub Actions usage costs.
+# Run manually from the Actions tab ("Run workflow") when needed. To re-enable
+# tag-triggered releases, restore:
+#   push:
+#     tags: ['v*']
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+      - name: Verify build and tests
+        run: |
+          go build ./...
+          go test ./...
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          args=(--title "$TAG" --generate-notes --verify-tag)
+          case "$TAG" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release create "$TAG" "${args[@]}"
