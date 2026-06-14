@@ -13,7 +13,7 @@ import (
 type ServerConfig struct {
 	Command string   // executable, e.g. "npx"
 	Args    []string // arguments, e.g. ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-	Env     []string // optional os.Environ()-style entries; nil inherits the parent environment
+	Env     []string // optional os.Environ()-style entries; nil inherits the parent environment, while a non-nil empty slice runs with no environment
 }
 
 // Server is a connected MCP server with a static snapshot of its tools.
