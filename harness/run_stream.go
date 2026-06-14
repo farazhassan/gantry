@@ -28,6 +28,24 @@ func (a *Agent) RunStream(ctx context.Context, input string, sink EventSink) (*S
 	return a.run(ctx, NewState(input), sink)
 }
 
+// RunFromStream is the streaming counterpart of RunFrom: it seeds a new turn
+// from prior (carrying Messages, Usage, and Meta forward), appends input, and
+// runs the loop while emitting whole-run Events to sink. See RunStream for the
+// event-pairing and cancellation contract.
+//
+// prior == nil behaves like RunStream(ctx, input, sink), so a session's first
+// turn needs no special-casing. sink must be non-nil; use RunFrom for the
+// non-streaming case. The returned *State is always non-nil, even on error.
+func (a *Agent) RunFromStream(ctx context.Context, prior *State, input string, sink EventSink) (*State, error) {
+	if sink == nil {
+		return NewState(input), errors.New("gantry: RunFromStream requires a non-nil EventSink")
+	}
+	if prior == nil {
+		return a.run(ctx, NewState(input), sink)
+	}
+	return a.run(ctx, newStateFrom(prior, input), sink)
+}
+
 // emitPhaseEffects emits the State-derived events produced by a phase: tool
 // calls become visible after PhasePostLLM (state.PendingToolCalls), and tool
 // results after PhaseToolExec (state.ToolResults, before PhaseObserve clears

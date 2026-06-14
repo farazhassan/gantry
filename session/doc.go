@@ -4,7 +4,9 @@
 // whose Run executes one turn as Load(id) -> agent.RunFrom(prior, input) ->
 // Save(id). The store is the single source of truth, so a fresh Manager over
 // the same store and id resumes a conversation transparently — including across
-// process restarts when backed by a durable Checkpointer.
+// process restarts when backed by a durable Checkpointer. RunStream is the
+// streaming counterpart: same Load/Save contract, but it also emits whole-run
+// Events to an EventSink for forwarding over SSE.
 //
 // Memory vs. Session. Both carry a transcript across runs, but they are used
 // alternatively, never stacked for the same transcript:
