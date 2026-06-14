@@ -42,7 +42,6 @@ func TestNewToolPanicsOnNilPrompter(t *testing.T) {
 	_ = ask.NewTool(nil)
 }
 
-
 func TestAskUserConformsToToolSuite(t *testing.T) {
 	conformance.ToolSuite(t, func() tool.Tool {
 		return ask.NewTool(ask.NewAuto(ask.Response{Answers: []ask.Answer{}}))
