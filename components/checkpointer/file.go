@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,11 +26,16 @@ type FileCheckpointer struct {
 
 // NewFile returns a FileCheckpointer writing to dir, creating dir (and any
 // parents) if missing. It returns an error if dir cannot be created.
+//
+// The directory is created with 0700 (owner-only) permissions because
+// checkpoint files can hold sensitive conversation and tool output. A caller
+// that deliberately wants a shared location can pre-create dir with broader
+// permissions; MkdirAll leaves an existing directory's mode untouched.
 func NewFile(dir string) (*FileCheckpointer, error) {
 	if dir == "" {
 		return nil, errors.New("checkpointer: NewFile requires a non-empty dir")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("checkpointer: create dir %q: %w", dir, err)
 	}
 	return &FileCheckpointer{dir: dir}, nil
@@ -44,8 +50,16 @@ func (c *FileCheckpointer) path(id string) string {
 }
 
 // Save writes state as JSON to a temp file in the same directory and renames
-// it over the destination for atomic replacement.
+// it over the destination for atomic replacement. The rename is atomic and
+// replaces any existing file on every supported OS, including Windows, where
+// Go's os.Rename uses MoveFileEx with MOVEFILE_REPLACE_EXISTING.
+//
+// A nil state is rejected: persisting it would write JSON null and later load
+// back a zero-value State, silently masking an upstream bug.
 func (c *FileCheckpointer) Save(_ context.Context, id string, state *harness.State) error {
+	if state == nil {
+		return errors.New("checkpointer: Save requires a non-nil state")
+	}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("checkpointer: marshal %q: %w", id, err)
@@ -59,7 +73,12 @@ func (c *FileCheckpointer) Save(_ context.Context, id string, state *harness.Sta
 		return fmt.Errorf("checkpointer: temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
+	// A short write (n < len(data)) without an error would persist truncated
+	// JSON, so treat it as a failure.
+	if n, err := tmp.Write(data); err != nil || n < len(data) {
+		if err == nil {
+			err = io.ErrShortWrite
+		}
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("checkpointer: write %q: %w", id, err)

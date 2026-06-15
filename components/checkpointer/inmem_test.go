@@ -33,6 +33,13 @@ func TestInMemoryCheckpointerLoadUnknown(t *testing.T) {
 	}
 }
 
+func TestInMemoryCheckpointerSaveNilStateErrors(t *testing.T) {
+	c := checkpointer.NewInMemory()
+	if err := c.Save(context.Background(), "run-1", nil); err == nil {
+		t.Fatal("want error saving nil state, got nil")
+	}
+}
+
 func TestCheckpointerInterface(t *testing.T) {
 	var _ checkpointer.Checkpointer = checkpointer.NewInMemory()
 }

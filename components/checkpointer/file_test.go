@@ -71,6 +71,27 @@ func TestNewFile_CreatesDir(t *testing.T) {
 	}
 }
 
+func TestFileCheckpointer_SaveNilStateErrors(t *testing.T) {
+	fc, _ := checkpointer.NewFile(t.TempDir())
+	if err := fc.Save(context.Background(), "s", nil); err == nil {
+		t.Fatal("want error saving nil state, got nil")
+	}
+}
+
+func TestNewFile_DirIsOwnerOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ckpt")
+	if _, err := checkpointer.NewFile(dir); err != nil {
+		t.Fatalf("NewFile: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("want dir perm 0700, got %o", perm)
+	}
+}
+
 func TestFileCheckpointer_IDSanitized(t *testing.T) {
 	dir := t.TempDir()
 	fc, _ := checkpointer.NewFile(dir)
