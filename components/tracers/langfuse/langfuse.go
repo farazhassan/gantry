@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/farazhassan/gantry/harness"
 )
 
 const (
@@ -49,9 +51,7 @@ type Client struct {
 	dropped atomic.Int64
 }
 
-// NOTE: the compile-time assertion `var _ harness.Tracer = (*Client)(nil)` is
-// intentionally omitted here because StartSpan is implemented in Task 3
-// (span.go). Task 3 restores the assertion alongside StartSpan.
+var _ harness.Tracer = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)
