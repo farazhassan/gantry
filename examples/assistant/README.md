@@ -55,3 +55,9 @@ left off.
 The live servers are launched only when you run the binary; the test suite
 uses an in-process stub and a mock LLM (no network, npx, uvx, or Ollama
 needed).
+
+## Testing
+
+See [TESTING.md](./TESTING.md) for how to run the automated test suite and a
+set of turn-by-turn manual scenarios (read auto-allow, write confirmation,
+deny, persistence across restarts, `/reset`, Ctrl-C cancel, degraded mode).
