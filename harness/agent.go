@@ -228,7 +228,7 @@ func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
 // A nil sink makes every emit a no-op (plain Run); a non-nil sink streams
 // whole-run Events (RunStream). The state.Trace guard lets a state loaded from
 // a store (whose trace may be nil) run safely.
-func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (*State, error) {
+func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State, retErr error) {
 	if state.Trace == nil {
 		state.Trace = NewTrace()
 	}
@@ -251,6 +251,12 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (*State, 
 	if err := ctx.Err(); err != nil {
 		return state, wrap(err)
 	}
+
+	// Open a run-level span so every phase nests under a single trace. Tracers
+	// that export to external systems (e.g. Langfuse) can then group an entire
+	// run as one trace. The span ends with the run's terminal error.
+	ctx, runSpan := tracer.StartSpan(ctx, "run")
+	defer func() { runSpan.End(retErr) }()
 
 	// PhaseStart (once).
 	if err := a.runPhase(ctx, tracer, PhaseStart, state); err != nil {
