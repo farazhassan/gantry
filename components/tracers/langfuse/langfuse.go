@@ -16,9 +16,12 @@ import (
 const (
 	defaultHost      = "https://cloud.langfuse.com"
 	ingestionPath    = "/api/public/ingestion"
-	defaultBatchSize = 50
-	defaultInterval  = 5 * time.Second
-	bufferCapacity   = 1024
+	defaultBatchSize   = 50
+	defaultInterval    = 5 * time.Second
+	defaultHTTPTimeout = 10 * time.Second
+	// bufferCapacity is the in-memory event buffer. Intentionally not an option:
+	// the drop-on-full best-effort guarantee depends on a bounded buffer.
+	bufferCapacity = 1024
 )
 
 // Client implements harness.Tracer by batching trace events to Langfuse's
@@ -38,8 +41,10 @@ type Client struct {
 
 	closeOnce sync.Once
 
+	// mu guards traceIDs, which maps a span id to its run's trace id.
+	// Populated by StartSpan (added in span.go) — unused until then.
 	mu       sync.Mutex
-	traceIDs map[string]string // spanID -> traceID
+	traceIDs map[string]string
 
 	dropped atomic.Int64
 }
@@ -59,7 +64,7 @@ type Option func(*Client)
 func New(opts ...Option) *Client {
 	c := &Client{
 		host:      defaultHost,
-		httpc:     &http.Client{},
+		httpc:     &http.Client{Timeout: defaultHTTPTimeout},
 		batchSize: defaultBatchSize,
 		interval:  defaultInterval,
 		items:     make(chan ingestionItem, bufferCapacity),

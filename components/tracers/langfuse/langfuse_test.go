@@ -2,7 +2,6 @@ package langfuse
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -40,7 +39,6 @@ func newServerClient(t *testing.T, opts ...Option) (*Client, *capture) {
 		}
 		var batch ingestionBatch
 		_ = json.NewDecoder(r.Body).Decode(&batch)
-		_, _ = io.Copy(io.Discard, r.Body)
 		cap.mu.Lock()
 		cap.batches = append(cap.batches, batch.Batch)
 		cap.mu.Unlock()
