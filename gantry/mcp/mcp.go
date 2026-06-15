@@ -31,7 +31,7 @@ func Connect(ctx context.Context, cfg ServerConfig, opts ...Option) (*Server, er
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "gantry-mcp", Version: "v0.1.0"}, nil)
 
-	cmd := exec.Command(cfg.Command, cfg.Args...)
+	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	if cfg.Env != nil {
 		cmd.Env = cfg.Env
 	}
@@ -49,8 +49,13 @@ func Connect(ctx context.Context, cfg ServerConfig, opts ...Option) (*Server, er
 	return &Server{session: session, tools: tools}, nil
 }
 
-// Tools returns the static snapshot of tools captured at Connect.
-func (s *Server) Tools() []tool.Tool { return s.tools }
+// Tools returns the static snapshot of tools captured at Connect. The returned
+// slice is a copy, so callers cannot mutate the server's internal snapshot.
+func (s *Server) Tools() []tool.Tool {
+	out := make([]tool.Tool, len(s.tools))
+	copy(out, s.tools)
+	return out
+}
 
 // Close shuts down the MCP session and its subprocess.
 func (s *Server) Close() error { return s.session.Close() }
