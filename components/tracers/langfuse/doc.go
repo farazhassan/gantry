@@ -13,5 +13,8 @@
 //
 //	lf := langfuse.New(langfuse.WithPublicKey(pk), langfuse.WithSecretKey(sk))
 //	defer lf.Close()
-//	agent := harness.New(harness.WithLLM(llm), harness.WithTracer(lf))
+//	agent, err := harness.New(harness.WithLLM(llm), harness.WithTracer(lf))
+//	if err != nil {
+//		// handle error
+//	}
 package langfuse

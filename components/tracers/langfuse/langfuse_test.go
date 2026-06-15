@@ -128,16 +128,46 @@ func TestCloseDrainsRemaining(t *testing.T) {
 	}
 }
 
-func TestEnqueueDropsWhenFull(t *testing.T) {
-	// Stop the worker so nothing drains the buffer, then overflow it.
+func TestEnqueueDropsAfterClose(t *testing.T) {
+	// After Close the worker has flushed and exited, so further enqueues must be
+	// dropped (not silently buffered forever). Counts every post-Close item.
 	c := New(WithPublicKey("pk"), WithSecretKey("sk"))
-	_ = c.Close() // worker exits; buffer no longer drained
-	for i := 0; i < bufferCapacity+10; i++ {
+	_ = c.Close()
+	const n = 5
+	for i := 0; i < n; i++ {
+		c.enqueue(traceCreateItem("t1", "n", time.Now()))
+	}
+	if got := c.Dropped(); got != n {
+		t.Fatalf("dropped %d post-Close items, want %d", got, n)
+	}
+}
+
+func TestEnqueueDropsWhenBufferFull(t *testing.T) {
+	// Stall the worker inside send() so it stops draining, then overflow the
+	// buffer while the client is still open — exercises the buffer-full path.
+	block := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(block) }) }
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	// BatchSize 1 makes the worker flush (and block in send) after one item;
+	// the long interval keeps it from flushing on a timer.
+	c := New(WithPublicKey("pk"), WithSecretKey("sk"), WithHost(srv.URL),
+		WithHTTPClient(srv.Client()), WithBatchSize(1), WithFlushInterval(time.Hour))
+	t.Cleanup(func() { release(); _ = c.Close() })
+
+	for i := 0; i < bufferCapacity+50; i++ {
 		c.enqueue(traceCreateItem("t1", "n", time.Now()))
 	}
 	if c.Dropped() == 0 {
-		t.Fatal("expected dropped count > 0 when buffer is full")
+		t.Fatal("expected drops once the buffer filled while the worker was busy")
 	}
+	release() // let the worker proceed so Close can drain and exit
 }
 
 func TestFlushSwallowsServerError(t *testing.T) {

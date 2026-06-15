@@ -157,9 +157,19 @@ func (c *Client) Host() string { return c.host }
 // Dropped returns the number of events dropped because the buffer was full.
 func (c *Client) Dropped() int64 { return c.dropped.Load() }
 
-// enqueue adds an item without blocking. If the buffer is full the item is
-// dropped and counted, so tracing never stalls the agent.
+// enqueue adds an item without blocking. If the buffer is full — or shutdown
+// has begun, after which the worker no longer drains — the item is dropped and
+// counted, so tracing never stalls the agent and post-Close items are not
+// silently buffered forever.
 func (c *Client) enqueue(it ingestionItem) {
+	// Once Close has signalled done the worker has flushed and exited, so any
+	// further send would sit in the buffer unflushed. Drop instead.
+	select {
+	case <-c.done:
+		c.dropped.Add(1)
+		return
+	default:
+	}
 	select {
 	case c.items <- it:
 	default:
