@@ -4,9 +4,11 @@ Two ways to verify the assistant: the automated test suite (hermetic, no
 external services) and manual turn-by-turn scenarios against a live Ollama and
 the real MCP servers.
 
-> The modules declare `go 1.25`. If your system Go is older, prefix commands
-> with `GOTOOLCHAIN=go1.25.x` to fetch the matching toolchain. Examples below
-> include it; drop it if your Go is already 1.25+.
+> This nested `examples/assistant` module declares `go 1.25`; the core
+> framework module at the repo root targets `go 1.22`. If your system Go is
+> older than what a command needs, prefix it with `GOTOOLCHAIN=go1.25.x` to
+> fetch the matching toolchain. Examples below include it; drop it if your Go
+> is already 1.25+.
 
 ---
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -72,13 +73,14 @@ func connectServers(ctx context.Context, cfgs []namespacedServer, warn io.Writer
 	return cs
 }
 
-// Close shuts down every connected server, joining any errors.
+// Close shuts down every connected server, joining any errors so that one
+// server's failure neither short-circuits the others nor hides their errors.
 func (cs *connectedServers) Close() error {
-	var firstErr error
+	var errs []error
 	for _, s := range cs.servers {
-		if err := s.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }
