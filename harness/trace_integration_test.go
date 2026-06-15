@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry/eval"
@@ -55,5 +56,47 @@ func TestRunRecordsPhaseSpans(t *testing.T) {
 		if spanEnds[name] != 0 {
 			t.Errorf("span %q ends = %d, want 0 (phase should be skipped)", name, spanEnds[name])
 		}
+	}
+}
+
+func TestRunNestsPhasesUnderRunSpan(t *testing.T) {
+	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
+	a, _ := harness.New(harness.WithLLM(mock))
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	events := state.Trace.Snapshot()
+
+	// There must be exactly one top-level "run" span, and it must be parentless.
+	var runID string
+	runStarts := 0
+	for _, e := range events {
+		if e.Kind == harness.KindSpanStart && e.Name == "run" {
+			runStarts++
+			runID = e.SpanID
+			if e.ParentID != "" {
+				t.Errorf("run span ParentID = %q, want empty (root)", e.ParentID)
+			}
+		}
+	}
+	if runStarts != 1 {
+		t.Fatalf("got %d \"run\" span starts, want 1", runStarts)
+	}
+
+	// Every phase span must be parented under the run span.
+	sawPhase := false
+	for _, e := range events {
+		if e.Kind == harness.KindSpanStart && strings.HasPrefix(e.Name, "phase:") {
+			sawPhase = true
+			if e.ParentID != runID {
+				t.Errorf("phase span %q ParentID = %q, want run id %q", e.Name, e.ParentID, runID)
+			}
+		}
+	}
+	if !sawPhase {
+		t.Fatal("expected at least one phase span")
 	}
 }
