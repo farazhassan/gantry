@@ -119,6 +119,37 @@ func TestEndWithErrorMarksObservation(t *testing.T) {
 	}
 }
 
+func TestRunPatternProducesSingleTrace(t *testing.T) {
+	c, cap := newServerClient(t)
+	// Mimic the harness: one "run" span, phases nested under its context,
+	// inner phases ending before the run span.
+	ctx, runSpan := c.StartSpan(context.Background(), "run")
+	_, p1 := c.StartSpan(ctx, "phase:start")
+	p1.End(nil)
+	_, p2 := c.StartSpan(ctx, "phase:llm_call")
+	p2.End(nil)
+	runSpan.End(nil)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	items := cap.items()
+	traces := byType(items, "trace-create")
+	if len(traces) != 1 {
+		t.Fatalf("got %d trace-create, want exactly 1 per run", len(traces))
+	}
+	traceID := traces[0].Body["id"]
+	spans := byType(items, "span-create")
+	if len(spans) != 3 {
+		t.Fatalf("got %d span-create, want 3 (run + 2 phases)", len(spans))
+	}
+	for _, s := range spans {
+		if s.Body["traceId"] != traceID {
+			t.Fatalf("span %v has traceId %v, want %v", s.Body["name"], s.Body["traceId"], traceID)
+		}
+	}
+}
+
 func TestStartSpanPutsIDInContext(t *testing.T) {
 	c, _ := newServerClient(t)
 	ctx, _ := c.StartSpan(context.Background(), "outer")

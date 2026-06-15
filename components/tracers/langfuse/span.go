@@ -16,9 +16,10 @@ func spanIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// StartSpan opens a span. The first parentless span of a run becomes the
-// Langfuse trace; nested spans become observations under it. The returned
-// context carries this span's id so descendant StartSpan calls can parent
+// StartSpan opens a span. A parentless span opens a new Langfuse trace; nested
+// spans become observations under it. Gantry's harness wraps each agent run in
+// a single top-level "run" span, so one run maps to one Langfuse trace. The
+// returned context carries this span's id so descendant StartSpan calls parent
 // themselves correctly.
 func (c *Client) StartSpan(ctx context.Context, name string) (context.Context, harness.Span) {
 	id := newID()
