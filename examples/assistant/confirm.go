@@ -18,13 +18,16 @@ import (
 // fail-safe default. Adding a server is a one-line addition here.
 var readOnlyTools = map[string]map[string]bool{
 	"fs": {
-		"read_file":                true,
-		"read_multiple_files":      true,
-		"list_directory":           true,
-		"directory_tree":           true,
-		"search_files":             true,
-		"get_file_info":            true,
-		"list_allowed_directories": true,
+		"read_file":                 true,
+		"read_text_file":            true,
+		"read_media_file":           true,
+		"read_multiple_files":       true,
+		"list_directory":            true,
+		"list_directory_with_sizes": true,
+		"directory_tree":            true,
+		"search_files":              true,
+		"get_file_info":             true,
+		"list_allowed_directories":  true,
 	},
 	"web":  {"fetch": true},
 	"time": nil, // nil sentinel: all tools in this namespace are read-only
