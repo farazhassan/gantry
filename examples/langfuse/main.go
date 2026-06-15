@@ -47,13 +47,26 @@ func main() {
 	}
 
 	// Close drains the buffer with a final synchronous flush and stops the
-	// worker. A nil error means the batch POST to Langfuse succeeded.
-	if err := lf.Close(); err != nil {
-		log.Fatalf("flush to Langfuse failed: %v", err)
-	}
+	// worker. Sends are best-effort so Close always returns nil; delivery health
+	// is reported via FailedSends/Dropped instead.
+	_ = lf.Close()
 
 	fmt.Println("final output:", state.FinalOutput)
 	fmt.Println("done reason: ", state.DoneReason)
 	fmt.Println("dropped items:", lf.Dropped())
-	fmt.Printf("flushed — open %s and look for the most recent \"run\" trace\n", lf.Host())
+	fmt.Println("failed sends: ", lf.FailedSends())
+
+	// The whole point of the smoke test: any failed send — a non-success HTTP
+	// status (>= 300), or a transport error (DNS/TLS/timeout/unreachable host) —
+	// is counted by FailedSends. Fail loudly so it can't hide behind a "flushed"
+	// message.
+	if n := lf.FailedSends(); n > 0 {
+		log.Fatalf("ingestion failed (%d batch send(s)) — see the langfuse: errors logged above. "+
+			"Likely causes: wrong credentials, a wire-contract mismatch (bad status), "+
+			"or an unreachable/misconfigured host", n)
+	}
+	if lf.Dropped() > 0 {
+		log.Fatalf("buffer dropped %d events before flush — increase batch/flush settings", lf.Dropped())
+	}
+	fmt.Printf("flushed cleanly — open %s and look for the most recent \"run\" trace\n", lf.Host())
 }

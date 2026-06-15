@@ -48,7 +48,8 @@ type Client struct {
 	mu       sync.Mutex
 	traceIDs map[string]string
 
-	dropped atomic.Int64
+	dropped  atomic.Int64
+	sendErrs atomic.Int64
 }
 
 var _ harness.Tracer = (*Client)(nil)
@@ -157,6 +158,13 @@ func (c *Client) Host() string { return c.host }
 // Dropped returns the number of events dropped because the buffer was full.
 func (c *Client) Dropped() int64 { return c.dropped.Load() }
 
+// FailedSends returns the number of batch flushes that failed: a non-success
+// HTTP status (>= 300), a transport error (DNS/TLS/timeout/unreachable host),
+// or a request-build/marshal error. It does not affect agent execution — sends
+// are best-effort — but lets callers observe delivery health, e.g. a smoke test
+// that wants to fail fast on a wire-contract, auth, or connectivity problem.
+func (c *Client) FailedSends() int64 { return c.sendErrs.Load() }
+
 // enqueue adds an item without blocking. If the buffer is full — or shutdown
 // has begun, after which the worker no longer drains — the item is dropped and
 // counted, so tracing never stalls the agent and post-Close items are not
@@ -250,11 +258,13 @@ func (c *Client) send(items []ingestionItem) {
 	payload, err := json.Marshal(ingestionBatch{Batch: items})
 	if err != nil {
 		log.Printf("langfuse: marshal batch: %v", err)
+		c.sendErrs.Add(1)
 		return
 	}
 	req, err := http.NewRequest(http.MethodPost, c.host+ingestionPath, bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("langfuse: build request: %v", err)
+		c.sendErrs.Add(1)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -263,11 +273,13 @@ func (c *Client) send(items []ingestionItem) {
 	resp, err := c.httpc.Do(req)
 	if err != nil {
 		log.Printf("langfuse: ingestion request failed: %v", err)
+		c.sendErrs.Add(1)
 		return
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 300 {
 		log.Printf("langfuse: ingestion returned status %d", resp.StatusCode)
+		c.sendErrs.Add(1)
 	}
 }

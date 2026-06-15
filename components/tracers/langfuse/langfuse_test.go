@@ -184,6 +184,21 @@ func TestFlushSwallowsServerError(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatalf("Flush returned %v, want nil (errors are best-effort/logged)", err)
 	}
+	// ...but the failure is observable via FailedSends so callers can detect it.
+	if got := c.FailedSends(); got != 1 {
+		t.Fatalf("FailedSends = %d after a 500, want 1", got)
+	}
+}
+
+func TestFailedSendsZeroOnSuccess(t *testing.T) {
+	c, _ := newServerClient(t)
+	c.enqueue(traceCreateItem("t1", "n", time.Now()))
+	if err := c.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := c.FailedSends(); got != 0 {
+		t.Fatalf("FailedSends = %d after a 200, want 0", got)
+	}
 }
 
 // waitFor polls cond up to ~1s.

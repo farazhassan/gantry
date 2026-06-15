@@ -12,7 +12,10 @@ auth the adapter produces. That wire contract is the one thing those tests
 structurally can't catch.
 
 This program closes that gap: it runs a real agent and ships the trace to a
-live Langfuse instance, so a contract mismatch surfaces as a failed flush.
+live Langfuse instance. Sends are best-effort (the adapter logs delivery errors
+rather than returning them), so the program inspects `FailedSends()` after the
+final flush and exits non-zero if any batch was rejected — a contract or auth
+mismatch can't hide behind a "flushed" message.
 
 It uses a scripted mock LLM, so **no model provider key is required** — the only
 credentials needed are Langfuse's.
@@ -35,10 +38,11 @@ Set `LANGFUSE_HOST` if you run a self-hosted Langfuse.
 
 ## Reading the result
 
-| Output                                              | Meaning |
-| --------------------------------------------------- | ------- |
-| `flush to Langfuse failed: ...`                     | **Contract or auth problem** — Langfuse rejected the batch POST. This is exactly what the smoke test is for. |
-| `flushed — open <host> ...` with `dropped items: 0` | Batch accepted. |
+| Output                                                       | Meaning |
+| ------------------------------------------------------------ | ------- |
+| `ingestion failed (N batch send(s)) ...` (exit code 1), preceded by a `langfuse: ...` error log line (bad HTTP status, or a transport/request error) | **Delivery problem** — wrong credentials, a wire-contract mismatch (non-success status), or an unreachable/misconfigured host. Catching this is exactly what the smoke test is for. |
+| `buffer dropped N events ...` (exit code 1)                  | Events overflowed the buffer before flush — not a contract issue; raise the batch/flush settings. |
+| `flushed cleanly — open <host> ...` with `failed sends: 0`   | Batch accepted. |
 
 On success, open your Langfuse project and find the most recent trace named
 **`run`**. It should contain a nested span per agent phase (the harness wraps
