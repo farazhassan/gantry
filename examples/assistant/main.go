@@ -45,9 +45,10 @@ func run() error {
 	)
 	flag.Parse()
 
-	// Cancel in-flight turns on Ctrl-C; a second Ctrl-C terminates the process.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	// Interrupt handling is armed per turn (see runREPL / armSignalInterrupt):
+	// a Ctrl-C during a turn cancels just that turn, while a Ctrl-C at the idle
+	// prompt falls through to Go's default handler and terminates the process.
+	ctx := context.Background()
 
 	// Persistence.
 	store, err := checkpointer.NewFile(*stateDir)
@@ -83,7 +84,29 @@ func run() error {
 	}
 
 	mgr := session.NewManager(agent, store)
-	return runREPL(ctx, mgr, *sessionID, stdin, os.Stdout)
+	return runREPL(ctx, mgr, *sessionID, stdin, os.Stdout, armSignalInterrupt)
+}
+
+// armSignalInterrupt installs an os.Interrupt handler that cancels the current
+// turn, returning a disarm func that removes it. It is the production
+// armInterrupt: signal.Notify is registered only while a turn runs, so an idle
+// Ctrl-C at the prompt is left to Go's default behaviour (terminate). The
+// disarm func stops delivery and unblocks the watcher goroutine.
+func armSignalInterrupt(cancel context.CancelFunc) func() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ch:
+			cancel()
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(ch)
+		close(done)
+	}
 }
 
 func envOr(key, def string) string {

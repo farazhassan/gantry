@@ -31,7 +31,7 @@ func TestRunREPL_AnswersThenExits(t *testing.T) {
 	mgr := newTestManager(t, harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "Hello there."})
 	var out strings.Builder
 	in := strings.NewReader("hi\n/exit\n")
-	if err := runREPL(context.Background(), mgr, "default", in, &out); err != nil {
+	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)
 	}
 	if !strings.Contains(out.String(), "Hello there.") {
@@ -43,7 +43,7 @@ func TestRunREPL_HelpCommand(t *testing.T) {
 	mgr := newTestManager(t)
 	var out strings.Builder
 	in := strings.NewReader("/help\n/exit\n")
-	if err := runREPL(context.Background(), mgr, "default", in, &out); err != nil {
+	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)
 	}
 	if !strings.Contains(out.String(), "/reset") || !strings.Contains(out.String(), "/exit") {
@@ -58,7 +58,7 @@ func TestRunREPL_ResetSwitchesSession(t *testing.T) {
 	)
 	var out strings.Builder
 	in := strings.NewReader("question one\n/reset\nquestion two\n/exit\n")
-	if err := runREPL(context.Background(), mgr, "default", in, &out); err != nil {
+	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)
 	}
 	got := out.String()
@@ -103,7 +103,7 @@ func TestRunREPL_SharedReaderFeedsConfirmer(t *testing.T) {
 	}
 	mgr := session.NewManager(agent, checkpointer.NewInMemory())
 
-	if err := runREPL(context.Background(), mgr, "shared", shared, &out); err != nil {
+	if err := runREPL(context.Background(), mgr, "shared", shared, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)
 	}
 	got := out.String()
@@ -115,11 +115,52 @@ func TestRunREPL_SharedReaderFeedsConfirmer(t *testing.T) {
 	}
 }
 
+// TestRunREPL_InterruptCancelsOnlyCurrentTurn is a regression test for a bug
+// where every turn shared one signal-derived context: once the first Ctrl-C
+// cancelled it, the context stayed cancelled and aborted every later turn.
+// The fix scopes cancellation to each turn. Here a fake armInterrupt cancels
+// the FIRST turn (simulating Ctrl-C) and is a no-op for the rest; the first
+// turn must report cancellation while the second still completes normally.
+func TestRunREPL_InterruptCancelsOnlyCurrentTurn(t *testing.T) {
+	// One scripted response. The cancelled first turn returns before any LLM
+	// call, so it consumes nothing; the surviving second turn consumes this
+	// response. The point is that the second turn runs at all.
+	mgr := newTestManager(t,
+		harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "surviving answer"},
+	)
+	var out strings.Builder
+	in := strings.NewReader("question one\nquestion two\n/exit\n")
+
+	turn := 0
+	arm := func(cancel context.CancelFunc) func() {
+		turn++
+		if turn == 1 {
+			cancel() // simulate Ctrl-C during the first turn only
+		}
+		return func() {}
+	}
+
+	if err := runREPL(context.Background(), mgr, "default", in, &out, arm); err != nil {
+		t.Fatalf("runREPL: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "(turn cancelled)") {
+		t.Fatalf("first turn should report cancellation, got: %q", got)
+	}
+	// The surviving answer must appear AFTER the cancellation notice, proving
+	// the second turn ran on a fresh, uncancelled context.
+	cancelAt := strings.Index(got, "(turn cancelled)")
+	answerAt := strings.Index(got, "surviving answer")
+	if answerAt < 0 || answerAt < cancelAt {
+		t.Fatalf("second turn must run normally after the first was cancelled, got: %q", got)
+	}
+}
+
 func TestRunREPL_EmptyLineIgnored(t *testing.T) {
 	mgr := newTestManager(t, harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "answer"})
 	var out strings.Builder
 	in := strings.NewReader("\n   \nreal question\n/exit\n")
-	if err := runREPL(context.Background(), mgr, "default", in, &out); err != nil {
+	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)
 	}
 	if !strings.Contains(out.String(), "answer") {
