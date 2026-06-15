@@ -8,8 +8,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// jsonUnmarshal is a small indirection used by tests and callers so the rest of
-// the package does not sprinkle encoding/json references.
+// jsonUnmarshal is a small indirection used by this package's tests so they do
+// not sprinkle encoding/json references.
 func jsonUnmarshal(b []byte, out any) error { return json.Unmarshal(b, out) }
 
 // mapResult converts an MCP tool result into the JSON value gantry hands back

@@ -41,7 +41,10 @@ func TestMCPToolDefinition(t *testing.T) {
 
 func TestMCPToolInvokeText(t *testing.T) {
 	session := newTestSession(t)
-	tools, _ := Tools(context.Background(), session)
+	tools, err := Tools(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
 	echo := findTool(t, tools, "echo")
 	out, err := echo.Invoke(context.Background(), json.RawMessage(`{"msg":"hi there"}`))
 	if err != nil {
@@ -58,9 +61,12 @@ func TestMCPToolInvokeText(t *testing.T) {
 
 func TestMCPToolInvokeError(t *testing.T) {
 	session := newTestSession(t)
-	tools, _ := Tools(context.Background(), session)
+	tools, err := Tools(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
 	fail := findTool(t, tools, "fail")
-	_, err := fail.Invoke(context.Background(), json.RawMessage(`{}`))
+	_, err = fail.Invoke(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("Invoke: want error from IsError result, got nil")
 	}
@@ -78,7 +84,9 @@ func TestMCPToolNamespace(t *testing.T) {
 		t.Fatalf("Invoke with namespace: %v", err)
 	}
 	var got string
-	_ = json.Unmarshal(out, &got)
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output not a JSON string: %v", err)
+	}
 	if got != "x" {
 		t.Fatalf("Invoke = %q, want %q", got, "x")
 	}

@@ -27,14 +27,19 @@ func TestToolsDiscoversAll(t *testing.T) {
 
 func TestToolsInvokeSnapshotImagePlaceholder(t *testing.T) {
 	session := newTestSession(t)
-	tools, _ := Tools(context.Background(), session)
+	tools, err := Tools(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
 	snap := findTool(t, tools, "snapshot")
 	out, err := snap.Invoke(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	var got string
-	_ = jsonUnmarshal(out, &got)
+	if err := jsonUnmarshal(out, &got); err != nil {
+		t.Fatalf("output not a JSON string: %v", err)
+	}
 	if got != "[image: image/png omitted]" {
 		t.Fatalf("snapshot result = %q", got)
 	}
