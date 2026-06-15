@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -48,8 +49,15 @@ func run() error {
 	servers := connectServers(ctx, defaultServerConfigs(*fsRoot), os.Stderr)
 	defer func() { _ = servers.Close() }()
 
+	// One shared buffered reader over stdin. The REPL, the confirmer, and the
+	// ask prompter all read lines from the same console; giving each its own
+	// bufio.Reader would let one read-ahead and swallow input the others need
+	// (notably the confirmer's y/N line). bufio.NewReader returns this same
+	// reader when handed it again, so every consumer shares one buffer.
+	stdin := bufio.NewReader(os.Stdin)
+
 	// Tools = MCP tools + ask_user.
-	askTool := ask.NewTool(ask.NewCLI(os.Stdin, os.Stdout))
+	askTool := ask.NewTool(ask.NewCLI(stdin, os.Stdout))
 	allTools := append([]tool.Tool{}, servers.tools...)
 	allTools = append(allTools, askTool)
 
@@ -57,14 +65,14 @@ func run() error {
 	agent, err := buildAgent(buildConfig{
 		LLM:       newOllamaLLM(*model, *ollamaURL),
 		Tools:     allTools,
-		Confirmer: newCLIConfirmer(os.Stdin, os.Stdout),
+		Confirmer: newCLIConfirmer(stdin, os.Stdout),
 	})
 	if err != nil {
 		return fmt.Errorf("build agent: %w", err)
 	}
 
 	mgr := session.NewManager(agent, store)
-	return runREPL(ctx, mgr, *sessionID, os.Stdin, os.Stdout)
+	return runREPL(ctx, mgr, *sessionID, stdin, os.Stdout)
 }
 
 func envOr(key, def string) string {
