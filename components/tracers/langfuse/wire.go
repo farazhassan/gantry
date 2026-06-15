@@ -32,6 +32,9 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// nowStamp is the ingestion-event timestamp (when the envelope was created).
+// This is intentionally distinct from a span/event's own start time carried in
+// Body; do not collapse the two.
 func nowStamp() string { return time.Now().UTC().Format(timeFormat) }
 
 func traceCreateItem(traceID, name string, start time.Time) ingestionItem {

@@ -150,6 +150,31 @@ func TestRunPatternProducesSingleTrace(t *testing.T) {
 	}
 }
 
+func TestTraceIDsPrunedOnEnd(t *testing.T) {
+	c, _ := newServerClient(t)
+	ctx, run := c.StartSpan(context.Background(), "run")
+	_, p1 := c.StartSpan(ctx, "phase:start")
+	_, p2 := c.StartSpan(ctx, "phase:llm_call")
+
+	c.mu.Lock()
+	mid := len(c.traceIDs)
+	c.mu.Unlock()
+	if mid != 3 {
+		t.Fatalf("traceIDs len = %d while 3 spans open, want 3", mid)
+	}
+
+	p1.End(nil)
+	p2.End(nil)
+	run.End(nil)
+
+	c.mu.Lock()
+	end := len(c.traceIDs)
+	c.mu.Unlock()
+	if end != 0 {
+		t.Fatalf("traceIDs len = %d after all spans ended, want 0 (entries must be pruned)", end)
+	}
+}
+
 func TestStartSpanPutsIDInContext(t *testing.T) {
 	c, _ := newServerClient(t)
 	ctx, _ := c.StartSpan(context.Background(), "outer")

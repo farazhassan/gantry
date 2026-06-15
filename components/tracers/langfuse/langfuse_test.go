@@ -140,6 +140,22 @@ func TestEnqueueDropsWhenFull(t *testing.T) {
 	}
 }
 
+func TestFlushSwallowsServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(WithPublicKey("pk"), WithSecretKey("sk"), WithHost(srv.URL), WithHTTPClient(srv.Client()))
+	t.Cleanup(func() { _ = c.Close() })
+
+	c.enqueue(traceCreateItem("t1", "n", time.Now()))
+	// A 500 from ingestion must be swallowed: Flush returns nil, no panic.
+	if err := c.Flush(); err != nil {
+		t.Fatalf("Flush returned %v, want nil (errors are best-effort/logged)", err)
+	}
+}
+
 // waitFor polls cond up to ~1s.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()

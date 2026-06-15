@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	defaultHost      = "https://cloud.langfuse.com"
-	ingestionPath    = "/api/public/ingestion"
+	defaultHost        = "https://cloud.langfuse.com"
+	ingestionPath      = "/api/public/ingestion"
 	defaultBatchSize   = 50
 	defaultInterval    = 5 * time.Second
 	defaultHTTPTimeout = 10 * time.Second
@@ -43,8 +43,8 @@ type Client struct {
 
 	closeOnce sync.Once
 
-	// mu guards traceIDs, which maps a span id to its run's trace id.
-	// Populated by StartSpan (added in span.go) — unused until then.
+	// mu guards traceIDs, which maps a span id to its run's trace id. Entries are
+	// added in StartSpan and removed when the span ends (see span.go).
 	mu       sync.Mutex
 	traceIDs map[string]string
 

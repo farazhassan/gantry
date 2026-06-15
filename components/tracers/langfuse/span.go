@@ -55,6 +55,15 @@ func (c *Client) registerTrace(spanID, parentID string) string {
 	return traceID
 }
 
+// unregister removes a span's trace-id entry once the span ends. Safe because
+// Gantry spans are strictly nested: a child always starts before its parent
+// ends, so no later StartSpan will look this entry up.
+func (c *Client) unregister(spanID string) {
+	c.mu.Lock()
+	delete(c.traceIDs, spanID)
+	c.mu.Unlock()
+}
+
 type span struct {
 	client   *Client
 	traceID  string
@@ -77,4 +86,5 @@ func (s *span) End(err error) {
 		s.client.enqueue(traceCreateItem(s.traceID, s.name, s.start))
 	}
 	s.client.enqueue(spanCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, s.attrs, err))
+	s.client.unregister(s.spanID)
 }
