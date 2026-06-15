@@ -76,3 +76,38 @@ func TestBuildAgent_DenyAbortsTurn(t *testing.T) {
 		t.Fatalf("expected an error from a denied turn")
 	}
 }
+
+// TestBuildAgent_PersonaReachesModel proves the configured SystemPrompt flows
+// through the full middleware stack into the LLM request. The mock LLM records
+// every request; the first request's System must equal the configured persona.
+func TestBuildAgent_PersonaReachesModel(t *testing.T) {
+	const persona = "You are a helpful personal desktop assistant."
+
+	llm := eval.NewMockLLMClient(harness.LLMResponse{
+		StopReason: harness.StopReasonEnd,
+		Content:    "Hello.",
+	})
+
+	agent, err := buildAgent(buildConfig{
+		LLM:          llm,
+		Tools:        nil,
+		Confirmer:    newCLIConfirmer(strings.NewReader(""), &strings.Builder{}),
+		SystemPrompt: persona,
+	})
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+
+	mgr := session.NewManager(agent, checkpointer.NewInMemory())
+	if _, err := mgr.Session("persona").Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := llm.Requests()
+	if len(reqs) == 0 {
+		t.Fatalf("mock LLM recorded no requests")
+	}
+	if reqs[0].System != persona {
+		t.Fatalf("want System %q to reach the model, got %q", persona, reqs[0].System)
+	}
+}
