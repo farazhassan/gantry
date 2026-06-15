@@ -5,6 +5,7 @@ import (
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/components/limiter"
 	"github.com/farazhassan/gantry/components/llm/ollama"
+	"github.com/farazhassan/gantry/components/systemprompt"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/harness"
 )
@@ -25,6 +26,10 @@ type buildConfig struct {
 	LLM       harness.LLMClient
 	Tools     []tool.Tool
 	Confirmer humanloop.HumanInLoop
+
+	// SystemPrompt is the agent's base persona/instructions. Empty means no
+	// system prompt middleware is installed.
+	SystemPrompt string
 
 	// Tuning knobs with sensible zero-value defaults applied in buildAgent.
 	MaxIterations int
@@ -59,6 +64,9 @@ func buildAgent(cfg buildConfig) (*harness.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Base persona for the assistant, applied during context assembly.
+	systemprompt.WithSystemPrompt(agent, cfg.SystemPrompt)
 
 	// Tools: full-parallel dispatch (parallelism 0).
 	tool.WithTools(agent, 0, cfg.Tools...)

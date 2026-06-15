@@ -18,6 +18,16 @@ import (
 	"github.com/farazhassan/gantry/session"
 )
 
+// defaultPersona is the assistant's base system prompt. It establishes the
+// assistant's role and a few behavioral norms; the systemprompt middleware
+// applies it on every turn (System is not carried across turns), so editing
+// this text takes effect on the next turn.
+const defaultPersona = "You are a helpful personal desktop assistant. " +
+	"You can read and write files, fetch web pages, and tell the time through your tools. " +
+	"Be concise and friendly. " +
+	"Before creating, editing, moving, or deleting anything, briefly say what you're about to do. " +
+	"If you're unsure which file or path the user means, ask rather than guess."
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "assistant:", err)
@@ -63,9 +73,10 @@ func run() error {
 
 	// Agent.
 	agent, err := buildAgent(buildConfig{
-		LLM:       newOllamaLLM(*model, *ollamaURL),
-		Tools:     allTools,
-		Confirmer: newCLIConfirmer(stdin, os.Stdout),
+		LLM:          newOllamaLLM(*model, *ollamaURL),
+		Tools:        allTools,
+		Confirmer:    newCLIConfirmer(stdin, os.Stdout),
+		SystemPrompt: defaultPersona,
 	})
 	if err != nil {
 		return fmt.Errorf("build agent: %w", err)
