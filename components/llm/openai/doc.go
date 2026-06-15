@@ -1,0 +1,17 @@
+// Package openai provides a gantry harness.StreamingLLMClient backed by
+// OpenAI's /v1/chat/completions endpoint. It maps harness request/response
+// types to OpenAI's wire format, supports tool calling, and streams
+// Server-Sent Events.
+//
+// Construct a client with New. The API key comes from WithAPIKey or, failing
+// that, the OPENAI_API_KEY environment variable:
+//
+//	client := openai.New("gpt-4o", openai.WithAPIKey(key))
+//	resp, err := client.Generate(ctx, harness.LLMRequest{
+//	    Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
+//	})
+//
+// OpenAI carries tool-call arguments as a JSON-encoded string and splits them
+// across streamed deltas keyed by index; the client reassembles them and
+// preserves OpenAI's per-call IDs.
+package openai
