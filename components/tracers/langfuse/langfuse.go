@@ -158,10 +158,11 @@ func (c *Client) Host() string { return c.host }
 // Dropped returns the number of events dropped because the buffer was full.
 func (c *Client) Dropped() int64 { return c.dropped.Load() }
 
-// FailedSends returns the number of batch flushes that failed (network error,
-// non-2xx/3xx status, or marshal error). It does not affect agent execution —
-// sends are best-effort — but lets callers observe delivery health, e.g. a
-// smoke test that wants to fail fast on a wire-contract or auth mismatch.
+// FailedSends returns the number of batch flushes that failed: a non-success
+// HTTP status (>= 300), a transport error (DNS/TLS/timeout/unreachable host),
+// or a request-build/marshal error. It does not affect agent execution — sends
+// are best-effort — but lets callers observe delivery health, e.g. a smoke test
+// that wants to fail fast on a wire-contract, auth, or connectivity problem.
 func (c *Client) FailedSends() int64 { return c.sendErrs.Load() }
 
 // enqueue adds an item without blocking. If the buffer is full — or shutdown

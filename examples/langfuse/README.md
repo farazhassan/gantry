@@ -40,7 +40,7 @@ Set `LANGFUSE_HOST` if you run a self-hosted Langfuse.
 
 | Output                                                       | Meaning |
 | ------------------------------------------------------------ | ------- |
-| `ingestion failed (N batch send(s)) ...` (exit code 1), preceded by a `langfuse: ingestion returned status ...` log line | **Contract or auth problem** — Langfuse rejected the batch. This is exactly what the smoke test is for. |
+| `ingestion failed (N batch send(s)) ...` (exit code 1), preceded by a `langfuse: ...` error log line (bad HTTP status, or a transport/request error) | **Delivery problem** — wrong credentials, a wire-contract mismatch (non-success status), or an unreachable/misconfigured host. Catching this is exactly what the smoke test is for. |
 | `buffer dropped N events ...` (exit code 1)                  | Events overflowed the buffer before flush — not a contract issue; raise the batch/flush settings. |
 | `flushed cleanly — open <host> ...` with `failed sends: 0`   | Batch accepted. |
 

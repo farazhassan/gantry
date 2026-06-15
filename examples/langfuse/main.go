@@ -56,12 +56,14 @@ func main() {
 	fmt.Println("dropped items:", lf.Dropped())
 	fmt.Println("failed sends: ", lf.FailedSends())
 
-	// The whole point of the smoke test: a wire-contract or auth mismatch shows
-	// up as a non-2xx/3xx (or a transport error), counted by FailedSends. Fail
-	// loudly so the mismatch can't hide behind a "flushed" message.
+	// The whole point of the smoke test: any failed send — a non-success HTTP
+	// status (>= 300), or a transport error (DNS/TLS/timeout/unreachable host) —
+	// is counted by FailedSends. Fail loudly so it can't hide behind a "flushed"
+	// message.
 	if n := lf.FailedSends(); n > 0 {
-		log.Fatalf("ingestion failed (%d batch send(s)) — see the langfuse: errors logged above; "+
-			"the wire contract or credentials may be wrong", n)
+		log.Fatalf("ingestion failed (%d batch send(s)) — see the langfuse: errors logged above. "+
+			"Likely causes: wrong credentials, a wire-contract mismatch (bad status), "+
+			"or an unreachable/misconfigured host", n)
 	}
 	if lf.Dropped() > 0 {
 		log.Fatalf("buffer dropped %d events before flush — increase batch/flush settings", lf.Dropped())
