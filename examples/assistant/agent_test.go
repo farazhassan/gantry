@@ -77,12 +77,10 @@ func TestBuildAgent_DenyAbortsTurn(t *testing.T) {
 	}
 }
 
-// TestBuildAgent_PersonaReachesModel proves the configured SystemPrompt flows
+// TestBuildAgent_PersonaReachesModel proves the actual defaultPersona flows
 // through the full middleware stack into the LLM request. The mock LLM records
-// every request; the first request's System must equal the configured persona.
+// every request; the first request's System must equal the wired persona.
 func TestBuildAgent_PersonaReachesModel(t *testing.T) {
-	const persona = "You are a helpful personal desktop assistant."
-
 	llm := eval.NewMockLLMClient(harness.LLMResponse{
 		StopReason: harness.StopReasonEnd,
 		Content:    "Hello.",
@@ -92,7 +90,7 @@ func TestBuildAgent_PersonaReachesModel(t *testing.T) {
 		LLM:          llm,
 		Tools:        nil,
 		Confirmer:    newCLIConfirmer(strings.NewReader(""), &strings.Builder{}),
-		SystemPrompt: persona,
+		SystemPrompt: defaultPersona,
 	})
 	if err != nil {
 		t.Fatalf("buildAgent: %v", err)
@@ -107,7 +105,7 @@ func TestBuildAgent_PersonaReachesModel(t *testing.T) {
 	if len(reqs) == 0 {
 		t.Fatalf("mock LLM recorded no requests")
 	}
-	if reqs[0].System != persona {
-		t.Fatalf("want System %q to reach the model, got %q", persona, reqs[0].System)
+	if reqs[0].System != defaultPersona {
+		t.Fatalf("want System %q to reach the model, got %q", defaultPersona, reqs[0].System)
 	}
 }
