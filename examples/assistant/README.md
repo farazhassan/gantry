@@ -8,7 +8,11 @@ model.
 ## Prerequisites
 
 - **Go 1.25+**
-- **Node.js + npx** (the MCP servers are launched via `npx`)
+- **Node.js + npx** — launches the filesystem server
+  (`@modelcontextprotocol/server-filesystem`).
+- **uv (uvx)** — launches the official Python fetch and time reference servers
+  (`mcp-server-fetch`, `mcp-server-time`). See
+  <https://docs.astral.sh/uv/> to install.
 - **Ollama** running locally with a tool-capable model pulled, e.g.:
 
   ```bash
@@ -49,4 +53,5 @@ after every turn, so restarting with the same `--session` resumes where you
 left off.
 
 The live servers are launched only when you run the binary; the test suite
-uses an in-process stub and a mock LLM (no network, npx, or Ollama needed).
+uses an in-process stub and a mock LLM (no network, npx, uvx, or Ollama
+needed).

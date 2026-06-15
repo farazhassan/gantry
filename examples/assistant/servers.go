@@ -18,7 +18,10 @@ type namespacedServer struct {
 
 // defaultServerConfigs returns the three MCP servers the assistant mounts.
 // fsRoot is the directory the filesystem server is allowed to access.
-// Commands assume a Node/npx toolchain (see README); tests never launch them.
+//
+// The filesystem server is an npm package launched via npx; the fetch and time
+// servers are the official Python reference servers launched via uvx (see
+// README for toolchain prerequisites). Tests never launch these.
 func defaultServerConfigs(fsRoot string) []namespacedServer {
 	return []namespacedServer{
 		{
@@ -31,15 +34,15 @@ func defaultServerConfigs(fsRoot string) []namespacedServer {
 		{
 			Namespace: "web",
 			Config: gmcp.ServerConfig{
-				Command: "npx",
-				Args:    []string{"-y", "@modelcontextprotocol/server-fetch"},
+				Command: "uvx",
+				Args:    []string{"mcp-server-fetch"},
 			},
 		},
 		{
 			Namespace: "time",
 			Config: gmcp.ServerConfig{
-				Command: "npx",
-				Args:    []string{"-y", "@modelcontextprotocol/server-time"},
+				Command: "uvx",
+				Args:    []string{"mcp-server-time"},
 			},
 		},
 	}
