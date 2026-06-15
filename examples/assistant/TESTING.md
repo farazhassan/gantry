@@ -155,19 +155,41 @@ Fetch https://example.com and tell me the page title.
 
 Uses the `web__fetch` server (via uvx), no prompt. Needs network.
 
-### F — `/reset` starts a fresh conversation
+### F — Memory within a session (should REMEMBER)
+
+Run these two turns **without** any command in between:
 
 ```
-Remember: my codename is Falcon.
+Remember my codename is Falcon. Just acknowledge.
+What is my codename?
+```
+
+The second turn must answer "Falcon". Each turn loads the prior conversation
+from the session store and feeds the full history to the model, so it
+remembers. If you want to confirm it is really persisted, look at the stored
+messages:
+
+```bash
+cat ~/.config/gantry-assistant/sessions/*.json | python3 -m json.tool | grep -A1 -i content
+```
+
+### G — `/reset` isolates history (should FORGET)
+
+This is the opposite test. `/reset` starts a brand-new conversation, so the
+model is *expected* to forget what came before:
+
+```
+Remember my codename is Falcon. Just acknowledge.
 /reset
 What is my codename?
 ```
 
 After `/reset` the session id changes (it announces `started a new
-session ...`). The model should no longer know "Falcon" — proving `/reset`
-isolates history.
+session ...`) and the model should **no longer** know "Falcon". Forgetting
+here is correct — it proves `/reset` isolates history. (If you were testing
+memory and used `/reset`, this is why it "forgot".)
 
-### G — Ctrl-C cancels an in-flight turn (not the app)
+### H — Ctrl-C cancels an in-flight turn (not the app)
 
 Start a long turn, then press **Ctrl-C** while it is thinking:
 
@@ -178,7 +200,7 @@ Write a 500-word essay about Go concurrency.
 `(turn cancelled)` prints and you return to the `>` prompt — the REPL stays
 alive. A second Ctrl-C at the prompt (or `/exit`) quits.
 
-### H — Persistence across restarts (headline feature)
+### I — Persistence across restarts (headline feature)
 
 State it, then quit:
 
@@ -203,7 +225,7 @@ It answers "teal" — loaded from disk. The state file lives at:
 ls ~/.config/gantry-assistant/sessions/   # one <sha256>.json per session id
 ```
 
-### I — Degraded mode (a down server does not kill the app)
+### J — Degraded mode (a down server does not kill the app)
 
 If a server fails to launch (e.g. `uvx` is missing or misconfigured), startup
 prints a warning and continues with the servers that did connect:
