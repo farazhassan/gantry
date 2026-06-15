@@ -30,16 +30,21 @@ func TestSetsSystemWhenEmpty(t *testing.T) {
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := mock.Requests()[0].System; got != persona {
+	reqs := mock.Requests()
+	if len(reqs) == 0 {
+		t.Fatalf("mock LLM recorded no requests")
+	}
+	if got := reqs[0].System; got != persona {
 		t.Fatalf("want System %q, got %q", persona, got)
 	}
 }
 
-// TestDoesNotOverwriteExistingSystem: a pre-setter middleware registered AFTER
-// WithSystemPrompt runs first (Compose is LIFO: last-registered executes
-// outermost) and sets System; WithSystemPrompt must then leave it untouched
-// because System is no longer empty when its handler fires.
-func TestDoesNotOverwriteExistingSystem(t *testing.T) {
+// TestDoesNotOverwriteSystemSetByOuterMiddleware: a pre-setter middleware
+// registered AFTER WithSystemPrompt runs first (Compose is LIFO:
+// last-registered executes outermost) and sets System; WithSystemPrompt must
+// then leave it untouched because System is no longer empty when its handler
+// fires.
+func TestDoesNotOverwriteSystemSetByOuterMiddleware(t *testing.T) {
 	a, mock := newAgent(t)
 	systemprompt.WithSystemPrompt(a, persona)
 	_ = a.UseNamed(harness.PhaseAssembleContext, "test/presetter", func(next harness.Handler) harness.Handler {
@@ -54,7 +59,11 @@ func TestDoesNotOverwriteExistingSystem(t *testing.T) {
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := mock.Requests()[0].System; got != "PRESET" {
+	reqs := mock.Requests()
+	if len(reqs) == 0 {
+		t.Fatalf("mock LLM recorded no requests")
+	}
+	if got := reqs[0].System; got != "PRESET" {
 		t.Fatalf("want System left as %q, got %q", "PRESET", got)
 	}
 }
