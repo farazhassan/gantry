@@ -49,7 +49,7 @@ func buildAgent(cfg buildConfig) (*harness.Agent, error) {
 		cfg.HistoryHead = 4
 	}
 	if cfg.HistoryTail == 0 {
-		cfg.HistoryTail = 20
+		cfg.HistoryTail = 30
 	}
 
 	agent, err := harness.New(
@@ -71,7 +71,13 @@ func buildAgent(cfg buildConfig) (*harness.Agent, error) {
 	// Per-turn token budget.
 	limiter.WithLimiter(agent, limiter.NewBudget(limiter.Limits{MaxTokens: cfg.MaxTokens}))
 
-	// History compaction: keep the first head and last tail messages.
+	// History compaction keeps the first HistoryHead and last HistoryTail
+	// messages, dropping the middle. NOTE: HeadTail is a simple strategy — in a
+	// very long tool-calling exchange it can drop an assistant message bearing a
+	// ToolCall while keeping its ToolResult (or vice-versa), producing a
+	// transcript some providers reject. The generous tail makes this unlikely in
+	// normal interactive use; a boundary-aware compactor would be the fix if it
+	// becomes a problem in practice.
 	compactor.WithCompactor(agent,
 		compactor.NewHeadTail(cfg.HistoryHead, cfg.HistoryTail),
 		compactor.Budget{MaxTokens: cfg.MaxTokens},
