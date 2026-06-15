@@ -74,6 +74,9 @@ func spanCreateItem(traceID, spanID, parentID, name string, start, end time.Time
 }
 
 func eventCreateItem(traceID, parentID, name string, start time.Time, attrs map[string]any) ingestionItem {
+	// Events are leaf observations: nothing parents off them, so eventCreateItem
+	// generates the observation id itself rather than taking one from the caller
+	// (unlike spanCreateItem, whose id is the reusable Gantry span id).
 	body := map[string]any{
 		"id":        newID(),
 		"traceId":   traceID,

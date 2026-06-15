@@ -66,6 +66,18 @@ func TestEventCreateItem(t *testing.T) {
 	if it.Body["name"] != "tool_call" {
 		t.Fatalf("name = %v, want tool_call", it.Body["name"])
 	}
+
+	if id, _ := it.Body["id"].(string); id == "" {
+		t.Fatal("event body must carry a non-empty observation id")
+	}
+
+	noParent := eventCreateItem("t1", "", "evt", start, nil)
+	if _, ok := noParent.Body["parentObservationId"]; ok {
+		t.Fatal("event with empty parentID must omit parentObservationId")
+	}
+	if _, ok := noParent.Body["metadata"]; ok {
+		t.Fatal("event with nil attrs must omit metadata")
+	}
 }
 
 func TestNewIDUnique(t *testing.T) {
