@@ -25,7 +25,7 @@ GOTOOLCHAIN=go1.25.11 CGO_ENABLED=0 go test ./...
 ```
 
 The core framework module (which holds `FileCheckpointer` and the
-`harness.State` JSON round-trip test) is tested from the repo root:
+`gantry.State` JSON round-trip test) is tested from the repo root:
 
 ```bash
 cd ../..                       # repo root

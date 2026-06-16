@@ -15,13 +15,13 @@ import (
 // the test can confirm the documents were retrieved.
 func RunExample(ctx context.Context) (*gantry.State, error) {
 	docs := []gantry.Document{
-		{ID: "doc-1", Content: "Gantry is a phase-based agent harness for Go."},
+		{ID: "doc-1", Content: "Gantry is a phase-based agent framework for Go."},
 		{ID: "doc-2", Content: "Components attach to the agent as middleware."},
-		{ID: "doc-3", Content: "The harness drives a fixed sequence of phases each turn."},
+		{ID: "doc-3", Content: "Gantry drives a fixed sequence of phases each turn."},
 	}
 
 	llm := eval.NewMockLLMClient(gantry.LLMResponse{
-		Content:    "Based on the retrieved docs, Gantry is a phase-based agent harness for Go.",
+		Content:    "Based on the retrieved docs, Gantry is a phase-based agent framework for Go.",
 		StopReason: gantry.StopReasonEnd,
 	})
 

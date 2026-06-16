@@ -16,7 +16,7 @@ import (
 // middleware set earlier in the same turn (e.g. skill). A resumed turn begins
 // with an empty System, so the persona is re-applied each turn and editing the
 // prompt takes effect on the next turn. A blank prompt is a no-op (no
-// middleware is registered). Re-registering returns the harness "already
+// middleware is registered). Re-registering returns the gantry "already
 // registered" error, which is ignored here — consistent with the skill
 // component's pattern.
 func WithSystemPrompt(a *gantry.Agent, prompt string) {

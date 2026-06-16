@@ -7,7 +7,7 @@ import (
 )
 
 // The structs below mirror OpenAI's /v1/chat/completions wire format. They are
-// private: callers only ever see harness types. Mapping lives here so the
+// private: callers only ever see gantry types. Mapping lives here so the
 // client code in openai.go stays focused on transport.
 
 type chatRequest struct {
@@ -45,7 +45,7 @@ type chatFunction struct {
 }
 
 // wireToolCall is the request-side assistant tool call. OpenAI carries the
-// arguments as a JSON-encoded string, so harness ToolCall.Input (already raw
+// arguments as a JSON-encoded string, so gantry ToolCall.Input (already raw
 // JSON) is forwarded verbatim as that string.
 type wireToolCall struct {
 	ID       string           `json:"id"`
@@ -93,7 +93,7 @@ type usage struct {
 	CompletionTokens int `json:"completion_tokens"`
 }
 
-// toChatRequest maps a harness request to the OpenAI wire format. System is
+// toChatRequest maps a gantry request to the OpenAI wire format. System is
 // carried as a leading system-role message.
 func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
 	var msgs []chatMessage
@@ -147,7 +147,7 @@ func toChatTools(defs []gantry.ToolDef) []chatTool {
 	return out
 }
 
-// assembleResponse builds the harness response from aggregated stream/non-stream
+// assembleResponse builds the gantry response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
 func assembleResponse(content string, calls []respToolCall, finishReason string, u gantry.Usage) gantry.LLMResponse {
 	return gantry.LLMResponse{

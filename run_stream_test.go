@@ -10,7 +10,7 @@ import (
 )
 
 // fakeToolExec pushes one synthetic result per pending tool call, mirroring the
-// pattern in harness/e2e_test.go (no real tool component needed).
+// pattern in e2e_test.go (no real tool component needed).
 func fakeToolExec(a *gantry.Agent) {
 	a.Use(gantry.PhaseToolExec, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {

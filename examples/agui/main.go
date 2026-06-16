@@ -44,7 +44,7 @@ func main() {
 		opts = append(opts, ollama.WithBaseURL(base))
 	}
 
-	// Swap ollama.New for any harness LLM client (openai.New, anthropic.New, …).
+	// Swap ollama.New for any gantry LLM client (openai.New, anthropic.New, …).
 	handler, err := newHandler(ollama.New(model, opts...))
 	if err != nil {
 		log.Fatalf("build handler: %v", err)

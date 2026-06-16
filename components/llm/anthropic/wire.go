@@ -8,7 +8,7 @@ import (
 )
 
 // The structs below mirror Anthropic's /v1/messages wire format. They are
-// private: callers only ever see harness types. Mapping lives here so the
+// private: callers only ever see gantry types. Mapping lives here so the
 // client code in anthropic.go stays focused on transport.
 
 type chatRequest struct {
@@ -73,11 +73,11 @@ type toolBlock struct {
 }
 
 // defaultMaxTokens is used when the request leaves MaxTokens at 0. Anthropic
-// requires a positive max_tokens, whereas harness treats 0 as "provider
+// requires a positive max_tokens, whereas gantry treats 0 as "provider
 // default", so the adapter supplies one.
 const defaultMaxTokens = 4096
 
-// toChatRequest maps a harness request to the Anthropic wire format. System is
+// toChatRequest maps a gantry request to the Anthropic wire format. System is
 // a top-level field (not a message), and tool results become user-role
 // tool_result blocks.
 func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
@@ -96,7 +96,7 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 	}
 }
 
-// toMessages maps harness messages to Anthropic's user/assistant content-block
+// toMessages maps gantry messages to Anthropic's user/assistant content-block
 // form. Anthropic has only those two roles, so tool results are carried as
 // tool_result blocks inside a user message; consecutive tool results are merged
 // into a single user message as Anthropic expects.
@@ -162,7 +162,7 @@ func splitBlocks(blocks []respBlock) (string, []toolBlock) {
 	return sb.String(), calls
 }
 
-// assembleResponse builds the harness response from aggregated stream/non-stream
+// assembleResponse builds the gantry response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
 func assembleResponse(content string, calls []toolBlock, stopReasonStr string, u usage) gantry.LLMResponse {
 	return gantry.LLMResponse{

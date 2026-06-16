@@ -8,7 +8,7 @@ import (
 )
 
 // The structs below mirror Ollama's /api/chat wire format. They are private:
-// callers only ever see harness types. Mapping happens in this file so the
+// callers only ever see gantry types. Mapping happens in this file so the
 // client code in ollama.go stays focused on transport.
 
 type chatRequest struct {
@@ -68,7 +68,7 @@ type respMessage struct {
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 }
 
-// toChatRequest maps a harness request to the Ollama wire format. System is
+// toChatRequest maps a gantry request to the Ollama wire format. System is
 // carried as a leading system-role message (Ollama has no separate field).
 func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
 	var msgs []chatMessage
@@ -116,7 +116,7 @@ func toChatTools(defs []gantry.ToolDef) []chatTool {
 }
 
 // toChatOptions returns nil when neither knob is set so Ollama applies its own
-// defaults (0 temperature/max-tokens both mean "provider default" in harness).
+// defaults (0 temperature/max-tokens both mean "provider default" in gantry).
 func toChatOptions(req gantry.LLMRequest) *chatOptions {
 	if req.Temperature == 0 && req.MaxTokens == 0 {
 		return nil
@@ -124,7 +124,7 @@ func toChatOptions(req gantry.LLMRequest) *chatOptions {
 	return &chatOptions{Temperature: req.Temperature, NumPredict: req.MaxTokens}
 }
 
-// assembleResponse builds the harness response from aggregated stream/non-stream
+// assembleResponse builds the gantry response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
 func assembleResponse(content string, calls []wireToolCall, doneReason string, promptEval, evalCount int) gantry.LLMResponse {
 	return gantry.LLMResponse{
@@ -136,7 +136,7 @@ func assembleResponse(content string, calls []wireToolCall, doneReason string, p
 }
 
 // toToolCalls synthesizes an ID per call. Ollama omits per-call IDs, but the
-// harness links a ToolResult back to its ToolCall by ID, so a stable
+// gantry links a ToolResult back to its ToolCall by ID, so a stable
 // index-based id ("call-0", "call-1", ...) is required.
 func toToolCalls(calls []wireToolCall) []gantry.ToolCall {
 	if len(calls) == 0 {

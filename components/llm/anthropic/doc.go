@@ -1,5 +1,5 @@
 // Package anthropic provides a gantry.StreamingLLMClient backed by
-// Anthropic's /v1/messages endpoint. It maps harness request/response types to
+// Anthropic's /v1/messages endpoint. It maps gantry request/response types to
 // Anthropic's content-block wire format, supports tool calling, and streams
 // Server-Sent Events.
 //

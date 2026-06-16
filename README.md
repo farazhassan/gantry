@@ -1,6 +1,6 @@
 # Gantry
 
-An Agent harness for Go. Gantry gives you a phase-based agent loop with
+An agent framework for Go. Gantry gives you a phase-based agent loop with
 onion-style (`net/http`-style) middleware at every phase — a small, dependency-free
 foundation for prototyping and shipping LLM agents in Go.
 
@@ -51,22 +51,22 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // echoLLM is a stand-in LLMClient. Swap in an Anthropic/OpenAI adapter for real use.
 type echoLLM struct{}
 
-func (echoLLM) Generate(_ context.Context, req harness.LLMRequest) (harness.LLMResponse, error) {
+func (echoLLM) Generate(_ context.Context, req gantry.LLMRequest) (gantry.LLMResponse, error) {
 	last := req.Messages[len(req.Messages)-1].Content
-	return harness.LLMResponse{
+	return gantry.LLMResponse{
 		Content:    "you said: " + last,
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	}, nil
 }
 
 func main() {
-	agent, err := harness.New(harness.WithLLM(echoLLM{}))
+	agent, err := gantry.NewAgent(gantry.WithLLM(echoLLM{}))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -116,13 +116,13 @@ out. Use `agent.Use` for anonymous middleware, or `UseNamed` / `UseBefore` /
 `UseAfter` when ordering matters.
 
 ```go
-agent.Use(harness.PhaseLLMCall, retryMiddleware)
-agent.Use(harness.PhaseAssembleContext, injectContextMiddleware)
+agent.Use(gantry.PhaseLLMCall, retryMiddleware)
+agent.Use(gantry.PhaseAssembleContext, injectContextMiddleware)
 ```
 
 ### State
 
-A single mutable `*harness.State` flows through every middleware. It carries the
+A single mutable `*gantry.State` flows through every middleware. It carries the
 input and task, the assembled context (system prompt, messages, tools, retrieved
 docs, plan), loop state, termination info, and observability (trace + usage). A
 `Meta map[string]any` escape hatch lets middleware pass data to one another
@@ -137,7 +137,7 @@ inspect `state.DoneReason` and the trace.
   `budget_exceeded`) set `state.Done` and return a **nil** error.
 - **Active blocks / aborts** (`guardrail_blocked`, `human_aborted`) set
   `state.Done` **and** return a sentinel error — use `errors.Is` with
-  `harness.ErrGuardrailBlocked` / `harness.ErrHumanAborted` to branch.
+  `gantry.ErrGuardrailBlocked` / `gantry.ErrHumanAborted` to branch.
 
 ## Components
 
@@ -168,7 +168,7 @@ the component's interface.
 scenario end to end:
 
 ```go
-a, _ := harness.New(harness.WithLLM(scriptedLLM), harness.WithMaxIterations(8))
+a, _ := gantry.NewAgent(gantry.WithLLM(scriptedLLM), gantry.WithMaxIterations(8))
 
 memory.WithMemory(a, memory.NewInMemoryStore())
 
@@ -251,7 +251,7 @@ Suites are provided for every contract: `Memory`, `Tool`, `Checkpointer`,
 ## Project layout
 
 ```
-harness/      Core agent loop: phases, middleware, State, and the LLMClient interface
+./            Core agent loop (package gantry): phases, middleware, State, and the LLMClient interface
 components/   Drop-in capabilities (memory, tool, skill, retriever, planner, critic,
               guardrail, limiter, compactor, humanloop, checkpointer)
 conformance/  Reusable test suites that verify implementations satisfy each contract

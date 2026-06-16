@@ -1,5 +1,5 @@
 // Package openai provides a gantry.StreamingLLMClient backed by
-// OpenAI's /v1/chat/completions endpoint. It maps harness request/response
+// OpenAI's /v1/chat/completions endpoint. It maps gantry request/response
 // types to OpenAI's wire format, supports tool calling, and streams
 // Server-Sent Events.
 //

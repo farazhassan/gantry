@@ -45,7 +45,7 @@ Set `LANGFUSE_HOST` if you run a self-hosted Langfuse.
 | `flushed cleanly — open <host> ...` with `failed sends: 0`   | Batch accepted. |
 
 On success, open your Langfuse project and find the most recent trace named
-**`run`**. It should contain a nested span per agent phase (the harness wraps
+**`run`**. It should contain a nested span per agent phase (the gantry wraps
 each run in a single run-level span, so one agent run = one Langfuse trace).
 
 Because a custom tracer does not populate `state.Trace`, this program can't print
