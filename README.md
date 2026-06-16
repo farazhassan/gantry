@@ -1,8 +1,10 @@
 # Gantry
 
-An agent framework for Go. Gantry gives you a phase-based agent loop with
-onion-style (`net/http`-style) middleware at every phase — a small, dependency-free
-foundation for prototyping and shipping LLM agents in Go.
+**A tiny, testable, Go-native agent runtime for teams that want control, conformance, and no framework lock-ins.**
+
+Gantry gives you a phase-based agent loop with onion-style (`net/http`-style)
+middleware at every phase — a small, dependency-free foundation for prototyping
+and shipping LLM agents in Go.
 
 [![CI](https://github.com/farazhassan/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml)
@@ -16,19 +18,37 @@ foundation for prototyping and shipping LLM agents in Go.
 
 ## Why Gantry
 
-- **Tiny core, zero vendor lock-in.** The agent core depends only on the Go
-  standard library. You supply one interface — `LLMClient` — and wire in
-  Anthropic, OpenAI, a local model, or a mock. No SDK is imported for you.
-- **Middleware all the way down.** Every stage of the loop is an onion of
-  middleware you control. Retries, caching, timing, short-circuiting, and state
-  mutation are all just middleware — the same pattern you already know from HTTP.
-- **Batteries-included components.** Memory, tools, skills, retrieval (RAG),
-  planning, self-critique, guardrails, rate/budget limiting, checkpointing,
-  human-in-the-loop, and context compaction all ship as drop-in components.
-- **Built for confidence.** Every component is defined by a contract, and Gantry
-  ships a reusable **conformance** test suite so your own implementations can
-  prove they honor that contract. An **eval** harness sweeps configs × cases ×
-  scorers and produces machine- and human-readable reports.
+- **Control.** Every stage of the loop is an onion of middleware you compose
+  with ordinary Go — retries, caching, timing, short-circuiting, and state
+  mutation are all just middleware. No DSL, no hidden control flow; you decide
+  what runs and when.
+- **Conformance.** Every component is defined by a contract, and Gantry ships a
+  reusable **conformance** test suite so your own implementations can prove they
+  honor that contract.
+- **Testability.** Units are plain `func(ctx, *State) error` handlers; a mock
+  LLM client and a black-box **eval** harness (configs × cases × scorers) let
+  you test agents like normal Go code, with no API keys.
+- **No lock-in.** The agent core depends only on the Go standard library. You
+  supply one interface — `LLMClient` — and wire in Anthropic, OpenAI, a local
+  model, or a mock. Adapters and components are opt-in, never load-bearing.
+
+## Why a phase loop + middleware?
+
+Gantry runs a fixed, inspectable sequence of phases every turn — assemble
+context, call the LLM, post-process, run tools, observe — so you know exactly
+what runs, and in what order, before anything executes. There's no graph to wire
+and no edges to trace.
+
+Behavior attaches as middleware: each phase is a chain of
+`func(next Handler) Handler`, and you insert logic anywhere with `Use`,
+`UseBefore`, or `UseAfter` a named anchor — no rewiring, no rebuilding a graph.
+
+Graph/DAG and workflow-builder frameworks express agent logic as nodes and edges
+in a bespoke abstraction. It's powerful, but you end up debugging the graph
+rather than your code, and each node is awkward to exercise on its own. Gantry's
+units are ordinary Go functions: unit-test one in a line, compose them by plain
+wrapping, and read the whole loop top to bottom. The payoff is the control and
+testability the wedge promises, made concrete.
 
 ## Install
 
@@ -141,71 +161,22 @@ inspect `state.DoneReason` and the trace.
 
 ## Components
 
-Components don't know about phases — convenience `With…` constructors translate
-each one into the right middleware on the right phase. Mix and match what you need.
+Batteries-included, opt-in capabilities that attach as middleware via convenience
+`With…` constructors — mix and match what you need:
 
-| Component | What it does | Wire it up | Built-ins |
-|-----------|--------------|------------|-----------|
-| **memory** | Persists & reads conversation history across runs | `memory.WithMemory(a, m)` | `NewInMemoryStore()` |
-| **tool** | Capabilities the LLM can invoke, with parallel dispatch | `tool.WithTools(a, parallelism, tools...)` · `tool.WithTool(a, t)` · `tool.WithRegistry(a, reg, parallelism)` | `NewRegistry()` |
-| **skill** | Conditional instruction/context blocks injected into the system prompt | `skill.WithSkill(a, s)` | `NewStatic(name, prompt)` |
-| **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.WithRetriever(a, r, k)` | `NewStatic(docs)` |
-| **planner** | Decomposes the task into a plan up front | `planner.WithPlanner(a, p)` | `NewLLM(client, rubric)` |
-| **critic** | Self-reviews the last response (pass / reject) | `critic.WithCritic(a, c)` | `NewLLM(client, rubric)` |
-| **guardrail** | Validates inputs (pre-LLM) and outputs (post-LLM) | `guardrail.WithGuardrail(a, g)` | `NewRegex(pattern, direction)` |
-| **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.WithLimiter(a, l)` | `NewBudget(Limits{...})` |
-| **compactor** | Trims history to fit a token budget before the LLM call | `compactor.WithCompactor(a, c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
-| **humanloop** | Pauses for human approval before tool execution | `humanloop.WithHumanInLoop(a, h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
-| **checkpointer** | Saves & restores state by id for resume / replay | `checkpointer.WithCheckpointer(a, c, id)` | `NewInMemory()` |
+**memory** · **tool** · **skill** · **retriever** · **planner** · **critic** ·
+**guardrail** · **limiter** · **compactor** · **humanloop** · **checkpointer**
 
-Each built-in is a reference implementation — swap in your own (a Redis
-checkpointer, a vector-store retriever, a real guardrail service) by satisfying
-the component's interface.
-
-### Putting it together
-
-`examples/e2e` wires **every** component onto a single agent and runs a scripted
-scenario end to end:
-
-```go
-a, _ := gantry.NewAgent(gantry.WithLLM(scriptedLLM), gantry.WithMaxIterations(8))
-
-memory.WithMemory(a, memory.NewInMemoryStore())
-
-skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))
-
-retriever.WithRetriever(a, retriever.NewStatic(docs), 3)
-
-compactor.WithCompactor(a, compactor.NewSlidingWindow(20), compactor.Budget{})
-
-tool.WithTools(a, 4, calcTool{})
-
-limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0}))
-
-guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))
-
-critic.WithCritic(a, critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))
-
-planner.WithPlanner(a, planner.NewLLM(helperLLM, "Break the task into numbered steps."))
-
-humanloop.WithHumanInLoop(a, humanloop.NewAutoApprover())
-
-checkpointer.WithCheckpointer(a, checkpointer.NewInMemory(), "example-run")
-
-state, _ := a.Run(ctx, "what is 2 + 3?")
-```
-
-Run it:
-
-```sh
-go run ./examples/e2e
-```
+Each ships a reference built-in (swap in your own by satisfying the component's
+interface). Full reference table, built-ins, and an end-to-end example wiring
+every component onto one agent → **[docs/reference.md](docs/reference.md#components)**.
 
 ## Examples
 
 Start with the focused examples below — each teaches exactly one idea and runs
-under `go test` with no API keys. `examples/e2e` (above) is the "everything
-together" reference once the pieces click.
+under `go test` with no API keys. `examples/e2e` is the "everything together"
+reference once the pieces click — its full wiring is in
+[docs/reference.md](docs/reference.md#components).
 
 | Example | One concept it teaches | Run |
 |---------|------------------------|-----|
@@ -218,78 +189,11 @@ together" reference once the pieces click.
 | **streaming** | Streaming a whole run as JSON events over SSE via `RunStream` | `go run ./examples/streaming` |
 | **e2e** | Every component wired onto one agent | `go run ./examples/e2e` |
 
-## Eval
-
-The `eval` package treats agents as black boxes (via an `AgentFactory`) and sweeps
-configurations × cases × scorers into an aggregated report.
-
-- **Datasets:** `JSONLDataset` (load from a `.jsonl` file) or `SliceDataset` (in-memory).
-- **Scorers:** `ExactMatch`, `Regex`, `Contains`, `Trace`, `Usage`, `Latency`, and
-  `LLMJudge` — or implement the `Scorer` interface yourself.
-- **Runner:** coordinates the sweep and returns a `Report` with per-case scores and aggregates.
-- **MockLLMClient:** `NewMockLLMClient(responses...)` scripts deterministic LLM
-  replies so evals (and tests) are reproducible.
-
-## Conformance
-
-Writing your own component implementation? The `conformance` package ships
-reusable test suites that verify an implementation honors its contract. Drop one
-into a `_test.go` and pass a factory:
-
-```go
-func TestMyMemory(t *testing.T) {
-	conformance.MemorySuite(t, func() memory.Memory {
-		return mypkg.NewMemory()
-	})
-}
-```
-
-Suites are provided for every contract: `Memory`, `Tool`, `Checkpointer`,
-`Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`, `Planner`,
-`Retriever`, `LLMClient`, and `Tracer`.
-
-## Project layout
-
-```
-./            Core agent loop (package gantry): phases, middleware, State, and the LLMClient interface
-components/   Drop-in capabilities (memory, tool, skill, retriever, planner, critic,
-              guardrail, limiter, compactor, humanloop, checkpointer)
-conformance/  Reusable test suites that verify implementations satisfy each contract
-eval/         Dataset / scorer / runner harness plus a scriptable mock LLM client
-examples/     Runnable end-to-end example wiring every component together
-docs/         Design specs and implementation plans
-```
-
 ## Testing
 
-```sh
-go test ./...           # full suite
-go test -race ./...     # with the race detector (what CI runs)
-go vet ./...
-gofmt -l .              # lists files needing formatting (empty = clean)
-```
-
-### Continuous integration
-
-Every push and pull request runs the [CI workflow](.github/workflows/ci.yml), split
-into jobs that double as required status checks for branch protection on `main`:
-
-- **Lint & format** — `gofmt` check, `go vet`, and `staticcheck`.
-- **Build** — `go build ./...` on Linux, macOS, and Windows.
-- **Test** — `go test -race` with coverage on Go 1.22 and the latest stable Go.
-- **Tidy** — `go mod verify` plus a `go mod tidy` no-op check.
-
-Two more workflows complete the pipeline:
-
-- **[Release](.github/workflows/release.yml)** — triggered by a pushed `v*` tag;
-  re-runs the build and tests, then publishes a GitHub Release with auto-generated
-  notes (tags with a pre-release suffix like `v0.0.1-beta` are flagged as
-  pre-releases).
-- **[CodeQL](.github/workflows/codeql.yml)** — security and quality scanning on
-  pushes, PRs, and a weekly schedule.
-
-[Dependabot](.github/dependabot.yml) keeps Go modules and GitHub Actions versions
-up to date.
+Run the root module test suite with `go test ./...` (CI runs `go test -race ./...`).
+This repo also contains nested Go modules (e.g. `gantry/mcp`, `examples/assistant`); run `go test ./...` inside them as needed.
+Conformance suites, the eval harness, and the CI/release pipeline are documented in **[docs/reference.md](docs/reference.md)**.
 
 ## Roadmap
 
@@ -323,7 +227,7 @@ improvements are all appreciated.
 
 - **Found a bug or have an idea?** Open an issue to discuss it first.
 - **Building a component?** Implement the relevant interface, validate it against
-  the matching [conformance](#conformance) suite, and add tests.
+  the matching [conformance suite](docs/reference.md#conformance), and add tests.
 - **Before opening a PR:** run `go vet ./...` and `go test -race ./...` and make
   sure everything passes — that's what CI checks.
 - Picking up something from the [Roadmap](#roadmap) is a great place to start.
