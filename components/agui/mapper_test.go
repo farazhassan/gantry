@@ -85,3 +85,37 @@ func TestMapperToolResultAndDone(t *testing.T) {
 		t.Fatalf("done got %#v\nwant %#v", gotDone, wantDone)
 	}
 }
+
+func TestMapperSecondTextMessageIncrementsID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true // focus on message-id sequencing
+
+	// First message opens at :msg:1, then a phase boundary closes it.
+	_ = m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "one"})
+	_ = m.Map(harness.Event{Type: harness.EventPhaseEnd, Phase: harness.PhaseLLMCall})
+
+	// A later text delta must open a FRESH message at :msg:2.
+	got := m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "two"})
+	want := []Event{
+		newTextMessageStart("r1:msg:2"),
+		newTextMessageContent("r1:msg:2", "two"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperDoneClosesOpenText(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	_ = m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "bye"}) // opens r1:msg:1
+	got := m.Map(harness.Event{Type: harness.EventDone, DoneReason: harness.DoneNoToolCalls})
+	want := []Event{
+		newTextMessageEnd("r1:msg:1"),
+		newRunFinished("t1", "r1"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
