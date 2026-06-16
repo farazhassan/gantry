@@ -1,0 +1,57 @@
+package agui
+
+import (
+	"bytes"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/farazhassan/gantry/harness"
+)
+
+func TestSinkWritesSSEFrames(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "t1", "r1")
+	sink := s.Sink()
+
+	if err := sink(harness.Event{Type: harness.EventTextDelta, TextDelta: "hi"}); err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	out := buf.String()
+	// First frame must be RUN_STARTED (lazy), then text start + content.
+	for _, want := range []string{
+		`data: {"type":"RUN_STARTED","threadId":"t1","runId":"r1"}` + "\n\n",
+		`data: {"type":"TEXT_MESSAGE_START","messageId":"r1:msg:1","role":"assistant"}` + "\n\n",
+		`data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"r1:msg:1","delta":"hi"}` + "\n\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing frame:\n%s\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestSinkFlushesAfterEachEvent(t *testing.T) {
+	var buf bytes.Buffer
+	flushed := 0
+	s := NewSink(&buf, "t1", "r1")
+	s.SetFlusher(func() { flushed++ })
+	sink := s.Sink()
+	if err := sink(harness.Event{Type: harness.EventDone}); err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	if flushed == 0 {
+		t.Fatal("expected flusher to be called after the event")
+	}
+}
+
+func TestSinkEmitError(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "t1", "r1")
+	if err := s.EmitError(errors.New("boom")); err != nil {
+		t.Fatalf("EmitError: %v", err)
+	}
+	want := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
+	if buf.String() != want {
+		t.Fatalf("got  %q\nwant %q", buf.String(), want)
+	}
+}
