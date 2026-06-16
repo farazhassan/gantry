@@ -15,7 +15,7 @@ type namedMW struct {
 	mw   Middleware
 }
 
-// Agent is the configured runner. Build one with New and option functions.
+// Agent is the configured runner. Build one with NewAgent and option functions.
 type Agent struct {
 	llm           LLMClient
 	tracer        Tracer
@@ -27,7 +27,7 @@ type Agent struct {
 	anonCounter int
 }
 
-// Option configures an Agent during New.
+// Option configures an Agent during NewAgent.
 type Option func(*Agent) error
 
 // NewAgent returns a new Agent. WithLLM is required; all other options are optional.

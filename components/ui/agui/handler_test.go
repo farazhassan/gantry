@@ -17,7 +17,7 @@ func newTestAgent(t *testing.T, resp gantry.LLMResponse) *gantry.Agent {
 	t.Helper()
 	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(resp)))
 	if err != nil {
-		t.Fatalf("gantry.New: %v", err)
+		t.Fatalf("gantry.NewAgent: %v", err)
 	}
 	return a
 }
@@ -32,7 +32,7 @@ func newErroringAgent(t *testing.T) *gantry.Agent {
 	t.Helper()
 	a, err := gantry.NewAgent(gantry.WithLLM(erroringLLM{}))
 	if err != nil {
-		t.Fatalf("gantry.New: %v", err)
+		t.Fatalf("gantry.NewAgent: %v", err)
 	}
 	return a
 }

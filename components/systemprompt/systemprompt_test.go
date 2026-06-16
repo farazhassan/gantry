@@ -16,7 +16,7 @@ func newAgent(t *testing.T) (*gantry.Agent, *eval.MockLLMClient) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, err := gantry.NewAgent(gantry.WithLLM(mock))
 	if err != nil {
-		t.Fatalf("gantry.New: %v", err)
+		t.Fatalf("gantry.NewAgent: %v", err)
 	}
 	return a, mock
 }
