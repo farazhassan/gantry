@@ -14,7 +14,7 @@ const persona = "You are a helpful assistant."
 func newAgent(t *testing.T) (*harness.Agent, *eval.MockLLMClient) {
 	t.Helper()
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, err := harness.New(harness.WithLLM(mock))
+	a, err := harness.NewAgent(harness.WithLLM(mock))
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

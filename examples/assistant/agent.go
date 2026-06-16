@@ -57,7 +57,7 @@ func buildAgent(cfg buildConfig) (*harness.Agent, error) {
 		cfg.HistoryTail = 30
 	}
 
-	agent, err := harness.New(
+	agent, err := harness.NewAgent(
 		harness.WithLLM(cfg.LLM),
 		harness.WithMaxIterations(cfg.MaxIterations),
 	)

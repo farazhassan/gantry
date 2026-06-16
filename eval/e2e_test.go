@@ -21,7 +21,7 @@ func TestEvalE2ESweepAcrossConfigs(t *testing.T) {
 			Name: name,
 			Factory: func(ctx context.Context) (*harness.Agent, error) {
 				mock := eval.NewMockLLMClient(harness.LLMResponse{Content: reply, StopReason: harness.StopReasonEnd})
-				a, err := harness.New(harness.WithLLM(mock))
+				a, err := harness.NewAgent(harness.WithLLM(mock))
 				if err != nil {
 					return nil, err
 				}

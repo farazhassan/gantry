@@ -15,7 +15,7 @@ import (
 
 func newTestAgent(t *testing.T, resp harness.LLMResponse) *harness.Agent {
 	t.Helper()
-	a, err := harness.New(harness.WithLLM(eval.NewMockLLMClient(resp)))
+	a, err := harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(resp)))
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
@@ -30,7 +30,7 @@ func (erroringLLM) Generate(_ context.Context, _ harness.LLMRequest) (harness.LL
 
 func newErroringAgent(t *testing.T) *harness.Agent {
 	t.Helper()
-	a, err := harness.New(harness.WithLLM(erroringLLM{}))
+	a, err := harness.NewAgent(harness.WithLLM(erroringLLM{}))
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

@@ -15,7 +15,7 @@ func TestWithHumanInLoopDenialAbortsRun(t *testing.T) {
 		ToolCalls:  []harness.ToolCall{{ID: "x", Name: "anything"}},
 		StopReason: harness.StopReasonToolUse,
 	})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	humanloop.WithHumanInLoop(a, humanloop.NewAutoDenier("no permission"))
 
 	state, err := a.Run(context.Background(), "go")
@@ -29,7 +29,7 @@ func TestWithHumanInLoopDenialAbortsRun(t *testing.T) {
 
 func TestWithHumanInLoopApprovalAllowsRun(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	humanloop.WithHumanInLoop(a, humanloop.NewAutoApprover())
 
 	state, err := a.Run(context.Background(), "go")

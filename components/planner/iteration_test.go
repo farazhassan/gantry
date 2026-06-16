@@ -20,7 +20,7 @@ func TestWithPlannerNoDuplicateSystemAcrossIterations(t *testing.T) {
 		harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "t1", Name: "x"}}, StopReason: harness.StopReasonToolUse},
 		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
+	a, _ := harness.NewAgent(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
 	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
 		t.Fatalf("WithPlanner: %v", err)
 	}

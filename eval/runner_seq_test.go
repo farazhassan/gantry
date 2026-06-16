@@ -11,7 +11,7 @@ import (
 func makeMockFactory(t *testing.T, replies ...harness.LLMResponse) eval.AgentFactory {
 	t.Helper()
 	return func(ctx context.Context) (*harness.Agent, error) {
-		return harness.New(harness.WithLLM(eval.NewMockLLMClient(replies...)))
+		return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(replies...)))
 	}
 }
 
@@ -61,7 +61,7 @@ func TestRunnerMultipleConfigsAndCases(t *testing.T) {
 func TestRunnerCapturesRunError(t *testing.T) {
 	failingFactory := func(ctx context.Context) (*harness.Agent, error) {
 		// MockLLMClient with empty script → first call returns ErrMockExhausted.
-		return harness.New(harness.WithLLM(eval.NewMockLLMClient()))
+		return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient()))
 	}
 	runner := eval.Runner{
 		Configs: []eval.Config{{Name: "fail", Factory: failingFactory}},

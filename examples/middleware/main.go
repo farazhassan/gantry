@@ -41,7 +41,7 @@ type Result struct {
 func RunExample(ctx context.Context) (*Result, error) {
 	llm := &flakyLLM{failFirst: 1}
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

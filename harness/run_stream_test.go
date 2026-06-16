@@ -39,7 +39,7 @@ func twoTurnMock() *eval.MockLLMClient {
 }
 
 func TestRunStreamNilSinkErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	state, err := a.RunStream(context.Background(), "go", nil)
 	if err == nil {
 		t.Fatal("RunStream with nil sink should error")
@@ -50,14 +50,14 @@ func TestRunStreamNilSinkErrors(t *testing.T) {
 }
 
 func TestRunStreamParityWithRun(t *testing.T) {
-	a1, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a1, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a1)
 	runState, err := a1.Run(context.Background(), "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	a2, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a2, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a2)
 	streamState, err := a2.RunStream(context.Background(), "go", func(harness.Event) error { return nil })
 	if err != nil {
@@ -79,7 +79,7 @@ func TestRunStreamParityWithRun(t *testing.T) {
 }
 
 func TestRunStreamEmitsPhaseToolDoneEvents(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a)
 
 	var events []harness.Event
@@ -126,7 +126,7 @@ func TestRunStreamEmitsPhaseToolDoneEvents(t *testing.T) {
 }
 
 func TestRunStreamSinkErrorAborts(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a)
 
 	boom := errors.New("sink boom")

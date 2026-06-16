@@ -98,7 +98,7 @@ func TestReportWriteSummary(t *testing.T) {
 func TestRunnerProducesSummary(t *testing.T) {
 	runner := eval.Runner{
 		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*harness.Agent, error) {
-			return harness.New(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
+			return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
 		}}},
 		Dataset: eval.SliceDataset{{ID: "c1"}},
 		Scorers: []eval.Scorer{eval.ContainsScorer{Required: []string{"x"}}},

@@ -14,7 +14,7 @@ func newTestAgent(t *testing.T, responses ...harness.LLMResponse) *harness.Agent
 	if len(responses) == 0 {
 		responses = []harness.LLMResponse{{Content: "ok", StopReason: harness.StopReasonEnd}}
 	}
-	a, err := harness.New(harness.WithLLM(eval.NewMockLLMClient(responses...)))
+	a, err := harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(responses...)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

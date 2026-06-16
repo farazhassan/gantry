@@ -14,7 +14,7 @@ func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 	store.Append(context.Background(), harness.Message{Role: harness.RoleUser, Content: "earlier turn"})
 
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	memory.WithMemory(a, store)
 
 	if _, err := a.Run(context.Background(), "now"); err != nil {
@@ -36,7 +36,7 @@ func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
 	store := memory.NewInMemoryStore()
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "hello", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	memory.WithMemory(a, store)
 
 	if _, err := a.Run(context.Background(), "hi"); err != nil {

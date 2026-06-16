@@ -22,7 +22,7 @@ func RunBlocked(ctx context.Context) (*harness.State, error) {
 		StopReason: harness.StopReasonEnd,
 	})
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func RunBudgetStop(ctx context.Context) (*harness.State, error) {
 		Usage:      harness.Usage{InputTokens: 100, OutputTokens: 50},
 	})
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ func TestRunnerParallelExecutesFaster(t *testing.T) {
 	// LLM that sleeps to make sequential vs. parallel observable.
 	slowLLM := &sleepLLM{d: 20 * time.Millisecond}
 	factory := func(ctx context.Context) (*harness.Agent, error) {
-		return harness.New(harness.WithLLM(slowLLM))
+		return harness.NewAgent(harness.WithLLM(slowLLM))
 	}
 	runner := eval.Runner{
 		Configs:     []eval.Config{{Name: "cfg", Factory: factory}},
@@ -51,7 +51,7 @@ func TestRunnerOnResultCallback(t *testing.T) {
 
 	runner := eval.Runner{
 		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*harness.Agent, error) {
-			return harness.New(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
+			return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
 		}}},
 		Dataset: eval.SliceDataset{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
 		OnResult: func(sr eval.ScoredResult) {

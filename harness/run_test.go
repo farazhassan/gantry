@@ -14,7 +14,7 @@ func TestRunSingleTurnExits(t *testing.T) {
 		Content:    "hello world",
 		StopReason: harness.StopReasonEnd,
 	})
-	a, err := harness.New(harness.WithLLM(mock))
+	a, err := harness.NewAgent(harness.WithLLM(mock))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestRunMaxIterationsTerminates(t *testing.T) {
 		{Response: harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "x", Name: "noop"}}, StopReason: harness.StopReasonToolUse}},
 		{Response: harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "x", Name: "noop"}}, StopReason: harness.StopReasonToolUse}},
 	})
-	a, _ := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(2))
+	a, _ := harness.NewAgent(harness.WithLLM(mock), harness.WithMaxIterations(2))
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -61,7 +61,7 @@ func TestRunMaxIterationsTerminates(t *testing.T) {
 
 func TestRunContextCancellation(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -74,7 +74,7 @@ func TestRunContextCancellation(t *testing.T) {
 
 func TestRunMiddlewareSetsDoneEarly(t *testing.T) {
 	mock := eval.NewMockLLMClient() // empty script; if LLM is called we'd see an error
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	a.Use(harness.PhaseAssembleContext, func(next harness.Handler) harness.Handler {
 		return func(ctx context.Context, s *harness.State) error {
@@ -99,7 +99,7 @@ func TestRunMiddlewareSetsDoneEarly(t *testing.T) {
 
 func TestRunMiddlewareErrorBubblesWithTrace(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "x"})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	wantErr := errors.New("custom error")
 	a.Use(harness.PhaseLLMCall, func(next harness.Handler) harness.Handler {

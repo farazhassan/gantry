@@ -45,7 +45,7 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // scriptedLLM is the user-facing LLM; helperLLM is used by Planner and Critic
 // (in a real system these could be the same or different models).
 func BuildAgent(scriptedLLM, helperLLM harness.LLMClient) (*harness.Agent, *checkpointer.InMemoryCheckpointer, *limiter.BudgetLimiter, error) {
-	a, err := harness.New(
+	a, err := harness.NewAgent(
 		harness.WithLLM(scriptedLLM),
 		harness.WithMaxIterations(8),
 	)

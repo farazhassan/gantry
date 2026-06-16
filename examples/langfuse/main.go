@@ -22,7 +22,7 @@ func RunExample(ctx context.Context, tracer harness.Tracer) (*harness.State, err
 		StopReason: harness.StopReasonEnd,
 	})
 
-	a, err := harness.New(harness.WithLLM(llm), harness.WithTracer(tracer))
+	a, err := harness.NewAgent(harness.WithLLM(llm), harness.WithTracer(tracer))
 	if err != nil {
 		return nil, err
 	}

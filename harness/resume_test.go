@@ -19,7 +19,7 @@ func respWith(content string, in, out int) harness.LLMResponse {
 
 func TestRunFromCarriesTranscriptAndResetsScratch(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("new answer", 3, 2))
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestRunFromCarriesTranscriptAndResetsScratch(t *testing.T) {
 
 func TestRunFromMessagesAreIndependentOfPrior(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("answer", 0, 0))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	prior := harness.NewState("x")
 	prior.Messages = []harness.Message{{Role: harness.RoleUser, Content: "original"}}
@@ -107,14 +107,14 @@ func TestRunFromMessagesAreIndependentOfPrior(t *testing.T) {
 
 func TestRunFromNilPriorEqualsRun(t *testing.T) {
 	llmA := eval.NewMockLLMClient(respWith("answer", 1, 1))
-	a, _ := harness.New(harness.WithLLM(llmA))
+	a, _ := harness.NewAgent(harness.WithLLM(llmA))
 	fromNil, err := a.RunFrom(context.Background(), nil, "hello")
 	if err != nil {
 		t.Fatalf("RunFrom(nil): %v", err)
 	}
 
 	llmB := eval.NewMockLLMClient(respWith("answer", 1, 1))
-	b, _ := harness.New(harness.WithLLM(llmB))
+	b, _ := harness.NewAgent(harness.WithLLM(llmB))
 	plain, err := b.Run(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -136,7 +136,7 @@ func TestRunFromCumulativeUsageAcrossTurns(t *testing.T) {
 		respWith("a", 10, 5),
 		respWith("b", 10, 5),
 	)
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	r1, err := a.RunFrom(context.Background(), nil, "turn 1")
 	if err != nil {
@@ -157,7 +157,7 @@ func TestRunFromCumulativeUsageAcrossTurns(t *testing.T) {
 
 func TestResumeTerminalIsNoOp(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("should not be used", 0, 0))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	prior := harness.NewState("done input")
 	prior.Done = true
@@ -182,7 +182,7 @@ func TestResumeTerminalIsNoOp(t *testing.T) {
 
 func TestResumeContinuesNonTerminal(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("resumed answer", 4, 4))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	prior := harness.NewState("orig")
 	prior.Messages = []harness.Message{{Role: harness.RoleUser, Content: "orig"}}
@@ -205,7 +205,7 @@ func TestResumeContinuesNonTerminal(t *testing.T) {
 
 func TestResumeNilPriorReturnsError(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("x", 0, 0))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	got, err := a.Resume(context.Background(), nil)
 	if err == nil {

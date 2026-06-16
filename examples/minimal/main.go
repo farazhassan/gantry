@@ -20,7 +20,7 @@ func RunExample(ctx context.Context) (*harness.State, error) {
 		StopReason: harness.StopReasonEnd,
 	})
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

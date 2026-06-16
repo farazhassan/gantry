@@ -11,7 +11,7 @@ import (
 
 func TestWithCompactorTrimsBeforeLLMCall(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	// Preload some messages via middleware on PhaseAssembleContext.
 	_ = a.UseNamed(harness.PhaseAssembleContext, "preload", func(next harness.Handler) harness.Handler {

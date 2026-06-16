@@ -14,7 +14,7 @@ func TestWithPlannerSetsStatePlanAndInjectsIntoSystem(t *testing.T) {
 	plannerLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "1. first\n2. second"})
 	mainLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
 
-	a, _ := harness.New(harness.WithLLM(mainLLM))
+	a, _ := harness.NewAgent(harness.WithLLM(mainLLM))
 	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
 		t.Fatalf("WithPlanner: %v", err)
 	}

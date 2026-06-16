@@ -16,7 +16,7 @@
 //
 // Typical use:
 //
-//	agent, err := harness.New(harness.WithLLM(llm))
+//	agent, err := harness.NewAgent(harness.WithLLM(llm))
 //	if err != nil {
 //		// handle error
 //	}

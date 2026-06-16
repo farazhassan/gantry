@@ -26,7 +26,7 @@ import (
 // is a parameter so the hermetic test can inject a mock while main() wires the
 // real Ollama client.
 func newHandler(llm harness.LLMClient) (http.Handler, error) {
-	agent, err := harness.New(harness.WithLLM(llm))
+	agent, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

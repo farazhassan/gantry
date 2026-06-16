@@ -19,7 +19,7 @@ func TestEndToEndTwoTurnWithFakeToolExec(t *testing.T) {
 			StopReason: harness.StopReasonEnd,
 		},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	// Fake tool exec middleware: any pending tool call → push a synthetic result.
 	a.Use(harness.PhaseToolExec, func(next harness.Handler) harness.Handler {

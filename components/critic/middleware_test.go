@@ -21,7 +21,7 @@ func TestWithCriticRejectionLoops(t *testing.T) {
 		{Response: harness.LLMResponse{Content: "PASS"}},
 	})
 
-	a, _ := harness.New(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
+	a, _ := harness.NewAgent(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
 	critic.WithCritic(a, critic.NewLLM(criticLLM, ""))
 
 	state, err := a.Run(context.Background(), "go")
@@ -40,7 +40,7 @@ func TestWithCriticModifyOutputRewrites(t *testing.T) {
 	mainLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "raw", StopReason: harness.StopReasonEnd})
 	criticImpl := rewriteCritic{newOutput: "polished"}
 
-	a, _ := harness.New(harness.WithLLM(mainLLM))
+	a, _ := harness.NewAgent(harness.WithLLM(mainLLM))
 	critic.WithCritic(a, criticImpl)
 
 	state, err := a.Run(context.Background(), "go")

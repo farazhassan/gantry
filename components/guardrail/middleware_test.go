@@ -12,7 +12,7 @@ import (
 
 func TestWithGuardrailBlocksOnInputMatch(t *testing.T) {
 	mock := eval.NewMockLLMClient() // should not be called
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)password`, guardrail.DirectionInput))
 
 	state, err := a.Run(context.Background(), "what is my password")
@@ -29,7 +29,7 @@ func TestWithGuardrailBlocksOnInputMatch(t *testing.T) {
 
 func TestWithGuardrailBlocksOnOutputMatch(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "the secret is 42", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))
 
 	state, err := a.Run(context.Background(), "tell me")
@@ -43,7 +43,7 @@ func TestWithGuardrailBlocksOnOutputMatch(t *testing.T) {
 
 func TestWithGuardrailOutputBlockScrubsFinalOutput(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "the secret is 42", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))
 
 	state, err := a.Run(context.Background(), "tell me")

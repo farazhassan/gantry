@@ -30,8 +30,8 @@ type Agent struct {
 // Option configures an Agent during New.
 type Option func(*Agent) error
 
-// New returns a new Agent. WithLLM is required; all other options are optional.
-func New(opts ...Option) (*Agent, error) {
+// NewAgent returns a new Agent. WithLLM is required; all other options are optional.
+func NewAgent(opts ...Option) (*Agent, error) {
 	a := &Agent{
 		maxIterations: defaultMaxIterations,
 		chains:        map[Phase][]namedMW{},

@@ -14,7 +14,7 @@ func TestWithLimiterStopsLoopWhenExceeded(t *testing.T) {
 		harness.LLMResponse{Content: "first", StopReason: harness.StopReasonEnd, Usage: harness.Usage{InputTokens: 200}},
 		harness.LLMResponse{Content: "second", StopReason: harness.StopReasonEnd, Usage: harness.Usage{InputTokens: 50}},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 100}))
 
 	state, err := a.Run(context.Background(), "go")
@@ -32,7 +32,7 @@ func TestWithLimiterAllowsRunUnderLimit(t *testing.T) {
 		StopReason: harness.StopReasonEnd,
 		Usage:      harness.Usage{InputTokens: 10},
 	})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))
 
 	state, err := a.Run(context.Background(), "go")

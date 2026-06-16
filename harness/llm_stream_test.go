@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunStreamEmitsTextDeltas(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(
+	a, _ := harness.NewAgent(harness.WithLLM(
 		eval.NewMockLLMClient(harness.LLMResponse{
 			Content:    "hello streaming world",
 			StopReason: harness.StopReasonEnd,
@@ -43,7 +43,7 @@ func (genOnlyStub) Generate(_ context.Context, _ harness.LLMRequest) (harness.LL
 }
 
 func TestRunStreamNonStreamingClientNoTextDeltas(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(genOnlyStub{}))
+	a, _ := harness.NewAgent(harness.WithLLM(genOnlyStub{}))
 
 	var textDeltas, phases int
 	state, err := a.RunStream(context.Background(), "go", func(ev harness.Event) error {
@@ -72,7 +72,7 @@ func TestRunStreamNonStreamingClientNoTextDeltas(t *testing.T) {
 func TestRunWithStreamingClientNoSinkUsesGenerate(t *testing.T) {
 	// A streaming-capable mock, but plain Run (no sink) must use Generate and
 	// behave exactly as before.
-	a, _ := harness.New(harness.WithLLM(
+	a, _ := harness.NewAgent(harness.WithLLM(
 		eval.NewMockLLMClient(harness.LLMResponse{
 			Content:    "hi",
 			StopReason: harness.StopReasonEnd,

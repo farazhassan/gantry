@@ -43,7 +43,7 @@ func RunExample(ctx context.Context) (*Result, error) {
 		reply("Welcome back, Faraz."),
 	)
 
-	agent, err := harness.New(harness.WithLLM(llm))
+	agent, err := harness.NewAgent(harness.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,7 @@ import (
 )
 
 func TestRunFromStreamNilSinkErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	state, err := a.RunFromStream(context.Background(), nil, "go", nil)
 	if err == nil {
 		t.Fatal("RunFromStream with nil sink should error")
@@ -19,7 +19,7 @@ func TestRunFromStreamNilSinkErrors(t *testing.T) {
 }
 
 func TestRunFromStreamNilPriorMatchesRunStream(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a)
 
 	var events []harness.Event
@@ -39,7 +39,7 @@ func TestRunFromStreamNilPriorMatchesRunStream(t *testing.T) {
 }
 
 func TestRunFromStreamCarriesPriorAndStreams(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(twoTurnMock()))
+	a, _ := harness.NewAgent(harness.WithLLM(twoTurnMock()))
 	fakeToolExec(a)
 
 	prior := &harness.State{

@@ -11,7 +11,7 @@ import (
 
 func TestRunRecordsPhaseSpans(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -61,7 +61,7 @@ func TestRunRecordsPhaseSpans(t *testing.T) {
 
 func TestRunNestsPhasesUnderRunSpan(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {

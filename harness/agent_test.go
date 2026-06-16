@@ -14,14 +14,14 @@ func (nilLLM) Generate(ctx context.Context, req harness.LLMRequest) (harness.LLM
 }
 
 func TestNewAgentRequiresLLM(t *testing.T) {
-	a, err := harness.New()
+	a, err := harness.NewAgent()
 	if err == nil {
 		t.Errorf("New() without LLM should error; got agent %v", a)
 	}
 }
 
 func TestNewAgentWithLLM(t *testing.T) {
-	a, err := harness.New(harness.WithLLM(nilLLM{}))
+	a, err := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestNewAgentWithLLM(t *testing.T) {
 }
 
 func TestAgentDefaultMaxIterations(t *testing.T) {
-	a, err := harness.New(harness.WithLLM(nilLLM{}))
+	a, err := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestAgentDefaultMaxIterations(t *testing.T) {
 }
 
 func TestAgentUseRegistersMiddleware(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	a.Use(harness.PhaseLLMCall, mw)
 	if got := a.MiddlewareCount(harness.PhaseLLMCall); got != 1 {
@@ -53,7 +53,7 @@ func TestAgentUseRegistersMiddleware(t *testing.T) {
 }
 
 func TestWithMaxIterations(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(42))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(42))
 	if a.MaxIterations() != 42 {
 		t.Errorf("MaxIterations = %d, want 42", a.MaxIterations())
 	}
@@ -61,7 +61,7 @@ func TestWithMaxIterations(t *testing.T) {
 
 func TestWithTracer(t *testing.T) {
 	tr := harness.NewTrace()
-	a, err := harness.New(harness.WithLLM(nilLLM{}), harness.WithTracer(harness.NewDefaultTracer(tr)))
+	a, err := harness.NewAgent(harness.WithLLM(nilLLM{}), harness.WithTracer(harness.NewDefaultTracer(tr)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestWithTracer(t *testing.T) {
 }
 
 func TestUseAppendsInOrder(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mk := func() harness.Middleware {
 		return func(next harness.Handler) harness.Handler { return next }
 	}
@@ -84,28 +84,28 @@ func TestUseAppendsInOrder(t *testing.T) {
 }
 
 func TestWithLLMNilErrors(t *testing.T) {
-	_, err := harness.New(harness.WithLLM(nil))
+	_, err := harness.NewAgent(harness.WithLLM(nil))
 	if err == nil {
 		t.Errorf("expected error for nil LLM")
 	}
 }
 
 func TestWithMaxIterationsZeroErrors(t *testing.T) {
-	_, err := harness.New(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(0))
+	_, err := harness.NewAgent(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(0))
 	if err == nil {
 		t.Errorf("expected error for MaxIterations(0)")
 	}
 }
 
 func TestWithMaxIterationsNegativeErrors(t *testing.T) {
-	_, err := harness.New(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(-5))
+	_, err := harness.NewAgent(harness.WithLLM(nilLLM{}), harness.WithMaxIterations(-5))
 	if err == nil {
 		t.Errorf("expected error for MaxIterations(-5)")
 	}
 }
 
 func TestUseNamedRegistersWithName(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	a.UseNamed(harness.PhaseLLMCall, "logger", mw)
 	if got := a.MiddlewareCount(harness.PhaseLLMCall); got != 1 {
@@ -118,7 +118,7 @@ func TestUseNamedRegistersWithName(t *testing.T) {
 }
 
 func TestUseBeforeInsertsBeforeAnchor(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	a.UseNamed(harness.PhaseLLMCall, "logger", mw)
 	a.UseBefore(harness.PhaseLLMCall, "logger", "retry", mw)
@@ -135,7 +135,7 @@ func TestUseBeforeInsertsBeforeAnchor(t *testing.T) {
 }
 
 func TestUseAfterInsertsAfterAnchor(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	a.UseNamed(harness.PhaseLLMCall, "logger", mw)
 	a.UseAfter(harness.PhaseLLMCall, "logger", "metrics", mw)
@@ -147,7 +147,7 @@ func TestUseAfterInsertsAfterAnchor(t *testing.T) {
 }
 
 func TestUseBeforeUnknownAnchorErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	err := a.UseBefore(harness.PhaseLLMCall, "ghost", "metrics", mw)
 	if err == nil {
@@ -156,7 +156,7 @@ func TestUseBeforeUnknownAnchorErrors(t *testing.T) {
 }
 
 func TestUseStillAppendsAnonymously(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	mw := func(next harness.Handler) harness.Handler { return next }
 	a.Use(harness.PhaseLLMCall, mw)
 	a.Use(harness.PhaseLLMCall, mw)

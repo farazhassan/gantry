@@ -9,7 +9,7 @@ import (
 )
 
 func TestResumeStreamNilSinkErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(eval.NewMockLLMClient(respWith("x", 0, 0))))
+	a, _ := harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(respWith("x", 0, 0))))
 	state, err := a.ResumeStream(context.Background(), harness.NewState("go"), nil)
 	if err == nil {
 		t.Fatal("ResumeStream with nil sink should error")
@@ -20,7 +20,7 @@ func TestResumeStreamNilSinkErrors(t *testing.T) {
 }
 
 func TestResumeStreamNilPriorReturnsError(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(eval.NewMockLLMClient(respWith("x", 0, 0))))
+	a, _ := harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(respWith("x", 0, 0))))
 	got, err := a.ResumeStream(context.Background(), nil, func(harness.Event) error { return nil })
 	if err == nil {
 		t.Error("ResumeStream(nil prior): want error, got nil")
@@ -35,7 +35,7 @@ func TestResumeStreamNilPriorReturnsError(t *testing.T) {
 
 func TestResumeStreamTerminalIsNoOp(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("should not be used", 0, 0))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	prior := harness.NewState("done input")
 	prior.Done = true
@@ -63,7 +63,7 @@ func TestResumeStreamTerminalIsNoOp(t *testing.T) {
 
 func TestResumeStreamContinuesNonTerminalAndStreams(t *testing.T) {
 	llm := eval.NewMockLLMClient(respWith("resumed answer", 4, 4))
-	a, _ := harness.New(harness.WithLLM(llm))
+	a, _ := harness.NewAgent(harness.WithLLM(llm))
 
 	prior := harness.NewState("orig")
 	prior.Messages = []harness.Message{{Role: harness.RoleUser, Content: "orig"}}

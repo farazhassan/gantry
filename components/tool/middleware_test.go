@@ -27,7 +27,7 @@ func (addOneTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 
 func TestWithToolRegistersDefinitionAtStart(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	tool.WithTool(a, addOneTool{})
 
@@ -51,7 +51,7 @@ func TestWithToolDispatchesPendingCalls(t *testing.T) {
 		},
 		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	tool.WithTool(a, addOneTool{})
 
 	state, err := a.Run(context.Background(), "go")
@@ -89,7 +89,7 @@ func TestWithToolsParallelDispatch(t *testing.T) {
 		},
 		harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	tool.WithTools(a, 2, addOneTool{})
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -121,7 +121,7 @@ func TestWithToolUnknownToolRecordsError(t *testing.T) {
 		},
 		harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	tool.WithTool(a, addOneTool{})
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -160,7 +160,7 @@ func (addTwoTool) Invoke(_ context.Context, input json.RawMessage) (json.RawMess
 
 func TestWithRegistryHappyPath(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
@@ -181,8 +181,8 @@ func TestWithRegistrySharedAcrossAgents(t *testing.T) {
 
 	mockA := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
 	mockB := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mockA))
-	b, _ := harness.New(harness.WithLLM(mockB))
+	a, _ := harness.NewAgent(harness.WithLLM(mockA))
+	b, _ := harness.NewAgent(harness.WithLLM(mockB))
 
 	tool.WithRegistry(a, reg, 1)
 	tool.WithRegistry(b, reg, 1)
@@ -212,7 +212,7 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 		harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd},
 		harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	tool.WithRegistry(a, reg, 1)
 
 	if _, err := a.Run(context.Background(), "first"); err != nil {
@@ -241,7 +241,7 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 
 func TestWithRegistryDoubleInstallPanics(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
@@ -257,7 +257,7 @@ func TestWithRegistryDoubleInstallPanics(t *testing.T) {
 
 func TestWithToolDoubleInstallPanics(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	tool.WithTool(a, addOneTool{})
 

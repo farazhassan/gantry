@@ -32,7 +32,7 @@ func (noopTool) Invoke(_ context.Context, _ json.RawMessage) (json.RawMessage, e
 func TestTerminationConvention(t *testing.T) {
 	t.Run("no_tool_calls_returns_nil", func(t *testing.T) {
 		mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
-		a, _ := harness.New(harness.WithLLM(mock))
+		a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 		state, err := a.Run(context.Background(), "go")
 		if err != nil {
@@ -51,7 +51,7 @@ func TestTerminationConvention(t *testing.T) {
 			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "noop"}},
 			StopReason: harness.StopReasonToolUse,
 		})
-		a, _ := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(1))
+		a, _ := harness.NewAgent(harness.WithLLM(mock), harness.WithMaxIterations(1))
 		tool.WithTool(a, noopTool{})
 
 		state, err := a.Run(context.Background(), "go")
@@ -71,7 +71,7 @@ func TestTerminationConvention(t *testing.T) {
 			StopReason: harness.StopReasonToolUse,
 			Usage:      harness.Usage{InputTokens: 1000, OutputTokens: 1000},
 		})
-		a, _ := harness.New(harness.WithLLM(mock))
+		a, _ := harness.NewAgent(harness.WithLLM(mock))
 		tool.WithTool(a, noopTool{})
 		limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1}))
 
@@ -86,7 +86,7 @@ func TestTerminationConvention(t *testing.T) {
 
 	t.Run("guardrail_blocked_returns_sentinel", func(t *testing.T) {
 		mock := eval.NewMockLLMClient() // input check fires before any LLM call
-		a, _ := harness.New(harness.WithLLM(mock))
+		a, _ := harness.NewAgent(harness.WithLLM(mock))
 		guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)blocked`, guardrail.DirectionInput))
 
 		state, err := a.Run(context.Background(), "this is blocked")
@@ -103,7 +103,7 @@ func TestTerminationConvention(t *testing.T) {
 			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "noop"}},
 			StopReason: harness.StopReasonToolUse,
 		})
-		a, _ := harness.New(harness.WithLLM(mock))
+		a, _ := harness.NewAgent(harness.WithLLM(mock))
 		tool.WithTool(a, noopTool{})
 		humanloop.WithHumanInLoop(a, humanloop.NewAutoDenier("denied for test"))
 

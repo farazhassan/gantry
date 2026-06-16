@@ -10,7 +10,7 @@ import (
 
 func TestRegisterPhaseAfterStart(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	const Custom harness.Phase = "custom_plan"
 	if err := a.RegisterPhase(Custom, harness.PositionAfter, harness.PhaseStart); err != nil {
@@ -35,7 +35,7 @@ func TestRegisterPhaseAfterStart(t *testing.T) {
 
 func TestRegisterPhaseBeforeAssembleContext(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	const Custom harness.Phase = "before_assemble"
 	if err := a.RegisterPhase(Custom, harness.PositionBefore, harness.PhaseAssembleContext); err != nil {
@@ -59,7 +59,7 @@ func TestRegisterPhaseBeforeAssembleContext(t *testing.T) {
 }
 
 func TestRegisterPhaseUnknownAnchorErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	const Custom harness.Phase = "x"
 	err := a.RegisterPhase(Custom, harness.PositionAfter, harness.Phase("ghost"))
 	if err == nil {
@@ -68,7 +68,7 @@ func TestRegisterPhaseUnknownAnchorErrors(t *testing.T) {
 }
 
 func TestRegisterPhaseDuplicateErrors(t *testing.T) {
-	a, _ := harness.New(harness.WithLLM(nilLLM{}))
+	a, _ := harness.NewAgent(harness.WithLLM(nilLLM{}))
 	err := a.RegisterPhase(harness.PhaseLLMCall, harness.PositionAfter, harness.PhaseStart)
 	if err == nil {
 		t.Errorf("expected error for duplicate phase")

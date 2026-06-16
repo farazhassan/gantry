@@ -18,7 +18,7 @@ func TestWithRetrieverPopulatesStateAndPrependsContext(t *testing.T) {
 	r := retriever.NewStatic(docs)
 
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	retriever.WithRetriever(a, r, 5)
 
 	state, err := a.Run(context.Background(), "search query")

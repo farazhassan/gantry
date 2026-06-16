@@ -25,7 +25,7 @@ func (failingCheckpointer) Load(context.Context, string) (*harness.State, error)
 func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
 	store := checkpointer.NewInMemory()
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	checkpointer.WithCheckpointer(a, store, "run-1")
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -42,7 +42,7 @@ func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 
 func TestWithCheckpointerSaveErrorIsNonFatalAndTraced(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	checkpointer.WithCheckpointer(a, failingCheckpointer{}, "run-err")
 
 	// A Save failure must not abort the run.

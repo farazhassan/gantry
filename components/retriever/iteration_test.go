@@ -19,7 +19,7 @@ func TestWithRetrieverNoDuplicateSystemAcrossIterations(t *testing.T) {
 		harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "t1", Name: "x"}}, StopReason: harness.StopReasonToolUse},
 		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(5))
+	a, _ := harness.NewAgent(harness.WithLLM(mock), harness.WithMaxIterations(5))
 	retriever.WithRetriever(a, retriever.NewStatic([]harness.Document{{ID: "d1", Content: "alpha"}}), 5)
 
 	if _, err := a.Run(context.Background(), "q"); err != nil {

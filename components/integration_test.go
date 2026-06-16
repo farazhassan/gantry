@@ -52,7 +52,7 @@ func TestComponentsInteroperate(t *testing.T) {
 		},
 	)
 
-	a, err := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(5))
+	a, err := harness.NewAgent(harness.WithLLM(mock), harness.WithMaxIterations(5))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

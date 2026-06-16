@@ -10,7 +10,7 @@ import (
 
 func TestMiddlewareWrappingOrder(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 
 	var log []string
 	mk := func(name string) harness.Middleware {

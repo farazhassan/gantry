@@ -12,7 +12,7 @@ import (
 
 func TestWithSkillInjectsPromptWhenMatches(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	skill.WithSkill(a, skill.NewStatic("helper", "Be concise."))
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -35,7 +35,7 @@ func (onlyOnFlag) Matches(ctx context.Context, s *harness.State) bool {
 
 func TestWithSkillSkipsWhenNotMatches(t *testing.T) {
 	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := harness.NewAgent(harness.WithLLM(mock))
 	skill.WithSkill(a, onlyOnFlag{})
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
