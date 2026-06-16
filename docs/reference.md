@@ -107,8 +107,8 @@ configurations × cases × scorers into an aggregated report.
 ## Testing
 
 ```sh
-go test ./...           # full suite
-go test -race ./...     # with the race detector (what CI runs)
+go test ./...           # root module (nested modules with their own go.mod are tested separately)
+go test -race ./...     # root module with the race detector (what CI runs)
 go vet ./...
 gofmt -l .              # lists files needing formatting (empty = clean)
 ```
