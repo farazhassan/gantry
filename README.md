@@ -188,78 +188,11 @@ together" reference once the pieces click.
 | **streaming** | Streaming a whole run as JSON events over SSE via `RunStream` | `go run ./examples/streaming` |
 | **e2e** | Every component wired onto one agent | `go run ./examples/e2e` |
 
-## Eval
-
-The `eval` package treats agents as black boxes (via an `AgentFactory`) and sweeps
-configurations × cases × scorers into an aggregated report.
-
-- **Datasets:** `JSONLDataset` (load from a `.jsonl` file) or `SliceDataset` (in-memory).
-- **Scorers:** `ExactMatch`, `Regex`, `Contains`, `Trace`, `Usage`, `Latency`, and
-  `LLMJudge` — or implement the `Scorer` interface yourself.
-- **Runner:** coordinates the sweep and returns a `Report` with per-case scores and aggregates.
-- **MockLLMClient:** `NewMockLLMClient(responses...)` scripts deterministic LLM
-  replies so evals (and tests) are reproducible.
-
-## Conformance
-
-Writing your own component implementation? The `conformance` package ships
-reusable test suites that verify an implementation honors its contract. Drop one
-into a `_test.go` and pass a factory:
-
-```go
-func TestMyMemory(t *testing.T) {
-	conformance.MemorySuite(t, func() memory.Memory {
-		return mypkg.NewMemory()
-	})
-}
-```
-
-Suites are provided for every contract: `Memory`, `Tool`, `Checkpointer`,
-`Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`, `Planner`,
-`Retriever`, `LLMClient`, and `Tracer`.
-
-## Project layout
-
-```
-./            Core agent loop (package gantry): phases, middleware, State, and the LLMClient interface
-components/   Drop-in capabilities (memory, tool, skill, retriever, planner, critic,
-              guardrail, limiter, compactor, humanloop, checkpointer)
-conformance/  Reusable test suites that verify implementations satisfy each contract
-eval/         Dataset / scorer / runner harness plus a scriptable mock LLM client
-examples/     Runnable end-to-end example wiring every component together
-docs/         Design specs and implementation plans
-```
-
 ## Testing
 
-```sh
-go test ./...           # full suite
-go test -race ./...     # with the race detector (what CI runs)
-go vet ./...
-gofmt -l .              # lists files needing formatting (empty = clean)
-```
-
-### Continuous integration
-
-Every push and pull request runs the [CI workflow](.github/workflows/ci.yml), split
-into jobs that double as required status checks for branch protection on `main`:
-
-- **Lint & format** — `gofmt` check, `go vet`, and `staticcheck`.
-- **Build** — `go build ./...` on Linux, macOS, and Windows.
-- **Test** — `go test -race` with coverage on Go 1.22 and the latest stable Go.
-- **Tidy** — `go mod verify` plus a `go mod tidy` no-op check.
-
-Two more workflows complete the pipeline:
-
-- **[Release](.github/workflows/release.yml)** — triggered by a pushed `v*` tag;
-  re-runs the build and tests, then publishes a GitHub Release with auto-generated
-  notes (tags with a pre-release suffix like `v0.0.1-beta` are flagged as
-  pre-releases).
-- **[CodeQL](.github/workflows/codeql.yml)** — security and quality scanning on
-  pushes, PRs, and a weekly schedule.
-
-[Dependabot](.github/dependabot.yml) keeps Go modules and GitHub Actions versions
-up to date.
+Run the full suite across all modules with `go test ./...` (CI runs
+`go test -race`). Conformance suites, the eval harness, and the CI/release
+pipeline are documented in **[docs/reference.md](docs/reference.md#testing)**.
 
 ## Roadmap
 
@@ -293,7 +226,7 @@ improvements are all appreciated.
 
 - **Found a bug or have an idea?** Open an issue to discuss it first.
 - **Building a component?** Implement the relevant interface, validate it against
-  the matching [conformance](#conformance) suite, and add tests.
+  the matching [conformance suite](docs/reference.md#conformance), and add tests.
 - **Before opening a PR:** run `go vet ./...` and `go test -race ./...` and make
   sure everything passes — that's what CI checks.
 - Picking up something from the [Roadmap](#roadmap) is a great place to start.
