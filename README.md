@@ -174,8 +174,9 @@ every component onto one agent → **[docs/reference.md](docs/reference.md#compo
 ## Examples
 
 Start with the focused examples below — each teaches exactly one idea and runs
-under `go test` with no API keys. `examples/e2e` (above) is the "everything
-together" reference once the pieces click.
+under `go test` with no API keys. `examples/e2e` is the "everything together"
+reference once the pieces click — its full wiring is in
+[docs/reference.md](docs/reference.md#components).
 
 | Example | One concept it teaches | Run |
 |---------|------------------------|-----|
