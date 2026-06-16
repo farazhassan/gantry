@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 	maxLineBytes   = 1 << 20 // 1 MiB; one SSE data line can hold a whole tool-call payload
 )
 
-// Client is a harness.StreamingLLMClient backed by OpenAI's
+// Client is a gantry.StreamingLLMClient backed by OpenAI's
 // /v1/chat/completions endpoint. It is safe for concurrent use: it holds no
 // per-call state and the underlying *http.Client is concurrency-safe.
 type Client struct {
@@ -33,7 +33,7 @@ type Client struct {
 	httpc   *http.Client
 }
 
-var _ harness.StreamingLLMClient = (*Client)(nil)
+var _ gantry.StreamingLLMClient = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)
@@ -94,22 +94,22 @@ func (c *Client) BaseURL() string { return c.baseURL }
 
 // Generate sends a non-streaming chat-completions request and returns the
 // assembled reply.
-func (c *Client) Generate(ctx context.Context, req harness.LLMRequest) (harness.LLMResponse, error) {
+func (c *Client) Generate(ctx context.Context, req gantry.LLMRequest) (gantry.LLMResponse, error) {
 	resp, err := c.post(ctx, req, false)
 	if err != nil {
-		return harness.LLMResponse{}, err
+		return gantry.LLMResponse{}, err
 	}
 	defer resp.Body.Close()
 	if err := checkStatus(resp); err != nil {
-		return harness.LLMResponse{}, err
+		return gantry.LLMResponse{}, err
 	}
 
 	var cr chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return harness.LLMResponse{}, fmt.Errorf("openai: decode response: %w", err)
+		return gantry.LLMResponse{}, fmt.Errorf("openai: decode response: %w", err)
 	}
 	if len(cr.Choices) == 0 {
-		return harness.LLMResponse{}, fmt.Errorf("openai: response had no choices")
+		return gantry.LLMResponse{}, fmt.Errorf("openai: response had no choices")
 	}
 	ch := cr.Choices[0]
 	return assembleResponse(ch.Message.Content, ch.Message.ToolCalls, ch.FinishReason, toUsage(cr.Usage)), nil
@@ -119,28 +119,28 @@ func (c *Client) Generate(ctx context.Context, req harness.LLMRequest) (harness.
 // once per non-empty text delta as SSE chunks arrive, and returns the fully
 // aggregated reply. A yield error stops reading and is returned as-is so
 // callers can match it with errors.Is.
-func (c *Client) GenerateStream(ctx context.Context, req harness.LLMRequest, yield func(harness.StreamChunk) error) (harness.LLMResponse, error) {
+func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yield func(gantry.StreamChunk) error) (gantry.LLMResponse, error) {
 	resp, err := c.post(ctx, req, true)
 	if err != nil {
-		return harness.LLMResponse{}, err
+		return gantry.LLMResponse{}, err
 	}
 	defer resp.Body.Close()
 	if err := checkStatus(resp); err != nil {
-		return harness.LLMResponse{}, err
+		return gantry.LLMResponse{}, err
 	}
 
 	var (
 		content      strings.Builder
 		calls        toolAccumulator
 		finishReason string
-		u            harness.Usage
+		u            gantry.Usage
 	)
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	for sc.Scan() {
 		if err := ctx.Err(); err != nil {
-			return harness.LLMResponse{}, err
+			return gantry.LLMResponse{}, err
 		}
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 || !bytes.HasPrefix(line, []byte(dataPrefix)) {
@@ -152,7 +152,7 @@ func (c *Client) GenerateStream(ctx context.Context, req harness.LLMRequest, yie
 		}
 		var chunk chatResponse
 		if err := json.Unmarshal(payload, &chunk); err != nil {
-			return harness.LLMResponse{}, fmt.Errorf("openai: decode stream chunk: %w", err)
+			return gantry.LLMResponse{}, fmt.Errorf("openai: decode stream chunk: %w", err)
 		}
 		if chunk.Usage != nil {
 			u = toUsage(chunk.Usage)
@@ -163,8 +163,8 @@ func (c *Client) GenerateStream(ctx context.Context, req harness.LLMRequest, yie
 		ch := chunk.Choices[0]
 		if delta := ch.Delta.Content; delta != "" {
 			content.WriteString(delta)
-			if err := yield(harness.StreamChunk{TextDelta: delta}); err != nil {
-				return harness.LLMResponse{}, err
+			if err := yield(gantry.StreamChunk{TextDelta: delta}); err != nil {
+				return gantry.LLMResponse{}, err
 			}
 		}
 		for _, tc := range ch.Delta.ToolCalls {
@@ -175,15 +175,15 @@ func (c *Client) GenerateStream(ctx context.Context, req harness.LLMRequest, yie
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return harness.LLMResponse{}, fmt.Errorf("openai: read stream: %w", err)
+		return gantry.LLMResponse{}, fmt.Errorf("openai: read stream: %w", err)
 	}
 
 	out := assembleResponse(content.String(), calls.calls(), finishReason, u)
 	// Terminal metadata chunk (empty delta) for parity with the in-repo mock;
 	// the default LLM handler ignores empty-delta chunks, so this is harmless.
 	usage := out.Usage
-	if err := yield(harness.StreamChunk{StopReason: out.StopReason, Usage: &usage}); err != nil {
-		return harness.LLMResponse{}, err
+	if err := yield(gantry.StreamChunk{StopReason: out.StopReason, Usage: &usage}); err != nil {
+		return gantry.LLMResponse{}, err
 	}
 	return out, nil
 }
@@ -227,7 +227,7 @@ func (a *toolAccumulator) calls() []respToolCall {
 	return out
 }
 
-func (c *Client) post(ctx context.Context, req harness.LLMRequest, stream bool) (*http.Response, error) {
+func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
 	body, err := json.Marshal(toChatRequest(c.model, req, stream))
 	if err != nil {
 		return nil, fmt.Errorf("openai: encode request: %w", err)
@@ -254,9 +254,9 @@ func checkStatus(resp *http.Response) error {
 	return fmt.Errorf("openai: chat: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 }
 
-func toUsage(u *usage) harness.Usage {
+func toUsage(u *usage) gantry.Usage {
 	if u == nil {
-		return harness.Usage{}
+		return gantry.Usage{}
 	}
-	return harness.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	return gantry.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
 }

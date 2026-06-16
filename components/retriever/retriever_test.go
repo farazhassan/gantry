@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/retriever"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestStaticRetrieverReturnsConfiguredDocs(t *testing.T) {
-	docs := []harness.Document{
+	docs := []gantry.Document{
 		{ID: "a", Content: "alpha", Score: 0.9},
 		{ID: "b", Content: "beta", Score: 0.7},
 	}
@@ -24,7 +24,7 @@ func TestStaticRetrieverReturnsConfiguredDocs(t *testing.T) {
 }
 
 func TestStaticRetrieverHonorsK(t *testing.T) {
-	docs := []harness.Document{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	docs := []gantry.Document{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	r := retriever.NewStatic(docs)
 	got, _ := r.Retrieve(context.Background(), "q", 2)
 	if len(got) != 2 {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestHeadTailKeepsHeadAndTail(t *testing.T) {
 	c := compactor.NewHeadTail(1, 2)
-	msgs := []harness.Message{
+	msgs := []gantry.Message{
 		{Content: "h1"}, {Content: "mid1"}, {Content: "mid2"}, {Content: "t1"}, {Content: "t2"},
 	}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{})
@@ -60,7 +60,7 @@ func TestNewHeadTailValidatesArgs(t *testing.T) {
 
 func TestHeadTailNoTrimmingWhenSmallEnough(t *testing.T) {
 	c := compactor.NewHeadTail(2, 2)
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
 	got, _ := c.Compact(context.Background(), msgs, compactor.Budget{})
 	if len(got) != 3 {
 		t.Errorf("len = %d, want 3", len(got))
@@ -69,7 +69,7 @@ func TestHeadTailNoTrimmingWhenSmallEnough(t *testing.T) {
 
 func TestHeadTailPassThroughReturnsIndependentCopy(t *testing.T) {
 	c := compactor.NewHeadTail(2, 2) // head+tail = 4 >= len(msgs) = 3 -> pass-through
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)

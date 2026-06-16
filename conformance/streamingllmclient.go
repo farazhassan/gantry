@@ -6,21 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
-// StreamingLLMClientSuite verifies the contract of harness.StreamingLLMClient.
+// StreamingLLMClientSuite verifies the contract of gantry.StreamingLLMClient.
 // Factory must return a client ready to handle exactly one GenerateStream call
 // that should succeed.
-func StreamingLLMClientSuite(t *testing.T, factory func() harness.StreamingLLMClient) {
+func StreamingLLMClientSuite(t *testing.T, factory func() gantry.StreamingLLMClient) {
 	t.Helper()
 
 	t.Run("GenerateStream_aggregation_integrity", func(t *testing.T) {
 		c := factory()
 		var sb strings.Builder
-		resp, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-			Messages: []harness.Message{{Role: harness.RoleUser, Content: "hello"}},
-		}, func(ch harness.StreamChunk) error {
+		resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+			Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hello"}},
+		}, func(ch gantry.StreamChunk) error {
 			sb.WriteString(ch.TextDelta)
 			return nil
 		})
@@ -40,9 +40,9 @@ func StreamingLLMClientSuite(t *testing.T, factory func() harness.StreamingLLMCl
 	t.Run("GenerateStream_yield_error_propagates", func(t *testing.T) {
 		c := factory()
 		sentinel := errors.New("conformance: yield boom")
-		_, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-			Messages: []harness.Message{{Role: harness.RoleUser, Content: "hello"}},
-		}, func(harness.StreamChunk) error {
+		_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+			Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hello"}},
+		}, func(gantry.StreamChunk) error {
 			return sentinel
 		})
 		if !errors.Is(err, sentinel) {
@@ -54,7 +54,7 @@ func StreamingLLMClientSuite(t *testing.T, factory func() harness.StreamingLLMCl
 		c := factory()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := c.GenerateStream(ctx, harness.LLMRequest{}, func(harness.StreamChunk) error { return nil })
+		_, err := c.GenerateStream(ctx, gantry.LLMRequest{}, func(gantry.StreamChunk) error { return nil })
 		if err == nil {
 			t.Skipf("client does not propagate cancellation (acceptable for mocks)")
 		}

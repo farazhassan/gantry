@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestEvalE2ESweepAcrossConfigs(t *testing.T) {
@@ -19,9 +19,9 @@ func TestEvalE2ESweepAcrossConfigs(t *testing.T) {
 	mkConfig := func(name, reply string) eval.Config {
 		return eval.Config{
 			Name: name,
-			Factory: func(ctx context.Context) (*harness.Agent, error) {
-				mock := eval.NewMockLLMClient(harness.LLMResponse{Content: reply, StopReason: harness.StopReasonEnd})
-				a, err := harness.New(harness.WithLLM(mock))
+			Factory: func(ctx context.Context) (*gantry.Agent, error) {
+				mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: reply, StopReason: gantry.StopReasonEnd})
+				a, err := gantry.NewAgent(gantry.WithLLM(mock))
 				if err != nil {
 					return nil, err
 				}

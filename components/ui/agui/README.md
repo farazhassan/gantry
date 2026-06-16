@@ -9,7 +9,7 @@ It is built in three layers (see `doc.go` for the full overview):
 
 - **Wire layer** (`events.go`) — AG-UI event DTOs + `WriteSSE` framing.
 - **Mapper + Sink** (`mapper.go`, `sink.go`) — translate Gantry's
-  `harness.Event` stream into AG-UI events; usable with your own HTTP stack.
+  `gantry.Event` stream into AG-UI events; usable with your own HTTP stack.
 - **Handler** (`handler.go`, `input.go`) — a thin `net/http.Handler` that
   decodes a `RunAgentInput`, rebuilds the prior conversation, and drives
   `agent.RunFromStream`.
@@ -37,7 +37,7 @@ re-run with sandboxing disabled.)
 
 A runnable server lives at [`examples/agui`](../../../examples/agui). It wraps
 `agui.Handler` around an agent backed by the local Ollama adapter (no API key);
-swap in any `harness` LLM client you have configured. Run it from the repo root:
+swap in any `gantry` LLM client you have configured. Run it from the repo root:
 
 ```bash
 go run -ldflags=-linkmode=external ./examples/agui

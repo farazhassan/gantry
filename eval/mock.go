@@ -5,12 +5,12 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // MockTurn is one scripted turn returned by MockLLMClient.
 type MockTurn struct {
-	Response harness.LLMResponse
+	Response gantry.LLMResponse
 	Err      error
 }
 
@@ -20,12 +20,12 @@ type MockLLMClient struct {
 	mu       sync.Mutex
 	script   []MockTurn
 	pos      int
-	requests []harness.LLMRequest
+	requests []gantry.LLMRequest
 }
 
 // NewMockLLMClient creates a mock with successful turns from the supplied
 // responses (no errors).
-func NewMockLLMClient(responses ...harness.LLMResponse) *MockLLMClient {
+func NewMockLLMClient(responses ...gantry.LLMResponse) *MockLLMClient {
 	turns := make([]MockTurn, len(responses))
 	for i, r := range responses {
 		turns[i] = MockTurn{Response: r}
@@ -42,12 +42,12 @@ func NewMockLLMClientFromScript(script []MockTurn) *MockLLMClient {
 var ErrMockExhausted = errors.New("eval: MockLLMClient script exhausted")
 
 // Generate consumes one turn from the script.
-func (m *MockLLMClient) Generate(ctx context.Context, req harness.LLMRequest) (harness.LLMResponse, error) {
+func (m *MockLLMClient) Generate(ctx context.Context, req gantry.LLMRequest) (gantry.LLMResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, req)
 	if m.pos >= len(m.script) {
-		return harness.LLMResponse{}, ErrMockExhausted
+		return gantry.LLMResponse{}, ErrMockExhausted
 	}
 	turn := m.script[m.pos]
 	m.pos++
@@ -60,12 +60,12 @@ const chunkSize = 6
 // GenerateStream consumes one turn from the script, streaming its Content as a
 // sequence of text-delta chunks followed by a final chunk carrying StopReason
 // and Usage. Concatenating every TextDelta reconstructs Content exactly.
-func (m *MockLLMClient) GenerateStream(ctx context.Context, req harness.LLMRequest, yield func(harness.StreamChunk) error) (harness.LLMResponse, error) {
+func (m *MockLLMClient) GenerateStream(ctx context.Context, req gantry.LLMRequest, yield func(gantry.StreamChunk) error) (gantry.LLMResponse, error) {
 	m.mu.Lock()
 	m.requests = append(m.requests, req)
 	if m.pos >= len(m.script) {
 		m.mu.Unlock()
-		return harness.LLMResponse{}, ErrMockExhausted
+		return gantry.LLMResponse{}, ErrMockExhausted
 	}
 	turn := m.script[m.pos]
 	m.pos++
@@ -75,21 +75,21 @@ func (m *MockLLMClient) GenerateStream(ctx context.Context, req harness.LLMReque
 		return turn.Response, turn.Err
 	}
 	if err := ctx.Err(); err != nil {
-		return harness.LLMResponse{}, err
+		return gantry.LLMResponse{}, err
 	}
 
 	for _, delta := range chunkRunes(turn.Response.Content, chunkSize) {
 		if err := ctx.Err(); err != nil {
-			return harness.LLMResponse{}, err
+			return gantry.LLMResponse{}, err
 		}
-		if err := yield(harness.StreamChunk{TextDelta: delta}); err != nil {
-			return harness.LLMResponse{}, err
+		if err := yield(gantry.StreamChunk{TextDelta: delta}); err != nil {
+			return gantry.LLMResponse{}, err
 		}
 	}
 
 	usage := turn.Response.Usage
-	if err := yield(harness.StreamChunk{StopReason: turn.Response.StopReason, Usage: &usage}); err != nil {
-		return harness.LLMResponse{}, err
+	if err := yield(gantry.StreamChunk{StopReason: turn.Response.StopReason, Usage: &usage}); err != nil {
+		return gantry.LLMResponse{}, err
 	}
 	return turn.Response, nil
 }
@@ -113,10 +113,10 @@ func chunkRunes(s string, size int) []string {
 }
 
 // Requests returns a copy of every LLMRequest the mock has seen.
-func (m *MockLLMClient) Requests() []harness.LLMRequest {
+func (m *MockLLMClient) Requests() []gantry.LLMRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]harness.LLMRequest, len(m.requests))
+	out := make([]gantry.LLMRequest, len(m.requests))
 	copy(out, m.requests)
 	return out
 }

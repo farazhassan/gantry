@@ -1,5 +1,5 @@
 // Package session adds keyed, durable multi-turn conversations on top of a
-// single shared *harness.Agent. A Manager pairs the agent with a
+// single shared *gantry.Agent. A Manager pairs the agent with a
 // checkpointer.Checkpointer (the durable store); Session(id) returns a handle
 // whose Run executes one turn as Load(id) -> agent.RunFrom(prior, input) ->
 // Save(id). The store is the single source of truth, so a fresh Manager over

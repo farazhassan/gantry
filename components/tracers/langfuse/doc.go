@@ -1,4 +1,4 @@
-// Package langfuse implements harness.Tracer by shipping agent traces to
+// Package langfuse implements gantry.Tracer by shipping agent traces to
 // Langfuse (https://langfuse.com) through its HTTP batch ingestion API.
 //
 // A Client buffers trace events and flushes them to Langfuse from a background
@@ -13,7 +13,7 @@
 //
 //	lf := langfuse.New(langfuse.WithPublicKey(pk), langfuse.WithSecretKey(sk))
 //	defer lf.Close()
-//	agent, err := harness.New(harness.WithLLM(llm), harness.WithTracer(lf))
+//	agent, err := gantry.NewAgent(gantry.WithLLM(llm), gantry.WithTracer(lf))
 //	if err != nil {
 //		// handle error
 //	}

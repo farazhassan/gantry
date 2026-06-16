@@ -121,7 +121,7 @@ func TestEndWithErrorMarksObservation(t *testing.T) {
 
 func TestRunPatternProducesSingleTrace(t *testing.T) {
 	c, cap := newServerClient(t)
-	// Mimic the harness: one "run" span, phases nested under its context,
+	// Mimic the gantry: one "run" span, phases nested under its context,
 	// inner phases ending before the run span.
 	ctx, runSpan := c.StartSpan(context.Background(), "run")
 	_, p1 := c.StartSpan(ctx, "phase:start")

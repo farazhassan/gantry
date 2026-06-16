@@ -4,24 +4,24 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithCriticRejectionLoops(t *testing.T) {
 	// Main LLM script: turn 1 returns "bad", turn 2 returns "good".
 	mainLLM := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "bad", StopReason: harness.StopReasonEnd},
-		harness.LLMResponse{Content: "good", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "bad", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "good", StopReason: gantry.StopReasonEnd},
 	)
 	// Critic LLM: rejects "bad", accepts "good".
 	criticLLM := eval.NewMockLLMClientFromScript([]eval.MockTurn{
-		{Response: harness.LLMResponse{Content: "FAIL: try again"}},
-		{Response: harness.LLMResponse{Content: "PASS"}},
+		{Response: gantry.LLMResponse{Content: "FAIL: try again"}},
+		{Response: gantry.LLMResponse{Content: "PASS"}},
 	})
 
-	a, _ := harness.New(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM), gantry.WithMaxIterations(5))
 	critic.WithCritic(a, critic.NewLLM(criticLLM, ""))
 
 	state, err := a.Run(context.Background(), "go")
@@ -37,10 +37,10 @@ func TestWithCriticRejectionLoops(t *testing.T) {
 }
 
 func TestWithCriticModifyOutputRewrites(t *testing.T) {
-	mainLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "raw", StopReason: harness.StopReasonEnd})
+	mainLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "raw", StopReason: gantry.StopReasonEnd})
 	criticImpl := rewriteCritic{newOutput: "polished"}
 
-	a, _ := harness.New(harness.WithLLM(mainLLM))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))
 	critic.WithCritic(a, criticImpl)
 
 	state, err := a.Run(context.Background(), "go")
@@ -54,6 +54,6 @@ func TestWithCriticModifyOutputRewrites(t *testing.T) {
 
 type rewriteCritic struct{ newOutput string }
 
-func (r rewriteCritic) Critique(ctx context.Context, s *harness.State) (critic.Verdict, error) {
+func (r rewriteCritic) Critique(ctx context.Context, s *gantry.State) (critic.Verdict, error) {
 	return critic.Verdict{Accept: true, ModifyOutput: r.newOutput}, nil
 }

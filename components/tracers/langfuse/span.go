@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 type spanCtxKey struct{}
@@ -17,11 +17,11 @@ func spanIDFromContext(ctx context.Context) string {
 }
 
 // StartSpan opens a span. A parentless span opens a new Langfuse trace; nested
-// spans become observations under it. Gantry's harness wraps each agent run in
+// spans become observations under it. Gantry wraps each agent run in
 // a single top-level "run" span, so one run maps to one Langfuse trace. The
 // returned context carries this span's id so descendant StartSpan calls parent
 // themselves correctly.
-func (c *Client) StartSpan(ctx context.Context, name string) (context.Context, harness.Span) {
+func (c *Client) StartSpan(ctx context.Context, name string) (context.Context, gantry.Span) {
 	id := newID()
 	parent := spanIDFromContext(ctx)
 	traceID := c.registerTrace(id, parent)

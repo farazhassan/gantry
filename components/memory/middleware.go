@@ -3,7 +3,7 @@ package memory
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithMemory wires a Memory implementation into the agent. It installs:
@@ -27,12 +27,12 @@ import (
 // capture the assistant message after the critic has finalized it
 // (Verdict.ModifyOutput) or left the rejected message in the transcript
 // (Verdict.Accept == false).
-func WithMemory(a *harness.Agent, m Memory) {
+func WithMemory(a *gantry.Agent, m Memory) {
 	const readName = "components/memory:read"
 	const persistName = "components/memory:persist"
 
-	_ = a.UseNamed(harness.PhaseAssembleContext, readName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseAssembleContext, readName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			// Only read+prepend on the first iteration. The in-run transcript
 			// accumulates in s.Messages across iterations, so re-prepending the
 			// stored history on later iterations would duplicate prior turns.
@@ -48,11 +48,11 @@ func WithMemory(a *harness.Agent, m Memory) {
 		}
 	})
 
-	_ = a.UseNamed(harness.PhasePostLLM, persistName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhasePostLLM, persistName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			// Persist the user input on the first iteration.
 			if s.Iteration == 0 && s.Input != "" {
-				if err := m.Append(ctx, harness.Message{Role: harness.RoleUser, Content: s.Input}); err != nil {
+				if err := m.Append(ctx, gantry.Message{Role: gantry.RoleUser, Content: s.Input}); err != nil {
 					return err
 				}
 			}
@@ -72,9 +72,9 @@ func WithMemory(a *harness.Agent, m Memory) {
 	})
 }
 
-func lastAssistant(msgs []harness.Message) *harness.Message {
+func lastAssistant(msgs []gantry.Message) *gantry.Message {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == harness.RoleAssistant {
+		if msgs[i].Role == gantry.RoleAssistant {
 			m := msgs[i]
 			return &m
 		}

@@ -5,38 +5,38 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithHumanInLoopDenialAbortsRun(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{
-		ToolCalls:  []harness.ToolCall{{ID: "x", Name: "anything"}},
-		StopReason: harness.StopReasonToolUse,
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{
+		ToolCalls:  []gantry.ToolCall{{ID: "x", Name: "anything"}},
+		StopReason: gantry.StopReasonToolUse,
 	})
-	a, _ := harness.New(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	humanloop.WithHumanInLoop(a, humanloop.NewAutoDenier("no permission"))
 
 	state, err := a.Run(context.Background(), "go")
-	if err == nil || !errors.Is(err, harness.ErrHumanAborted) {
+	if err == nil || !errors.Is(err, gantry.ErrHumanAborted) {
 		t.Errorf("expected ErrHumanAborted; got %v", err)
 	}
-	if state.DoneReason != harness.DoneHumanAborted {
+	if state.DoneReason != gantry.DoneHumanAborted {
 		t.Errorf("DoneReason = %q", state.DoneReason)
 	}
 }
 
 func TestWithHumanInLoopApprovalAllowsRun(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	humanloop.WithHumanInLoop(a, humanloop.NewAutoApprover())
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if state.DoneReason != harness.DoneNoToolCalls {
-		t.Errorf("DoneReason = %q, want %q", state.DoneReason, harness.DoneNoToolCalls)
+	if state.DoneReason != gantry.DoneNoToolCalls {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneNoToolCalls)
 	}
 }

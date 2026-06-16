@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // MemorySuite verifies the contract of memory.Memory.
@@ -15,10 +15,10 @@ func MemorySuite(t *testing.T, factory func() memory.Memory) {
 	t.Run("append_then_read_returns_in_order", func(t *testing.T) {
 		m := factory()
 		ctx := context.Background()
-		msgs := []harness.Message{
-			{Role: harness.RoleUser, Content: "a"},
-			{Role: harness.RoleAssistant, Content: "b"},
-			{Role: harness.RoleUser, Content: "c"},
+		msgs := []gantry.Message{
+			{Role: gantry.RoleUser, Content: "a"},
+			{Role: gantry.RoleAssistant, Content: "b"},
+			{Role: gantry.RoleUser, Content: "c"},
 		}
 		for _, msg := range msgs {
 			if err := m.Append(ctx, msg); err != nil {
@@ -46,7 +46,7 @@ func MemorySuite(t *testing.T, factory func() memory.Memory) {
 	t.Run("read_returns_independent_copy", func(t *testing.T) {
 		m := factory()
 		ctx := context.Background()
-		_ = m.Append(ctx, harness.Message{Content: "x"})
+		_ = m.Append(ctx, gantry.Message{Content: "x"})
 		first, _ := m.Read(ctx)
 		if len(first) == 0 {
 			t.Fatalf("expected at least one message")

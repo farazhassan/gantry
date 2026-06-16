@@ -3,7 +3,7 @@ package critic
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithCritic installs PhasePostLLM middleware that runs the Critic on
@@ -28,10 +28,10 @@ import (
 // "Critic feedback: …" hint. Consequently, if WithMemory is registered to run
 // after the critic, the rejected assistant message may be persisted. This is
 // accepted behavior, not a bug.
-func WithCritic(a *harness.Agent, c Critic) {
+func WithCritic(a *gantry.Agent, c Critic) {
 	const name = "components/critic:critique"
-	_ = a.UseNamed(harness.PhasePostLLM, name, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhasePostLLM, name, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			// Let downstream (DefaultPostLLMHandler) run first so messages are
 			// populated and Done state reflects no-tool-calls.
 			if err := next(ctx, s); err != nil {
@@ -60,8 +60,8 @@ func WithCritic(a *harness.Agent, c Critic) {
 				s.DoneReason = ""
 				s.FinalOutput = ""
 				if v.Reason != "" {
-					s.Messages = append(s.Messages, harness.Message{
-						Role:    harness.RoleUser,
+					s.Messages = append(s.Messages, gantry.Message{
+						Role:    gantry.RoleUser,
 						Content: "Critic feedback: " + v.Reason,
 					})
 				}
@@ -71,9 +71,9 @@ func WithCritic(a *harness.Agent, c Critic) {
 	})
 }
 
-func lastAssistantIndex(msgs []harness.Message) int {
+func lastAssistantIndex(msgs []gantry.Message) int {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == harness.RoleAssistant {
+		if msgs[i].Role == gantry.RoleAssistant {
 			return i
 		}
 	}

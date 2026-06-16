@@ -9,36 +9,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
-func newTestAgent(t *testing.T, resp harness.LLMResponse) *harness.Agent {
+func newTestAgent(t *testing.T, resp gantry.LLMResponse) *gantry.Agent {
 	t.Helper()
-	a, err := harness.New(harness.WithLLM(eval.NewMockLLMClient(resp)))
+	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(resp)))
 	if err != nil {
-		t.Fatalf("harness.New: %v", err)
+		t.Fatalf("gantry.NewAgent: %v", err)
 	}
 	return a
 }
 
 type erroringLLM struct{}
 
-func (erroringLLM) Generate(_ context.Context, _ harness.LLMRequest) (harness.LLMResponse, error) {
-	return harness.LLMResponse{}, errors.New("llm boom")
+func (erroringLLM) Generate(_ context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
+	return gantry.LLMResponse{}, errors.New("llm boom")
 }
 
-func newErroringAgent(t *testing.T) *harness.Agent {
+func newErroringAgent(t *testing.T) *gantry.Agent {
 	t.Helper()
-	a, err := harness.New(harness.WithLLM(erroringLLM{}))
+	a, err := gantry.NewAgent(gantry.WithLLM(erroringLLM{}))
 	if err != nil {
-		t.Fatalf("harness.New: %v", err)
+		t.Fatalf("gantry.NewAgent: %v", err)
 	}
 	return a
 }
 
 func TestHandlerStreamsRunToFinish(t *testing.T) {
-	a := newTestAgent(t, harness.LLMResponse{Content: "Hello!", StopReason: harness.StopReasonEnd})
+	a := newTestAgent(t, gantry.LLMResponse{Content: "Hello!", StopReason: gantry.StopReasonEnd})
 	srv := httptest.NewServer(Handler(a))
 	t.Cleanup(srv.Close)
 
@@ -65,7 +65,7 @@ func TestHandlerStreamsRunToFinish(t *testing.T) {
 }
 
 func TestHandlerBadRequest(t *testing.T) {
-	a := newTestAgent(t, harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
 	srv := httptest.NewServer(Handler(a))
 	t.Cleanup(srv.Close)
 
@@ -82,7 +82,7 @@ func TestHandlerBadRequest(t *testing.T) {
 }
 
 func TestHandlerRejectsOversizedBody(t *testing.T) {
-	a := newTestAgent(t, harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
 	srv := httptest.NewServer(Handler(a))
 	t.Cleanup(srv.Close)
 

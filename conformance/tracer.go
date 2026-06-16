@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
-// TracerSuite verifies the contract of harness.Tracer.
-func TracerSuite(t *testing.T, factory func() harness.Tracer) {
+// TracerSuite verifies the contract of gantry.Tracer.
+func TracerSuite(t *testing.T, factory func() gantry.Tracer) {
 	t.Helper()
 
 	t.Run("span_starts_and_ends", func(t *testing.T) {

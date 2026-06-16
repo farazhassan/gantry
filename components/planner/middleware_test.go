@@ -5,16 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithPlannerSetsStatePlanAndInjectsIntoSystem(t *testing.T) {
-	plannerLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "1. first\n2. second"})
-	mainLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
+	plannerLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. first\n2. second"})
+	mainLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 
-	a, _ := harness.New(harness.WithLLM(mainLLM))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))
 	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
 		t.Fatalf("WithPlanner: %v", err)
 	}

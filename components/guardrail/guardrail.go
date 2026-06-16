@@ -5,7 +5,7 @@ package guardrail
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Direction selects whether a Guardrail runs pre-LLM or post-LLM.
@@ -19,5 +19,5 @@ const (
 // Guardrail validates state.Messages (DirectionInput) or state.LastResponse
 // (DirectionOutput). Return ErrGuardrailBlocked to short-circuit the loop.
 type Guardrail interface {
-	Check(ctx context.Context, state *harness.State, direction Direction) error
+	Check(ctx context.Context, state *gantry.State, direction Direction) error
 }

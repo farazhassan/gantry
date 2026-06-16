@@ -5,16 +5,16 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
-func resp(content string, in, out int) harness.LLMResponse {
-	return harness.LLMResponse{
+func resp(content string, in, out int) gantry.LLMResponse {
+	return gantry.LLMResponse{
 		Content:    content,
-		StopReason: harness.StopReasonEnd,
-		Usage:      harness.Usage{InputTokens: in, OutputTokens: out},
+		StopReason: gantry.StopReasonEnd,
+		Usage:      gantry.Usage{InputTokens: in, OutputTokens: out},
 	}
 }
 
@@ -23,10 +23,10 @@ func resp(content string, in, out int) harness.LLMResponse {
 type fakeStore struct {
 	loadErr error
 	saveErr error
-	saved   *harness.State
+	saved   *gantry.State
 }
 
-func (f *fakeStore) Save(_ context.Context, _ string, s *harness.State) error {
+func (f *fakeStore) Save(_ context.Context, _ string, s *gantry.State) error {
 	if f.saveErr != nil {
 		return f.saveErr
 	}
@@ -35,7 +35,7 @@ func (f *fakeStore) Save(_ context.Context, _ string, s *harness.State) error {
 	return nil
 }
 
-func (f *fakeStore) Load(_ context.Context, id string) (*harness.State, error) {
+func (f *fakeStore) Load(_ context.Context, id string) (*gantry.State, error) {
 	if f.loadErr != nil {
 		return nil, f.loadErr
 	}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithGuardrail installs the guard on both directions:
@@ -13,16 +13,16 @@ import (
 //
 // Both shortcuts set state.Done = true and DoneReason = DoneGuardrailBlocked
 // and return ErrGuardrailBlocked from Run.
-func WithGuardrail(a *harness.Agent, g Guardrail) {
+func WithGuardrail(a *gantry.Agent, g Guardrail) {
 	const inName = "components/guardrail:in"
 	const outName = "components/guardrail:out"
 
-	_ = a.UseNamed(harness.PhaseLLMCall, inName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseLLMCall, inName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			if err := g.Check(ctx, s, DirectionInput); err != nil {
-				if errors.Is(err, harness.ErrGuardrailBlocked) {
+				if errors.Is(err, gantry.ErrGuardrailBlocked) {
 					s.Done = true
-					s.DoneReason = harness.DoneGuardrailBlocked
+					s.DoneReason = gantry.DoneGuardrailBlocked
 				}
 				return err
 			}
@@ -30,15 +30,15 @@ func WithGuardrail(a *harness.Agent, g Guardrail) {
 		}
 	})
 
-	_ = a.UseNamed(harness.PhasePostLLM, outName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhasePostLLM, outName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			if err := next(ctx, s); err != nil {
 				return err
 			}
 			if err := g.Check(ctx, s, DirectionOutput); err != nil {
-				if errors.Is(err, harness.ErrGuardrailBlocked) {
+				if errors.Is(err, gantry.ErrGuardrailBlocked) {
 					s.Done = true
-					s.DoneReason = harness.DoneGuardrailBlocked
+					s.DoneReason = gantry.DoneGuardrailBlocked
 					// Scrub any final output DefaultPostLLMHandler already set,
 					// so a caller that ignores the returned error cannot read
 					// blocked content out of FinalOutput.

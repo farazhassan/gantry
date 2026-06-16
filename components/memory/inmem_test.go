@@ -4,18 +4,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestInMemoryStoreAppendAndRead(t *testing.T) {
 	m := memory.NewInMemoryStore()
 	ctx := context.Background()
 
-	if err := m.Append(ctx, harness.Message{Role: harness.RoleUser, Content: "hi"}); err != nil {
+	if err := m.Append(ctx, gantry.Message{Role: gantry.RoleUser, Content: "hi"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if err := m.Append(ctx, harness.Message{Role: harness.RoleAssistant, Content: "hello"}); err != nil {
+	if err := m.Append(ctx, gantry.Message{Role: gantry.RoleAssistant, Content: "hello"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestInMemoryStoreAppendAndRead(t *testing.T) {
 
 func TestInMemoryStoreReadReturnsCopy(t *testing.T) {
 	m := memory.NewInMemoryStore()
-	m.Append(context.Background(), harness.Message{Content: "x"})
+	m.Append(context.Background(), gantry.Message{Content: "x"})
 	a, _ := m.Read(context.Background())
 	a[0].Content = "mutated"
 	b, _ := m.Read(context.Background())

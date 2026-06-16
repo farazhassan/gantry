@@ -4,18 +4,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestLLMCriticAcceptVerdict(t *testing.T) {
 	// LLMCritic uses a structured rubric; mock returns "PASS".
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "PASS: looks good"})
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "PASS: looks good"})
 	c := critic.NewLLM(mock, "Reply PASS or FAIL.")
 
-	state := &harness.State{
-		LastResponse: &harness.LLMResponse{Content: "the sky is blue"},
+	state := &gantry.State{
+		LastResponse: &gantry.LLMResponse{Content: "the sky is blue"},
 	}
 	v, err := c.Critique(context.Background(), state)
 	if err != nil {
@@ -27,10 +27,10 @@ func TestLLMCriticAcceptVerdict(t *testing.T) {
 }
 
 func TestLLMCriticRejectVerdict(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "FAIL: too short"})
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "FAIL: too short"})
 	c := critic.NewLLM(mock, "Reply PASS or FAIL.")
 
-	state := &harness.State{LastResponse: &harness.LLMResponse{Content: "ok"}}
+	state := &gantry.State{LastResponse: &gantry.LLMResponse{Content: "ok"}}
 	v, err := c.Critique(context.Background(), state)
 	if err != nil {
 		t.Fatalf("Critique: %v", err)

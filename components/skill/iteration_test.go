@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // TestWithSkillNoDuplicateSystemAcrossIterations guards against appending the
@@ -16,10 +16,10 @@ import (
 // would stack duplicate prompts.
 func TestWithSkillNoDuplicateSystemAcrossIterations(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "t1", Name: "x"}}, StopReason: harness.StopReasonToolUse},
-		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "t1", Name: "x"}}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(5))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {

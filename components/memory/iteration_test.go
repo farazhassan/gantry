@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // TestWithMemoryNoTranscriptDuplicationAcrossIterations guards against the
@@ -15,10 +15,10 @@ import (
 // would duplicate prior turns in the prompt sent to the LLM.
 func TestWithMemoryNoTranscriptDuplicationAcrossIterations(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "t1", Name: "x"}}, StopReason: harness.StopReasonToolUse},
-		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "t1", Name: "x"}}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.New(harness.WithLLM(mock), harness.WithMaxIterations(5))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
 	memory.WithMemory(a, memory.NewInMemoryStore())
 
 	if _, err := a.Run(context.Background(), "hello"); err != nil {
@@ -31,7 +31,7 @@ func TestWithMemoryNoTranscriptDuplicationAcrossIterations(t *testing.T) {
 	}
 	users := 0
 	for _, m := range reqs[1].Messages {
-		if m.Role == harness.RoleUser && m.Content == "hello" {
+		if m.Role == gantry.RoleUser && m.Content == "hello" {
 			users++
 		}
 	}

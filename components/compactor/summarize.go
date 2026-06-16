@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Summarizing keeps head messages and tail messages, replacing the dropped
 // middle with an LLM-generated summary.
 type Summarizing struct {
-	client     harness.LLMClient
+	client     gantry.LLMClient
 	head, tail int
 }
 
@@ -19,14 +19,14 @@ type Summarizing struct {
 // and tail >= 0: negative counts would panic inside Compact. head and tail may
 // both be zero, in which case the entire history is replaced by a single
 // summary.
-func NewSummarizing(client harness.LLMClient, head, tail int) *Summarizing {
+func NewSummarizing(client gantry.LLMClient, head, tail int) *Summarizing {
 	if head < 0 || tail < 0 {
 		panic(fmt.Sprintf("compactor: NewSummarizing requires head >= 0 and tail >= 0, got head=%d tail=%d", head, tail))
 	}
 	return &Summarizing{client: client, head: head, tail: tail}
 }
 
-func (s *Summarizing) Compact(ctx context.Context, msgs []harness.Message, b Budget) ([]harness.Message, error) {
+func (s *Summarizing) Compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
 	// Count tokens; if under SoftLimit, no compaction needed.
 	if b.SoftLimit > 0 {
 		total := 0
@@ -34,13 +34,13 @@ func (s *Summarizing) Compact(ctx context.Context, msgs []harness.Message, b Bud
 			total += b.Count(m)
 		}
 		if total <= b.SoftLimit {
-			out := make([]harness.Message, len(msgs))
+			out := make([]gantry.Message, len(msgs))
 			copy(out, msgs)
 			return out, nil
 		}
 	}
 	if len(msgs) <= s.head+s.tail {
-		out := make([]harness.Message, len(msgs))
+		out := make([]gantry.Message, len(msgs))
 		copy(out, msgs)
 		return out, nil
 	}
@@ -58,19 +58,19 @@ func (s *Summarizing) Compact(ctx context.Context, msgs []harness.Message, b Bud
 		b2.WriteString(m.Content)
 		b2.WriteString("\n")
 	}
-	req := harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: b2.String()}},
+	req := gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: b2.String()}},
 	}
 	resp, err := s.client.Generate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	summary := harness.Message{
-		Role:    harness.RoleSystem,
+	summary := gantry.Message{
+		Role:    gantry.RoleSystem,
 		Content: resp.Content,
 	}
-	out := make([]harness.Message, 0, len(headSlice)+1+len(tailSlice))
+	out := make([]gantry.Message, 0, len(headSlice)+1+len(tailSlice))
 	out = append(out, headSlice...)
 	out = append(out, summary)
 	out = append(out, tailSlice...)

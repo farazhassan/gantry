@@ -5,18 +5,18 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestMockLLMClientScriptedResponses(t *testing.T) {
 	m := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "first", StopReason: harness.StopReasonEnd},
-		harness.LLMResponse{Content: "second", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "first", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "second", StopReason: gantry.StopReasonEnd},
 	)
 	ctx := context.Background()
 
-	r1, err := m.Generate(ctx, harness.LLMRequest{})
+	r1, err := m.Generate(ctx, gantry.LLMRequest{})
 	if err != nil {
 		t.Fatalf("call 1: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestMockLLMClientScriptedResponses(t *testing.T) {
 		t.Errorf("call 1 Content = %q", r1.Content)
 	}
 
-	r2, err := m.Generate(ctx, harness.LLMRequest{})
+	r2, err := m.Generate(ctx, gantry.LLMRequest{})
 	if err != nil {
 		t.Fatalf("call 2: %v", err)
 	}
@@ -34,9 +34,9 @@ func TestMockLLMClientScriptedResponses(t *testing.T) {
 }
 
 func TestMockLLMClientExhaustedReturnsError(t *testing.T) {
-	m := eval.NewMockLLMClient(harness.LLMResponse{Content: "only"})
-	_, _ = m.Generate(context.Background(), harness.LLMRequest{})
-	_, err := m.Generate(context.Background(), harness.LLMRequest{})
+	m := eval.NewMockLLMClient(gantry.LLMResponse{Content: "only"})
+	_, _ = m.Generate(context.Background(), gantry.LLMRequest{})
+	_, err := m.Generate(context.Background(), gantry.LLMRequest{})
 	if err == nil {
 		t.Fatalf("expected error on second call; got nil")
 	}
@@ -47,17 +47,17 @@ func TestMockLLMClientExhaustedReturnsError(t *testing.T) {
 
 func TestMockLLMClientReset(t *testing.T) {
 	m := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "first", StopReason: harness.StopReasonEnd},
-		harness.LLMResponse{Content: "second", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "first", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "second", StopReason: gantry.StopReasonEnd},
 	)
 	ctx := context.Background()
-	_, _ = m.Generate(ctx, harness.LLMRequest{})
-	_, _ = m.Generate(ctx, harness.LLMRequest{})
+	_, _ = m.Generate(ctx, gantry.LLMRequest{})
+	_, _ = m.Generate(ctx, gantry.LLMRequest{})
 	m.Reset()
 	if len(m.Requests()) != 0 {
 		t.Errorf("after Reset, Requests() should be empty; got %d", len(m.Requests()))
 	}
-	r, err := m.Generate(ctx, harness.LLMRequest{})
+	r, err := m.Generate(ctx, gantry.LLMRequest{})
 	if err != nil {
 		t.Fatalf("after Reset, Generate err: %v", err)
 	}
@@ -67,8 +67,8 @@ func TestMockLLMClientReset(t *testing.T) {
 }
 
 func TestMockLLMClientRecordsRequests(t *testing.T) {
-	m := eval.NewMockLLMClient(harness.LLMResponse{Content: "x"})
-	req := harness.LLMRequest{System: "you are helpful", Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}}}
+	m := eval.NewMockLLMClient(gantry.LLMResponse{Content: "x"})
+	req := gantry.LLMRequest{System: "you are helpful", Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}
 	_, _ = m.Generate(context.Background(), req)
 	got := m.Requests()
 	if len(got) != 1 {
@@ -84,7 +84,7 @@ func TestMockLLMClientWithError(t *testing.T) {
 	m := eval.NewMockLLMClientFromScript([]eval.MockTurn{
 		{Err: wantErr},
 	})
-	_, err := m.Generate(context.Background(), harness.LLMRequest{})
+	_, err := m.Generate(context.Background(), gantry.LLMRequest{})
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want %v", err, wantErr)
 	}

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestRegistryAddAndLookup(t *testing.T) {
@@ -43,11 +43,11 @@ func TestRegistryDuplicateOverrides(t *testing.T) {
 
 func TestRegistryInvokeUnknownReturnsError(t *testing.T) {
 	r := tool.NewRegistry()
-	_, err := r.Invoke(context.Background(), harness.ToolCall{Name: "ghost", Input: json.RawMessage(`{}`)})
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "ghost", Input: json.RawMessage(`{}`)})
 	if err == nil {
 		t.Errorf("expected error invoking unknown tool")
 	}
-	if !errors.Is(err, harness.ErrToolExecution) {
+	if !errors.Is(err, gantry.ErrToolExecution) {
 		t.Errorf("err should wrap ErrToolExecution; got %v", err)
 	}
 }
@@ -55,7 +55,7 @@ func TestRegistryInvokeUnknownReturnsError(t *testing.T) {
 func TestRegistryInvokeSuccess(t *testing.T) {
 	r := tool.NewRegistry()
 	r.Add(echoTool{})
-	out, err := r.Invoke(context.Background(), harness.ToolCall{Name: "echo", Input: json.RawMessage(`{"a":1}`)})
+	out, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "echo", Input: json.RawMessage(`{"a":1}`)})
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}

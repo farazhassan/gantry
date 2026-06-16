@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithSkill installs a PhaseAssembleContext middleware that appends the
@@ -16,10 +16,10 @@ import (
 //
 // Multiple skills can be registered; their prompts are joined by newlines
 // in registration order.
-func WithSkill(a *harness.Agent, s Skill) {
+func WithSkill(a *gantry.Agent, s Skill) {
 	name := "components/skill:" + s.Name()
-	_ = a.UseNamed(harness.PhaseAssembleContext, name, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, state *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseAssembleContext, name, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, state *gantry.State) error {
 			if state.Iteration == 0 && s.Matches(ctx, state) {
 				if state.System != "" {
 					state.System = strings.TrimRight(state.System, "\n") + "\n" + s.SystemPrompt()

@@ -5,13 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestInMemoryCheckpointerRoundTrip(t *testing.T) {
 	c := checkpointer.NewInMemory()
-	original := &harness.State{Input: "x", Iteration: 3, FinalOutput: "y"}
+	original := &gantry.State{Input: "x", Iteration: 3, FinalOutput: "y"}
 
 	if err := c.Save(context.Background(), "run-1", original); err != nil {
 		t.Fatalf("Save: %v", err)

@@ -12,12 +12,12 @@ package memory
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Memory persists and reads back the conversation transcript.
 type Memory interface {
-	Append(ctx context.Context, msg harness.Message) error
+	Append(ctx context.Context, msg gantry.Message) error
 
 	// Read returns the stored transcript as a fresh slice that does not alias
 	// the store's backing array: callers may retain, reslice, reorder, or
@@ -29,5 +29,5 @@ type Memory interface {
 	// Treat returned messages as read-only: do NOT mutate a returned element's
 	// ToolCalls or write into its Input in place, as that would corrupt the
 	// stored transcript. Build a new Message instead.
-	Read(ctx context.Context) ([]harness.Message, error)
+	Read(ctx context.Context) ([]gantry.Message, error)
 }

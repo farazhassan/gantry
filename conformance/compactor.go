@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // CompactorSuite verifies the contract of compactor.Compactor.
@@ -14,7 +14,7 @@ func CompactorSuite(t *testing.T, factory func() compactor.Compactor) {
 
 	t.Run("compact_preserves_or_shrinks_length", func(t *testing.T) {
 		c := factory()
-		msgs := []harness.Message{
+		msgs := []gantry.Message{
 			{Content: "a"}, {Content: "b"}, {Content: "c"}, {Content: "d"}, {Content: "e"},
 		}
 		got, err := c.Compact(context.Background(), msgs, compactor.Budget{MaxTokens: 10})
@@ -43,7 +43,7 @@ func CompactorSuite(t *testing.T, factory func() compactor.Compactor) {
 	// not assert it.
 	t.Run("compact_returns_independent_copy", func(t *testing.T) {
 		c := factory()
-		msgs := []harness.Message{
+		msgs := []gantry.Message{
 			{Content: "a"}, {Content: "b"}, {Content: "c"}, {Content: "d"}, {Content: "e"},
 		}
 		before := make([]string, len(msgs))

@@ -5,14 +5,14 @@ package planner
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // PhasePlan is the custom phase the WithPlanner middleware registers
 // (PositionAfter PhaseStart). It runs only once per agent run.
-const PhasePlan harness.Phase = "plan"
+const PhasePlan gantry.Phase = "plan"
 
 // Planner decomposes a task into a Plan.
 type Planner interface {
-	Plan(ctx context.Context, task string) (*harness.Plan, error)
+	Plan(ctx context.Context, task string) (*gantry.Plan, error)
 }

@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
-	"github.com/farazhassan/gantry/harness"
 )
 
 type echoTool struct{}
 
-func (echoTool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (echoTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        "echo",
 		Description: "echoes its input",
 		Schema:      json.RawMessage(`{"type":"object"}`),

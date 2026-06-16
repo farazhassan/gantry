@@ -6,23 +6,23 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/limiter"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // RunBlocked runs an agent whose output trips a regex guardrail. A guardrail
 // block is an *active* stop: Run sets DoneGuardrailBlocked AND returns the
 // ErrGuardrailBlocked sentinel (inspect it with errors.Is). The blocked content
 // is scrubbed from FinalOutput.
-func RunBlocked(ctx context.Context) (*harness.State, error) {
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+func RunBlocked(ctx context.Context) (*gantry.State, error) {
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "Sure, here is something forbidden.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	})
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
@@ -35,14 +35,14 @@ func RunBlocked(ctx context.Context) (*harness.State, error) {
 // RunBudgetStop runs an agent whose first response blows a tiny token budget.
 // A budget stop is a *resource* stop: Run sets DoneBudgetExceeded and returns a
 // NIL error. That nil-vs-sentinel split is the whole lesson of this example.
-func RunBudgetStop(ctx context.Context) (*harness.State, error) {
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+func RunBudgetStop(ctx context.Context) (*gantry.State, error) {
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "A long, expensive answer.",
-		StopReason: harness.StopReasonEnd,
-		Usage:      harness.Usage{InputTokens: 100, OutputTokens: 50},
+		StopReason: gantry.StopReasonEnd,
+		Usage:      gantry.Usage{InputTokens: 100, OutputTokens: 50},
 	})
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func RunExample(ctx context.Context) error {
 	blocked, blockErr := RunBlocked(ctx)
 	fmt.Println("=== guardrail block ===")
 	fmt.Printf("done reason: %s\n", blocked.DoneReason)
-	fmt.Printf("errors.Is(err, ErrGuardrailBlocked): %v\n\n", errors.Is(blockErr, harness.ErrGuardrailBlocked))
+	fmt.Printf("errors.Is(err, ErrGuardrailBlocked): %v\n\n", errors.Is(blockErr, gantry.ErrGuardrailBlocked))
 
 	budget, budgetErr := RunBudgetStop(ctx)
 	fmt.Println("=== budget stop ===")

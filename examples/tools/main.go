@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // calcTool is a trivial tool the model can invoke. A Tool is just two methods:
@@ -16,8 +16,8 @@ import (
 // matching tool call).
 type calcTool struct{}
 
-func (calcTool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (calcTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        "calc",
 		Description: "adds two integers a and b",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}`),
@@ -38,23 +38,23 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // RunExample gives the agent one tool and scripts a two-turn conversation:
 // turn 1 the model calls calc, turn 2 it reports the result. It returns the
 // terminal State for the test to inspect.
-func RunExample(ctx context.Context) (*harness.State, error) {
+func RunExample(ctx context.Context) (*gantry.State, error) {
 	llm := eval.NewMockLLMClient(
 		// Turn 1: ask to run the calc tool (StopReasonToolUse keeps the loop going).
-		harness.LLMResponse{
-			ToolCalls: []harness.ToolCall{
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
 				{ID: "call-1", Name: "calc", Input: json.RawMessage(`{"a":2,"b":3}`)},
 			},
-			StopReason: harness.StopReasonToolUse,
+			StopReason: gantry.StopReasonToolUse,
 		},
 		// Turn 2: having seen the tool result, give the final answer.
-		harness.LLMResponse{
+		gantry.LLMResponse{
 			Content:    "2 + 3 = 5 (computed by the calc tool).",
-			StopReason: harness.StopReasonEnd,
+			StopReason: gantry.StopReasonEnd,
 		},
 	)
 
-	a, err := harness.New(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

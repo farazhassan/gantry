@@ -3,12 +3,12 @@ package ollama_test
 import (
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/ollama"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // Compile-time guarantee the client satisfies the streaming interface.
-var _ harness.StreamingLLMClient = (*ollama.Client)(nil)
+var _ gantry.StreamingLLMClient = (*ollama.Client)(nil)
 
 func TestNewPanicsOnEmptyModel(t *testing.T) {
 	defer func() {

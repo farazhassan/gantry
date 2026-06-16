@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestSessionExample(t *testing.T) {
@@ -36,7 +36,7 @@ func TestSessionExample(t *testing.T) {
 	if res.Resumed.Usage.InputTokens != 30 {
 		t.Errorf("resumed Usage.InputTokens = %d, want 30 (cumulative across managers)", res.Resumed.Usage.InputTokens)
 	}
-	if res.Resumed.DoneReason != harness.DoneNoToolCalls {
-		t.Errorf("resumed DoneReason = %q, want %q", res.Resumed.DoneReason, harness.DoneNoToolCalls)
+	if res.Resumed.DoneReason != gantry.DoneNoToolCalls {
+		t.Errorf("resumed DoneReason = %q, want %q", res.Resumed.DoneReason, gantry.DoneNoToolCalls)
 	}
 }

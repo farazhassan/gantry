@@ -5,11 +5,11 @@ package limiter
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Limiter is queried before LLM and tool calls and records usage after.
 type Limiter interface {
-	Check(ctx context.Context, state *harness.State) error
-	Record(ctx context.Context, usage harness.Usage)
+	Check(ctx context.Context, state *gantry.State) error
+	Record(ctx context.Context, usage gantry.Usage)
 }

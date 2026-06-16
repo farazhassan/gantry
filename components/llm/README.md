@@ -1,7 +1,7 @@
 # LLM Adapters
 
 This directory holds adapters that connect external LLM providers to Gantry's
-`harness.StreamingLLMClient` interface. Each provider lives in its own package
+`gantry.StreamingLLMClient` interface. Each provider lives in its own package
 (`ollama`, `openai`, `anthropic`, ...).
 
 These are the conventions every adapter follows. Read this before adding a new
@@ -17,8 +17,8 @@ swap providers without surprises.
   - `<provider>.go` — the public `Client`, `New`, options, and transport
     (`Generate`, `GenerateStream`, HTTP plumbing).
   - `wire.go` — **private** request/response DTOs that mirror the provider's
-    wire format, plus the mapping to and from `harness` types. Callers only ever
-    see `harness` types; all provider-shaped structs stay unexported here so the
+    wire format, plus the mapping to and from `gantry` types. Callers only ever
+    see `gantry` types; all provider-shaped structs stay unexported here so the
     transport code stays focused.
   - `doc.go` — the package doc comment.
   - `*_test.go` — see [Testing](#testing).
@@ -71,7 +71,7 @@ Providers that need no key (e.g. a local Ollama server) simply omit
 
 ## Tool calls
 
-- The harness links a tool result back to its call by `ToolCall.ID`, so every
+- The gantry links a tool result back to its call by `ToolCall.ID`, so every
   returned call **must** have a stable ID.
   - If the provider supplies per-call IDs (OpenAI `call_...`, Anthropic
     `toolu_...`), **preserve** them.
@@ -105,9 +105,9 @@ Implement `GenerateStream` so that it:
 
 ## Stop-reason mapping
 
-Normalize the provider's finish reason to a `harness.StopReason`:
+Normalize the provider's finish reason to a `gantry.StopReason`:
 
-| Condition                                  | `harness.StopReason`     |
+| Condition                                  | `gantry.StopReason`     |
 | ------------------------------------------ | ------------------------ |
 | Response contains tool calls               | `StopReasonToolUse`      |
 | Truncated by token limit                   | `StopReasonMaxTokens`    |
@@ -128,13 +128,13 @@ Tool calls take precedence: if the response carries tool calls, report
 
   ```go
   func TestProviderConformsToLLMClient(t *testing.T) {
-      conformance.LLMClientSuite(t, func() harness.LLMClient {
+      conformance.LLMClientSuite(t, func() gantry.LLMClient {
           return newServerClient(t, conformanceHandler)
       })
   }
 
   func TestProviderConformsToStreamingLLMClient(t *testing.T) {
-      conformance.StreamingLLMClientSuite(t, func() harness.StreamingLLMClient {
+      conformance.StreamingLLMClientSuite(t, func() gantry.StreamingLLMClient {
           return newServerClient(t, conformanceHandler)
       })
   }

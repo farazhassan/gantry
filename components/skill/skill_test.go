@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/skill"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestStaticSkillAlwaysMatches(t *testing.T) {
 	s := skill.NewStatic("helper", "You are helpful.")
-	if !s.Matches(context.Background(), &harness.State{}) {
+	if !s.Matches(context.Background(), &gantry.State{}) {
 		t.Errorf("StaticSkill should always match")
 	}
 	if s.Name() != "helper" || !strings.Contains(s.SystemPrompt(), "helpful") {

@@ -6,23 +6,23 @@ import (
 	"log"
 	"os"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tracers/langfuse"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // RunExample runs the smallest possible agent under the supplied tracer and
 // returns the terminal State. The tracer is a parameter so the hermetic test
 // can inject an in-memory tracer while main() wires the real Langfuse client.
-func RunExample(ctx context.Context, tracer harness.Tracer) (*harness.State, error) {
+func RunExample(ctx context.Context, tracer gantry.Tracer) (*gantry.State, error) {
 	// A scripted mock LLM keeps the run hermetic with respect to LLM providers:
 	// the point of this program is to exercise the *tracer*, not a model.
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "Hello! I'm a minimal gantry agent.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	})
 
-	a, err := harness.New(harness.WithLLM(llm), harness.WithTracer(tracer))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm), gantry.WithTracer(tracer))
 	if err != nil {
 		return nil, err
 	}

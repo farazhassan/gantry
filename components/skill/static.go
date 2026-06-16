@@ -3,7 +3,7 @@ package skill
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // StaticSkill always matches and always contributes the same prompt.
@@ -17,6 +17,6 @@ func NewStatic(name, prompt string) *StaticSkill {
 	return &StaticSkill{name: name, prompt: prompt}
 }
 
-func (s *StaticSkill) Name() string                                 { return s.name }
-func (s *StaticSkill) SystemPrompt() string                         { return s.prompt }
-func (s *StaticSkill) Matches(context.Context, *harness.State) bool { return true }
+func (s *StaticSkill) Name() string                                { return s.name }
+func (s *StaticSkill) SystemPrompt() string                        { return s.prompt }
+func (s *StaticSkill) Matches(context.Context, *gantry.State) bool { return true }

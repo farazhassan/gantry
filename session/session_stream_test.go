@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -18,11 +18,11 @@ func TestSessionRunStreamStreamsAndPersists(t *testing.T) {
 
 	var deltas []string
 	var sawDone bool
-	state, err := s.RunStream(ctx, "hi", func(ev harness.Event) error {
+	state, err := s.RunStream(ctx, "hi", func(ev gantry.Event) error {
 		switch ev.Type {
-		case harness.EventTextDelta:
+		case gantry.EventTextDelta:
 			deltas = append(deltas, ev.TextDelta)
-		case harness.EventDone:
+		case gantry.EventDone:
 			sawDone = true
 		}
 		return nil
@@ -61,7 +61,7 @@ func TestSessionRunStreamContinuesPriorRun(t *testing.T) {
 		t.Fatalf("turn 1 (Run): %v", err)
 	}
 
-	t2, err := s.RunStream(ctx, "second", func(harness.Event) error { return nil })
+	t2, err := s.RunStream(ctx, "second", func(gantry.Event) error { return nil })
 	if err != nil {
 		t.Fatalf("turn 2 (RunStream): %v", err)
 	}

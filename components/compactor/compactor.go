@@ -6,7 +6,7 @@ package compactor
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Compactor reduces a message slice to fit within Budget.
@@ -23,7 +23,7 @@ import (
 // place; doing so would corrupt the other. Build a new Message instead.
 // (Mirrors the memory.Read independent-copy contract.)
 type Compactor interface {
-	Compact(ctx context.Context, msgs []harness.Message, budget Budget) ([]harness.Message, error)
+	Compact(ctx context.Context, msgs []gantry.Message, budget Budget) ([]gantry.Message, error)
 }
 
 // Budget describes the constraints the Compactor should honor.
@@ -32,12 +32,12 @@ type Compactor interface {
 type Budget struct {
 	MaxTokens int
 	SoftLimit int
-	Counter   func(harness.Message) int
+	Counter   func(gantry.Message) int
 }
 
 // Count returns the number of tokens for m, using Budget.Counter or a
 // default approximation.
-func (b Budget) Count(m harness.Message) int {
+func (b Budget) Count(m gantry.Message) int {
 	if b.Counter != nil {
 		return b.Counter(m)
 	}

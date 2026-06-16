@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
@@ -19,14 +20,13 @@ import (
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // calcTool is a trivial tool used by the example.
 type calcTool struct{}
 
-func (calcTool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (calcTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        "calc",
 		Description: "adds two integers",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}}}`),
@@ -44,10 +44,10 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // BuildAgent constructs an Agent with every first-class component attached.
 // scriptedLLM is the user-facing LLM; helperLLM is used by Planner and Critic
 // (in a real system these could be the same or different models).
-func BuildAgent(scriptedLLM, helperLLM harness.LLMClient) (*harness.Agent, *checkpointer.InMemoryCheckpointer, *limiter.BudgetLimiter, error) {
-	a, err := harness.New(
-		harness.WithLLM(scriptedLLM),
-		harness.WithMaxIterations(8),
+func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkpointer.InMemoryCheckpointer, *limiter.BudgetLimiter, error) {
+	a, err := gantry.NewAgent(
+		gantry.WithLLM(scriptedLLM),
+		gantry.WithMaxIterations(8),
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -60,7 +60,7 @@ func BuildAgent(scriptedLLM, helperLLM harness.LLMClient) (*harness.Agent, *chec
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))
 
 	// Retriever (RAG)
-	retriever.WithRetriever(a, retriever.NewStatic([]harness.Document{
+	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
 		{ID: "doc-arith", Content: "Arithmetic is performed by the calc tool."},
 	}), 3)
 
@@ -99,15 +99,15 @@ func BuildAgent(scriptedLLM, helperLLM harness.LLMClient) (*harness.Agent, *chec
 func RunExample(ctx context.Context) error {
 	// Scripted main LLM: turn 1 calls the calc tool, turn 2 gives the final answer.
 	scriptedLLM := eval.NewMockLLMClient(
-		harness.LLMResponse{
-			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "calc", Input: json.RawMessage(`{"A":2,"B":3}`)}},
-			StopReason: harness.StopReasonToolUse,
-			Usage:      harness.Usage{InputTokens: 100, OutputTokens: 30, Cost: 0.001},
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "calc", Input: json.RawMessage(`{"A":2,"B":3}`)}},
+			StopReason: gantry.StopReasonToolUse,
+			Usage:      gantry.Usage{InputTokens: 100, OutputTokens: 30, Cost: 0.001},
 		},
-		harness.LLMResponse{
+		gantry.LLMResponse{
 			Content:    "The answer is 5 (computed by the calc tool).",
-			StopReason: harness.StopReasonEnd,
-			Usage:      harness.Usage{InputTokens: 50, OutputTokens: 15, Cost: 0.0005},
+			StopReason: gantry.StopReasonEnd,
+			Usage:      gantry.Usage{InputTokens: 50, OutputTokens: 15, Cost: 0.0005},
 		},
 	)
 
@@ -116,9 +116,9 @@ func RunExample(ctx context.Context) error {
 	// With two main turns (tool-call, then final answer) that is two critic
 	// calls, so the critic needs two PASS verdicts (turns 2 and 3).
 	helperLLM := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "1. parse inputs\n2. invoke calc\n3. report"},
-		harness.LLMResponse{Content: "VERDICT: PASS — proceeding with the tool call."},
-		harness.LLMResponse{Content: "VERDICT: PASS — answer matches the tool output."},
+		gantry.LLMResponse{Content: "1. parse inputs\n2. invoke calc\n3. report"},
+		gantry.LLMResponse{Content: "VERDICT: PASS — proceeding with the tool call."},
+		gantry.LLMResponse{Content: "VERDICT: PASS — answer matches the tool output."},
 	)
 
 	agent, cp, lim, err := BuildAgent(scriptedLLM, helperLLM)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithLimiter installs middleware on PhaseLLMCall (pre-check + post-record)
@@ -19,17 +19,17 @@ import (
 // work in forward order (last-registered = outermost = runs last). Register
 // WithMemory after WithLimiter and WithCritic so memory:persist observes the
 // finalized turn. See the memory package's "Middleware ordering" note.
-func WithLimiter(a *harness.Agent, l Limiter) {
+func WithLimiter(a *gantry.Agent, l Limiter) {
 	const checkName = "components/limiter:check"
 	const recordName = "components/limiter:record"
 	const finalizeName = "components/limiter:finalize"
 
-	_ = a.UseNamed(harness.PhaseLLMCall, checkName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseLLMCall, checkName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			if err := l.Check(ctx, s); err != nil {
-				if errors.Is(err, harness.ErrLimitExceeded) {
+				if errors.Is(err, gantry.ErrLimitExceeded) {
 					s.Done = true
-					s.DoneReason = harness.DoneBudgetExceeded
+					s.DoneReason = gantry.DoneBudgetExceeded
 					return nil
 				}
 				return err
@@ -38,8 +38,8 @@ func WithLimiter(a *harness.Agent, l Limiter) {
 		}
 	})
 
-	_ = a.UseNamed(harness.PhasePostLLM, recordName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhasePostLLM, recordName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			if s.LastResponse != nil {
 				l.Record(ctx, s.LastResponse.Usage)
 			}
@@ -47,14 +47,14 @@ func WithLimiter(a *harness.Agent, l Limiter) {
 		}
 	})
 
-	_ = a.UseNamed(harness.PhasePostLLM, finalizeName, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhasePostLLM, finalizeName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			if err := next(ctx, s); err != nil {
 				return err
 			}
-			if err := l.Check(ctx, s); err != nil && errors.Is(err, harness.ErrLimitExceeded) {
+			if err := l.Check(ctx, s); err != nil && errors.Is(err, gantry.ErrLimitExceeded) {
 				s.Done = true
-				s.DoneReason = harness.DoneBudgetExceeded
+				s.DoneReason = gantry.DoneBudgetExceeded
 			}
 			return nil
 		}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestMinimalRunStopsWithNoToolCalls(t *testing.T) {
@@ -12,8 +12,8 @@ func TestMinimalRunStopsWithNoToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunExample returned error: %v", err)
 	}
-	if state.DoneReason != harness.DoneNoToolCalls {
-		t.Errorf("DoneReason = %q, want %q", state.DoneReason, harness.DoneNoToolCalls)
+	if state.DoneReason != gantry.DoneNoToolCalls {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneNoToolCalls)
 	}
 	if state.FinalOutput == "" {
 		t.Error("FinalOutput is empty, want the model's reply")

@@ -5,27 +5,27 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
 // Result bundles the three turns so the test can assert continuity, cumulative
 // usage, and durable resume.
 type Result struct {
-	Turn1   *harness.State
-	Turn2   *harness.State
-	Resumed *harness.State
+	Turn1   *gantry.State
+	Turn2   *gantry.State
+	Resumed *gantry.State
 }
 
 // reply builds a scripted no-tool-call response carrying a fixed usage so the
 // example can show cumulative tokens across turns.
-func reply(content string) harness.LLMResponse {
-	return harness.LLMResponse{
+func reply(content string) gantry.LLMResponse {
+	return gantry.LLMResponse{
 		Content:    content,
-		StopReason: harness.StopReasonEnd,
-		Usage:      harness.Usage{InputTokens: 10, OutputTokens: 5},
+		StopReason: gantry.StopReasonEnd,
+		Usage:      gantry.Usage{InputTokens: 10, OutputTokens: 5},
 	}
 }
 
@@ -43,7 +43,7 @@ func RunExample(ctx context.Context) (*Result, error) {
 		reply("Welcome back, Faraz."),
 	)
 
-	agent, err := harness.New(harness.WithLLM(llm))
+	agent, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Runner sweeps configs × cases.
@@ -59,7 +59,7 @@ func (r *Runner) Run(ctx context.Context) (Report, error) {
 		}
 	}
 
-	if err := harness.RunParallel(ctx, parallelism, runFns); err != nil {
+	if err := gantry.RunParallel(ctx, parallelism, runFns); err != nil {
 		return Report{Results: results}, err
 	}
 
@@ -89,7 +89,7 @@ func (r *Runner) executeOne(ctx context.Context, cfg Config, c Case) ScoredResul
 		rr.Err = runErr
 		// Recover the partial trace from the wrapped error if state was nil.
 		if rr.Trace == nil {
-			var tc harness.TraceCarrier
+			var tc gantry.TraceCarrier
 			if errors.As(runErr, &tc) {
 				rr.Trace = tc.Trace()
 			}

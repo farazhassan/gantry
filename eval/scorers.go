@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // ExactMatchScorer compares RunResult.FinalOutput to a string stored at
@@ -92,7 +92,7 @@ func (s ContainsScorer) Score(_ context.Context, _ Case, r RunResult) (Score, er
 // TraceScorer applies a user predicate to RunResult.Trace.
 type TraceScorer struct {
 	ScorerName string
-	Pred       func(*harness.Trace) bool
+	Pred       func(*gantry.Trace) bool
 }
 
 func (s TraceScorer) Name() string {
@@ -168,7 +168,7 @@ func (s LatencyScorer) Score(_ context.Context, _ Case, r RunResult) (Score, err
 // (case-insensitive) to set Pass=true; everything else is Pass=false.
 type LLMJudgeScorer struct {
 	ScorerName string
-	Client     harness.LLMClient
+	Client     gantry.LLMClient
 	Rubric     string
 }
 
@@ -181,9 +181,9 @@ func (s LLMJudgeScorer) Name() string {
 
 func (s LLMJudgeScorer) Score(ctx context.Context, c Case, r RunResult) (Score, error) {
 	prompt := fmt.Sprintf("Case input:\n%s\n\nAgent output:\n%s", c.Input, r.FinalOutput)
-	resp, err := s.Client.Generate(ctx, harness.LLMRequest{
+	resp, err := s.Client.Generate(ctx, gantry.LLMRequest{
 		System:   s.Rubric,
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: prompt}},
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: prompt}},
 	})
 	if err != nil {
 		return Score{}, err

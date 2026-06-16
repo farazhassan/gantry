@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/anthropic"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // newServerClient spins up an httptest server with the given handler and returns
@@ -47,9 +47,9 @@ func TestGenerateMapsRequestAndResponse(t *testing.T) {
 		}`)
 	})
 
-	resp, err := c.Generate(context.Background(), harness.LLMRequest{
+	resp, err := c.Generate(context.Background(), gantry.LLMRequest{
 		System:   "be brief",
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "hello"}},
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hello"}},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -93,8 +93,8 @@ func TestGenerateMapsRequestAndResponse(t *testing.T) {
 	if resp.Content != "hi there" {
 		t.Errorf("Content = %q, want %q", resp.Content, "hi there")
 	}
-	if resp.StopReason != harness.StopReasonEnd {
-		t.Errorf("StopReason = %q, want %q", resp.StopReason, harness.StopReasonEnd)
+	if resp.StopReason != gantry.StopReasonEnd {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonEnd)
 	}
 	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
 		t.Errorf("Usage = %+v, want In=11 Out=7", resp.Usage)
@@ -107,8 +107,8 @@ func TestGenerateRespectsExplicitMaxTokens(t *testing.T) {
 		_ = decodeJSON(r, &gotBody)
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
 	})
-	_, err := c.Generate(context.Background(), harness.LLMRequest{
-		Messages:  []harness.Message{{Role: harness.RoleUser, Content: "x"}},
+	_, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
 		MaxTokens: 256,
 	})
 	if err != nil {
@@ -123,14 +123,14 @@ func TestGenerateMaxTokensStopReason(t *testing.T) {
 	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"trunc"}],"stop_reason":"max_tokens"}`)
 	})
-	resp, err := c.Generate(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "x"}},
+	resp, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if resp.StopReason != harness.StopReasonMaxTokens {
-		t.Errorf("StopReason = %q, want %q", resp.StopReason, harness.StopReasonMaxTokens)
+	if resp.StopReason != gantry.StopReasonMaxTokens {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonMaxTokens)
 	}
 }
 
@@ -144,9 +144,9 @@ func TestGenerateMapsToolUseBlocks(t *testing.T) {
 		}`)
 	})
 
-	resp, err := c.Generate(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "weather?"}},
-		Tools: []harness.ToolDef{{
+	resp, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "weather?"}},
+		Tools: []gantry.ToolDef{{
 			Name:        "get_weather",
 			Description: "look up weather",
 			Schema:      json.RawMessage(`{"type":"object"}`),
@@ -180,8 +180,8 @@ func TestGenerateMapsToolUseBlocks(t *testing.T) {
 	if strings.TrimSpace(string(tc.Input)) != `{"city":"SF"}` {
 		t.Errorf("ToolCall.Input = %s, want {\"city\":\"SF\"}", tc.Input)
 	}
-	if resp.StopReason != harness.StopReasonToolUse {
-		t.Errorf("StopReason = %q, want %q", resp.StopReason, harness.StopReasonToolUse)
+	if resp.StopReason != gantry.StopReasonToolUse {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonToolUse)
 	}
 }
 
@@ -190,8 +190,8 @@ func TestGenerateNon2xxReturnsError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, `{"error":"overloaded"}`)
 	})
-	_, err := c.Generate(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "x"}},
+	_, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
 	})
 	if err == nil {
 		t.Fatal("want error on 500, got nil")
@@ -208,15 +208,15 @@ func TestGenerateForwardsToolCallsAndMergesToolResults(t *testing.T) {
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`)
 	})
 
-	_, err := c.Generate(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{
-			{Role: harness.RoleUser, Content: "weather?"},
-			{Role: harness.RoleAssistant, ToolCalls: []harness.ToolCall{
+	_, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{
+			{Role: gantry.RoleUser, Content: "weather?"},
+			{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{
 				{ID: "toolu_1", Name: "get_weather", Input: json.RawMessage(`{"city":"SF"}`)},
 				{ID: "toolu_2", Name: "get_time", Input: json.RawMessage(`{"tz":"PT"}`)},
 			}},
-			{Role: harness.RoleTool, ToolCallID: "toolu_1", Content: "72F"},
-			{Role: harness.RoleTool, ToolCallID: "toolu_2", Content: "10am"},
+			{Role: gantry.RoleTool, ToolCallID: "toolu_1", Content: "72F"},
+			{Role: gantry.RoleTool, ToolCallID: "toolu_2", Content: "10am"},
 		},
 	})
 	if err != nil {
@@ -254,8 +254,8 @@ func TestGeneratePropagatesContextCancellation(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := c.Generate(ctx, harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "x"}},
+	_, err := c.Generate(ctx, gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)

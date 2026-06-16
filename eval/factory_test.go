@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestAgentFactoryProducesAgent(t *testing.T) {
-	factory := func(ctx context.Context) (*harness.Agent, error) {
-		return harness.New(harness.WithLLM(eval.NewMockLLMClient()))
+	factory := func(ctx context.Context) (*gantry.Agent, error) {
+		return gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient()))
 	}
 	cfg := eval.Config{Name: "test", Factory: factory}
 	a, err := cfg.Factory(context.Background())

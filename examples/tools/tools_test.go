@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestToolsRunComputesViaTool(t *testing.T) {
@@ -13,8 +13,8 @@ func TestToolsRunComputesViaTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunExample returned error: %v", err)
 	}
-	if state.DoneReason != harness.DoneNoToolCalls {
-		t.Errorf("DoneReason = %q, want %q", state.DoneReason, harness.DoneNoToolCalls)
+	if state.DoneReason != gantry.DoneNoToolCalls {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneNoToolCalls)
 	}
 	if !strings.Contains(state.FinalOutput, "5") {
 		t.Errorf("FinalOutput = %q, want it to mention the result 5", state.FinalOutput)

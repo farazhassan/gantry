@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func sampleReport() eval.Report {
 	return eval.Report{
 		Results: []eval.ScoredResult{
 			{
-				RunResult: eval.RunResult{Case: eval.Case{ID: "c1"}, Config: "cfg", FinalOutput: "yes", Duration: 100 * time.Millisecond, Usage: harness.Usage{InputTokens: 50, OutputTokens: 10, Cost: 0.01}},
+				RunResult: eval.RunResult{Case: eval.Case{ID: "c1"}, Config: "cfg", FinalOutput: "yes", Duration: 100 * time.Millisecond, Usage: gantry.Usage{InputTokens: 50, OutputTokens: 10, Cost: 0.01}},
 				Scores:    []eval.Score{{Name: "exact_match", Value: 1, Pass: true}},
 			},
 			{
-				RunResult: eval.RunResult{Case: eval.Case{ID: "c2"}, Config: "cfg", FinalOutput: "no", Duration: 200 * time.Millisecond, Usage: harness.Usage{InputTokens: 60, OutputTokens: 20, Cost: 0.02}},
+				RunResult: eval.RunResult{Case: eval.Case{ID: "c2"}, Config: "cfg", FinalOutput: "no", Duration: 200 * time.Millisecond, Usage: gantry.Usage{InputTokens: 60, OutputTokens: 20, Cost: 0.02}},
 				Scores:    []eval.Score{{Name: "exact_match", Value: 0, Pass: false}},
 			},
 		},
@@ -97,8 +97,8 @@ func TestReportWriteSummary(t *testing.T) {
 // Verify that the eval Runner produces a Report whose Summary is populated.
 func TestRunnerProducesSummary(t *testing.T) {
 	runner := eval.Runner{
-		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*harness.Agent, error) {
-			return harness.New(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
+		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*gantry.Agent, error) {
+			return gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})))
 		}}},
 		Dataset: eval.SliceDataset{{ID: "c1"}},
 		Scorers: []eval.Scorer{eval.ContainsScorer{Required: []string{"x"}}},

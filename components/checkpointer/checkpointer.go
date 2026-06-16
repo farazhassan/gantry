@@ -5,11 +5,11 @@ package checkpointer
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Checkpointer persists and restores State by id.
 type Checkpointer interface {
-	Save(ctx context.Context, id string, state *harness.State) error
-	Load(ctx context.Context, id string) (*harness.State, error)
+	Save(ctx context.Context, id string, state *gantry.State) error
+	Load(ctx context.Context, id string) (*gantry.State, error)
 }

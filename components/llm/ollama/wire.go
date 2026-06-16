@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // The structs below mirror Ollama's /api/chat wire format. They are private:
-// callers only ever see harness types. Mapping happens in this file so the
+// callers only ever see gantry types. Mapping happens in this file so the
 // client code in ollama.go stays focused on transport.
 
 type chatRequest struct {
@@ -68,16 +68,16 @@ type respMessage struct {
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 }
 
-// toChatRequest maps a harness request to the Ollama wire format. System is
+// toChatRequest maps a gantry request to the Ollama wire format. System is
 // carried as a leading system-role message (Ollama has no separate field).
-func toChatRequest(model string, req harness.LLMRequest, stream bool) chatRequest {
+func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
-		msgs = append(msgs, chatMessage{Role: string(harness.RoleSystem), Content: req.System})
+		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
 	}
 	for _, m := range req.Messages {
 		cm := chatMessage{Role: string(m.Role), Content: m.Content}
-		if m.Role == harness.RoleTool {
+		if m.Role == gantry.RoleTool {
 			cm.ToolName = m.Name
 		}
 		for _, tc := range m.ToolCalls {
@@ -97,7 +97,7 @@ func toChatRequest(model string, req harness.LLMRequest, stream bool) chatReques
 	}
 }
 
-func toChatTools(defs []harness.ToolDef) []chatTool {
+func toChatTools(defs []gantry.ToolDef) []chatTool {
 	if len(defs) == 0 {
 		return nil
 	}
@@ -116,35 +116,35 @@ func toChatTools(defs []harness.ToolDef) []chatTool {
 }
 
 // toChatOptions returns nil when neither knob is set so Ollama applies its own
-// defaults (0 temperature/max-tokens both mean "provider default" in harness).
-func toChatOptions(req harness.LLMRequest) *chatOptions {
+// defaults (0 temperature/max-tokens both mean "provider default" in gantry).
+func toChatOptions(req gantry.LLMRequest) *chatOptions {
 	if req.Temperature == 0 && req.MaxTokens == 0 {
 		return nil
 	}
 	return &chatOptions{Temperature: req.Temperature, NumPredict: req.MaxTokens}
 }
 
-// assembleResponse builds the harness response from aggregated stream/non-stream
+// assembleResponse builds the gantry response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
-func assembleResponse(content string, calls []wireToolCall, doneReason string, promptEval, evalCount int) harness.LLMResponse {
-	return harness.LLMResponse{
+func assembleResponse(content string, calls []wireToolCall, doneReason string, promptEval, evalCount int) gantry.LLMResponse {
+	return gantry.LLMResponse{
 		Content:    content,
 		ToolCalls:  toToolCalls(calls),
 		StopReason: stopReason(doneReason, len(calls) > 0),
-		Usage:      harness.Usage{InputTokens: promptEval, OutputTokens: evalCount},
+		Usage:      gantry.Usage{InputTokens: promptEval, OutputTokens: evalCount},
 	}
 }
 
 // toToolCalls synthesizes an ID per call. Ollama omits per-call IDs, but the
-// harness links a ToolResult back to its ToolCall by ID, so a stable
+// gantry links a ToolResult back to its ToolCall by ID, so a stable
 // index-based id ("call-0", "call-1", ...) is required.
-func toToolCalls(calls []wireToolCall) []harness.ToolCall {
+func toToolCalls(calls []wireToolCall) []gantry.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
-	out := make([]harness.ToolCall, len(calls))
+	out := make([]gantry.ToolCall, len(calls))
 	for i, c := range calls {
-		out[i] = harness.ToolCall{
+		out[i] = gantry.ToolCall{
 			ID:    fmt.Sprintf("call-%d", i),
 			Name:  c.Function.Name,
 			Input: c.Function.Arguments,
@@ -153,13 +153,13 @@ func toToolCalls(calls []wireToolCall) []harness.ToolCall {
 	return out
 }
 
-func stopReason(doneReason string, hasTools bool) harness.StopReason {
+func stopReason(doneReason string, hasTools bool) gantry.StopReason {
 	switch {
 	case hasTools:
-		return harness.StopReasonToolUse
+		return gantry.StopReasonToolUse
 	case doneReason == "length":
-		return harness.StopReasonMaxTokens
+		return gantry.StopReasonMaxTokens
 	default:
-		return harness.StopReasonEnd
+		return gantry.StopReasonEnd
 	}
 }

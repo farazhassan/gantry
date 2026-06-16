@@ -4,23 +4,23 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithCompactorTrimsBeforeLLMCall(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.New(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	// Preload some messages via middleware on PhaseAssembleContext.
-	_ = a.UseNamed(harness.PhaseAssembleContext, "preload", func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
-			s.Messages = []harness.Message{
-				{Role: harness.RoleUser, Content: "old1"},
-				{Role: harness.RoleUser, Content: "old2"},
-				{Role: harness.RoleUser, Content: "old3"},
-				{Role: harness.RoleUser, Content: "old4"},
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "preload", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.Messages = []gantry.Message{
+				{Role: gantry.RoleUser, Content: "old1"},
+				{Role: gantry.RoleUser, Content: "old2"},
+				{Role: gantry.RoleUser, Content: "old3"},
+				{Role: gantry.RoleUser, Content: "old4"},
 			}
 			return next(ctx, s)
 		}
