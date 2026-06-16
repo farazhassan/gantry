@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // compile-time check that *Tool satisfies tool.Tool.
@@ -78,8 +78,8 @@ func NewTool(p Prompter, opts ...Option) *Tool {
 }
 
 // Definition describes the tool to the LLM.
-func (t *Tool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (t *Tool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        t.name,
 		Description: description,
 		Schema:      json.RawMessage(schema),

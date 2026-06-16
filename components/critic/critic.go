@@ -4,7 +4,7 @@ package critic
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Verdict is the outcome of a Critique.
@@ -16,5 +16,5 @@ type Verdict struct {
 
 // Critic reviews state.LastResponse and returns a Verdict.
 type Critic interface {
-	Critique(ctx context.Context, state *harness.State) (Verdict, error)
+	Critique(ctx context.Context, state *gantry.State) (Verdict, error)
 }

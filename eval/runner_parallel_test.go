@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestRunnerParallelExecutesFaster(t *testing.T) {
@@ -20,8 +20,8 @@ func TestRunnerParallelExecutesFaster(t *testing.T) {
 
 	// LLM that sleeps to make sequential vs. parallel observable.
 	slowLLM := &sleepLLM{d: 20 * time.Millisecond}
-	factory := func(ctx context.Context) (*harness.Agent, error) {
-		return harness.NewAgent(harness.WithLLM(slowLLM))
+	factory := func(ctx context.Context) (*gantry.Agent, error) {
+		return gantry.NewAgent(gantry.WithLLM(slowLLM))
 	}
 	runner := eval.Runner{
 		Configs:     []eval.Config{{Name: "cfg", Factory: factory}},
@@ -50,8 +50,8 @@ func TestRunnerOnResultCallback(t *testing.T) {
 	seen := map[string]bool{}
 
 	runner := eval.Runner{
-		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*harness.Agent, error) {
-			return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})))
+		Configs: []eval.Config{{Name: "cfg", Factory: func(ctx context.Context) (*gantry.Agent, error) {
+			return gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})))
 		}}},
 		Dataset: eval.SliceDataset{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
 		OnResult: func(sr eval.ScoredResult) {
@@ -77,11 +77,11 @@ type sleepLLM struct {
 	d time.Duration
 }
 
-func (s *sleepLLM) Generate(ctx context.Context, _ harness.LLMRequest) (harness.LLMResponse, error) {
+func (s *sleepLLM) Generate(ctx context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
 	select {
 	case <-time.After(s.d):
-		return harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd}, nil
+		return gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}, nil
 	case <-ctx.Done():
-		return harness.LLMResponse{}, ctx.Err()
+		return gantry.LLMResponse{}, ctx.Err()
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestStreamHandlerEmitsSSEEvents(t *testing.T) {
@@ -22,14 +22,14 @@ func TestStreamHandlerEmitsSSEEvents(t *testing.T) {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
 
-	var events []harness.Event
+	var events []gantry.Event
 	sc := bufio.NewScanner(res.Body)
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		var ev harness.Event
+		var ev gantry.Event
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
 			t.Fatalf("unmarshal event %q: %v", line, err)
 		}
@@ -43,7 +43,7 @@ func TestStreamHandlerEmitsSSEEvents(t *testing.T) {
 		t.Fatal("no events parsed from SSE stream")
 	}
 	last := events[len(events)-1]
-	if last.Type != harness.EventDone {
+	if last.Type != gantry.EventDone {
 		t.Errorf("last event = %q, want done", last.Type)
 	}
 	if last.FinalOutput != "2 + 3 = 5 (computed by the calc tool)." {
@@ -53,11 +53,11 @@ func TestStreamHandlerEmitsSSEEvents(t *testing.T) {
 	var sawDelta, sawToolCall, sawToolResult bool
 	for _, ev := range events {
 		switch ev.Type {
-		case harness.EventTextDelta:
+		case gantry.EventTextDelta:
 			sawDelta = true
-		case harness.EventToolCall:
+		case gantry.EventToolCall:
 			sawToolCall = true
-		case harness.EventToolResult:
+		case gantry.EventToolResult:
 			sawToolResult = true
 		}
 	}

@@ -3,10 +3,10 @@ package agui
 import (
 	"io"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
-// Sink adapts a Mapper to a harness.EventSink that writes AG-UI SSE frames to
+// Sink adapts a Mapper to a gantry.EventSink that writes AG-UI SSE frames to
 // an io.Writer. One Sink wraps one Mapper, so it is single-run and not safe for
 // concurrent use. An optional flush callback (set via SetFlusher) is invoked
 // once per incoming Gantry event, after all of that event's AG-UI frames are
@@ -27,11 +27,11 @@ func NewSink(w io.Writer, threadID, runID string) *Sink {
 // flushing.
 func (s *Sink) SetFlusher(flush func()) { s.flush = flush }
 
-// Sink returns a harness.EventSink that maps each Gantry event to AG-UI events
+// Sink returns a gantry.EventSink that maps each Gantry event to AG-UI events
 // and writes them as SSE frames, flushing after each Gantry event. A write
 // error aborts the run (it propagates out of RunStream).
-func (s *Sink) Sink() harness.EventSink {
-	return func(ev harness.Event) error {
+func (s *Sink) Sink() gantry.EventSink {
+	return func(ev gantry.Event) error {
 		for _, ae := range s.mapper.Map(ev) {
 			if err := WriteSSE(s.w, ae); err != nil {
 				return err

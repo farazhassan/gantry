@@ -4,21 +4,21 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestSummarizingCompactorReplacesMiddleWithSummary(t *testing.T) {
 	// The mock LLM returns a fixed summary regardless of input.
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "SUMMARY", StopReason: harness.StopReasonEnd})
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "SUMMARY", StopReason: gantry.StopReasonEnd})
 	c := compactor.NewSummarizing(mock, 1, 1)
 
-	msgs := []harness.Message{
-		{Role: harness.RoleSystem, Content: "head"},
-		{Role: harness.RoleUser, Content: "mid1"},
-		{Role: harness.RoleAssistant, Content: "mid2"},
-		{Role: harness.RoleUser, Content: "tail"},
+	msgs := []gantry.Message{
+		{Role: gantry.RoleSystem, Content: "head"},
+		{Role: gantry.RoleUser, Content: "mid1"},
+		{Role: gantry.RoleAssistant, Content: "mid2"},
+		{Role: gantry.RoleUser, Content: "tail"},
 	}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{MaxTokens: 1, SoftLimit: 1})
 	if err != nil {
@@ -65,7 +65,7 @@ func TestNewSummarizingValidatesArgs(t *testing.T) {
 func TestSummarizingCompactorPassesThroughWhenSmall(t *testing.T) {
 	mock := eval.NewMockLLMClient()
 	c := compactor.NewSummarizing(mock, 1, 1)
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}}
 	got, _ := c.Compact(context.Background(), msgs, compactor.Budget{MaxTokens: 100})
 	if len(got) != 2 {
 		t.Errorf("len = %d, want 2", len(got))
@@ -79,7 +79,7 @@ func TestSummarizingPassThroughReturnsIndependentCopy(t *testing.T) {
 	// head+tail = 4 >= len(msgs) = 3, so Compact takes the pass-through path
 	// and never calls the LLM client.
 	c := compactor.NewSummarizing(eval.NewMockLLMClient(), 2, 2)
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)

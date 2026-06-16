@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // Result bundles the live run with the state reloaded from the checkpointer, so
 // the test can assert the round-trip preserved the run.
 type Result struct {
-	Live   *harness.State
-	Loaded *harness.State
+	Live   *gantry.State
+	Loaded *gantry.State
 }
 
 // RunExample attaches an in-memory checkpointer, runs the agent once (the
@@ -23,12 +23,12 @@ type Result struct {
 func RunExample(ctx context.Context) (*Result, error) {
 	const runID = "run-1"
 
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "The answer is 42.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	})
 
-	a, err := harness.NewAgent(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

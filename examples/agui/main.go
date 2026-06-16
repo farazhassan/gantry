@@ -17,16 +17,16 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/ollama"
 	"github.com/farazhassan/gantry/components/ui/agui"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // newHandler builds the AG-UI HTTP handler for an agent backed by llm. The LLM
 // is a parameter so the hermetic test can inject a mock while main() wires the
 // real Ollama client.
-func newHandler(llm harness.LLMClient) (http.Handler, error) {
-	agent, err := harness.NewAgent(harness.WithLLM(llm))
+func newHandler(llm gantry.LLMClient) (http.Handler, error) {
+	agent, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

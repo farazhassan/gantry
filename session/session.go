@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // Session is a keyed handle to one durable conversation. It is safe for
 // concurrent use: turns for a given id are serialized by its mutex.
 type Session struct {
 	id    string
-	agent *harness.Agent
+	agent *gantry.Agent
 	store checkpointer.Checkpointer
 	mu    sync.Mutex
 }
@@ -31,21 +31,21 @@ func (s *Session) ID() string { return s.id }
 //   - A save failure returns the terminal State plus ErrSaveFailed (wrapped):
 //     the turn completed but was not persisted, so the caller can retry or alert
 //     while still having the answer.
-func (s *Session) Run(ctx context.Context, input string) (*harness.State, error) {
+func (s *Session) Run(ctx context.Context, input string) (*gantry.State, error) {
 	return s.run(ctx, input, nil)
 }
 
 // RunStream is the streaming counterpart of Run: it executes one turn with the
 // same Load -> RunFrom -> Save contract, additionally emitting whole-run Events
-// to sink (see harness.RunStream). sink must be non-nil; use Run otherwise.
-func (s *Session) RunStream(ctx context.Context, input string, sink harness.EventSink) (*harness.State, error) {
+// to sink (see gantry.RunStream). sink must be non-nil; use Run otherwise.
+func (s *Session) RunStream(ctx context.Context, input string, sink gantry.EventSink) (*gantry.State, error) {
 	return s.run(ctx, input, sink)
 }
 
 // run performs one turn under the session mutex. A nil sink runs without
 // streaming (Run); a non-nil sink streams Events (RunStream). The Load/Save
 // contract and error handling are identical for both and live only here.
-func (s *Session) run(ctx context.Context, input string, sink harness.EventSink) (*harness.State, error) {
+func (s *Session) run(ctx context.Context, input string, sink gantry.EventSink) (*gantry.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -57,7 +57,7 @@ func (s *Session) run(ctx context.Context, input string, sink harness.EventSink)
 		prior = nil // first turn
 	}
 
-	var state *harness.State
+	var state *gantry.State
 	if sink != nil {
 		state, err = s.agent.RunFromStream(ctx, prior, input, sink)
 	} else {
@@ -75,18 +75,18 @@ func (s *Session) run(ctx context.Context, input string, sink harness.EventSink)
 
 // History returns the persisted transcript for this session, or an empty slice
 // if the session does not exist yet.
-func (s *Session) History(ctx context.Context) ([]harness.Message, error) {
+func (s *Session) History(ctx context.Context) ([]gantry.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	prior, err := s.store.Load(ctx, s.id)
 	if err != nil {
 		if errors.Is(err, checkpointer.ErrNotFound) {
-			return []harness.Message{}, nil
+			return []gantry.Message{}, nil
 		}
 		return nil, fmt.Errorf("gantry/session: load %q: %w", s.id, err)
 	}
-	msgs := make([]harness.Message, len(prior.Messages))
+	msgs := make([]gantry.Message, len(prior.Messages))
 	copy(msgs, prior.Messages)
 	return msgs, nil
 }

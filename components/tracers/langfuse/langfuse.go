@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	bufferCapacity = 1024
 )
 
-// Client implements harness.Tracer by batching trace events to Langfuse's
+// Client implements gantry.Tracer by batching trace events to Langfuse's
 // ingestion API from a background goroutine. Safe for concurrent use.
 type Client struct {
 	publicKey string
@@ -52,7 +52,7 @@ type Client struct {
 	sendErrs atomic.Int64
 }
 
-var _ harness.Tracer = (*Client)(nil)
+var _ gantry.Tracer = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)

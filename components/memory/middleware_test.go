@@ -4,17 +4,17 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 	store := memory.NewInMemoryStore()
-	store.Append(context.Background(), harness.Message{Role: harness.RoleUser, Content: "earlier turn"})
+	store.Append(context.Background(), gantry.Message{Role: gantry.RoleUser, Content: "earlier turn"})
 
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	memory.WithMemory(a, store)
 
 	if _, err := a.Run(context.Background(), "now"); err != nil {
@@ -35,8 +35,8 @@ func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 
 func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
 	store := memory.NewInMemoryStore()
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "hello", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "hello", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	memory.WithMemory(a, store)
 
 	if _, err := a.Run(context.Background(), "hi"); err != nil {
@@ -47,10 +47,10 @@ func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got %+v", len(got), got)
 	}
-	if got[0].Role != harness.RoleUser || got[0].Content != "hi" {
+	if got[0].Role != gantry.RoleUser || got[0].Content != "hi" {
 		t.Errorf("got[0] = %+v", got[0])
 	}
-	if got[1].Role != harness.RoleAssistant || got[1].Content != "hello" {
+	if got[1].Role != gantry.RoleAssistant || got[1].Content != "hello" {
 		t.Errorf("got[1] = %+v", got[1])
 	}
 }

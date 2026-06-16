@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // TestWithPlannerNoDuplicateSystemAcrossIterations guards against appending the
@@ -15,12 +15,12 @@ import (
 // PhaseAssembleContext, which re-runs each iteration; state.System persists, so
 // a per-iteration append would stack duplicate "Plan:" blocks.
 func TestWithPlannerNoDuplicateSystemAcrossIterations(t *testing.T) {
-	plannerLLM := eval.NewMockLLMClient(harness.LLMResponse{Content: "1. a\n2. b"})
+	plannerLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. a\n2. b"})
 	mainLLM := eval.NewMockLLMClient(
-		harness.LLMResponse{ToolCalls: []harness.ToolCall{{ID: "t1", Name: "x"}}, StopReason: harness.StopReasonToolUse},
-		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "t1", Name: "x"}}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.NewAgent(harness.WithLLM(mainLLM), harness.WithMaxIterations(5))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM), gantry.WithMaxIterations(5))
 	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
 		t.Fatalf("WithPlanner: %v", err)
 	}

@@ -3,7 +3,7 @@ package openai
 import (
 	"encoding/json"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // The structs below mirror OpenAI's /v1/chat/completions wire format. They are
@@ -95,14 +95,14 @@ type usage struct {
 
 // toChatRequest maps a harness request to the OpenAI wire format. System is
 // carried as a leading system-role message.
-func toChatRequest(model string, req harness.LLMRequest, stream bool) chatRequest {
+func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
-		msgs = append(msgs, chatMessage{Role: string(harness.RoleSystem), Content: req.System})
+		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
 	}
 	for _, m := range req.Messages {
 		cm := chatMessage{Role: string(m.Role), Content: m.Content}
-		if m.Role == harness.RoleTool {
+		if m.Role == gantry.RoleTool {
 			cm.ToolCallID = m.ToolCallID
 		}
 		for _, tc := range m.ToolCalls {
@@ -129,7 +129,7 @@ func toChatRequest(model string, req harness.LLMRequest, stream bool) chatReques
 	return cr
 }
 
-func toChatTools(defs []harness.ToolDef) []chatTool {
+func toChatTools(defs []gantry.ToolDef) []chatTool {
 	if len(defs) == 0 {
 		return nil
 	}
@@ -149,8 +149,8 @@ func toChatTools(defs []harness.ToolDef) []chatTool {
 
 // assembleResponse builds the harness response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
-func assembleResponse(content string, calls []respToolCall, finishReason string, u harness.Usage) harness.LLMResponse {
-	return harness.LLMResponse{
+func assembleResponse(content string, calls []respToolCall, finishReason string, u gantry.Usage) gantry.LLMResponse {
+	return gantry.LLMResponse{
 		Content:    content,
 		ToolCalls:  toToolCalls(calls),
 		StopReason: stopReason(finishReason, len(calls) > 0),
@@ -160,13 +160,13 @@ func assembleResponse(content string, calls []respToolCall, finishReason string,
 
 // toToolCalls preserves OpenAI's per-call IDs and forwards the arguments string
 // as raw JSON (it is already a serialized JSON object).
-func toToolCalls(calls []respToolCall) []harness.ToolCall {
+func toToolCalls(calls []respToolCall) []gantry.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
-	out := make([]harness.ToolCall, len(calls))
+	out := make([]gantry.ToolCall, len(calls))
 	for i, c := range calls {
-		out[i] = harness.ToolCall{
+		out[i] = gantry.ToolCall{
 			ID:    c.ID,
 			Name:  c.Function.Name,
 			Input: json.RawMessage(c.Function.Arguments),
@@ -175,13 +175,13 @@ func toToolCalls(calls []respToolCall) []harness.ToolCall {
 	return out
 }
 
-func stopReason(finishReason string, hasTools bool) harness.StopReason {
+func stopReason(finishReason string, hasTools bool) gantry.StopReason {
 	switch {
 	case finishReason == "tool_calls" || hasTools:
-		return harness.StopReasonToolUse
+		return gantry.StopReasonToolUse
 	case finishReason == "length":
-		return harness.StopReasonMaxTokens
+		return gantry.StopReasonMaxTokens
 	default:
-		return harness.StopReasonEnd
+		return gantry.StopReasonEnd
 	}
 }

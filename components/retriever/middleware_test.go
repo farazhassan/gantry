@@ -5,20 +5,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestWithRetrieverPopulatesStateAndPrependsContext(t *testing.T) {
-	docs := []harness.Document{
+	docs := []gantry.Document{
 		{ID: "a", Content: "alpha"},
 		{ID: "b", Content: "beta"},
 	}
 	r := retriever.NewStatic(docs)
 
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	retriever.WithRetriever(a, r, 5)
 
 	state, err := a.Run(context.Background(), "search query")

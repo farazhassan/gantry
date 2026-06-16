@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // LLMCritic uses a separate LLMClient to score the last response.
@@ -13,23 +13,23 @@ import (
 // (case-insensitive) to mean Accept=true; everything else is treated as
 // a rejection with the reply text as Reason.
 type LLMCritic struct {
-	client harness.LLMClient
+	client gantry.LLMClient
 	rubric string
 }
 
 // NewLLM returns an LLM-driven Critic.
-func NewLLM(client harness.LLMClient, rubric string) *LLMCritic {
+func NewLLM(client gantry.LLMClient, rubric string) *LLMCritic {
 	return &LLMCritic{client: client, rubric: rubric}
 }
 
-func (c *LLMCritic) Critique(ctx context.Context, state *harness.State) (Verdict, error) {
+func (c *LLMCritic) Critique(ctx context.Context, state *gantry.State) (Verdict, error) {
 	if state.LastResponse == nil {
 		return Verdict{Accept: true}, nil
 	}
-	req := harness.LLMRequest{
+	req := gantry.LLMRequest{
 		System: c.rubric,
-		Messages: []harness.Message{
-			{Role: harness.RoleUser, Content: state.LastResponse.Content},
+		Messages: []gantry.Message{
+			{Role: gantry.RoleUser, Content: state.LastResponse.Content},
 		},
 	}
 	resp, err := c.client.Generate(ctx, req)

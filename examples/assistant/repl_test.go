@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
-func newTestManager(t *testing.T, turns ...harness.LLMResponse) *session.Manager {
+func newTestManager(t *testing.T, turns ...gantry.LLMResponse) *session.Manager {
 	t.Helper()
 	script := make([]eval.MockTurn, len(turns))
 	for i, r := range turns {
@@ -28,7 +28,7 @@ func newTestManager(t *testing.T, turns ...harness.LLMResponse) *session.Manager
 }
 
 func TestRunREPL_AnswersThenExits(t *testing.T) {
-	mgr := newTestManager(t, harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "Hello there."})
+	mgr := newTestManager(t, gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "Hello there."})
 	var out strings.Builder
 	in := strings.NewReader("hi\n/exit\n")
 	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {
@@ -53,8 +53,8 @@ func TestRunREPL_HelpCommand(t *testing.T) {
 
 func TestRunREPL_ResetSwitchesSession(t *testing.T) {
 	mgr := newTestManager(t,
-		harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "first answer"},
-		harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "second answer"},
+		gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "first answer"},
+		gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "second answer"},
 	)
 	var out strings.Builder
 	in := strings.NewReader("question one\n/reset\nquestion two\n/exit\n")
@@ -83,11 +83,11 @@ func TestRunREPL_ResetSwitchesSession(t *testing.T) {
 func TestRunREPL_SharedReaderFeedsConfirmer(t *testing.T) {
 	tools := newStubFSTools(t)
 	llm := eval.NewMockLLMClientFromScript([]eval.MockTurn{
-		{Response: harness.LLMResponse{
-			StopReason: harness.StopReasonToolUse,
-			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "fs__write_file", Input: json.RawMessage(`{"path":"/tmp/x","content":"hi"}`)}},
+		{Response: gantry.LLMResponse{
+			StopReason: gantry.StopReasonToolUse,
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "fs__write_file", Input: json.RawMessage(`{"path":"/tmp/x","content":"hi"}`)}},
 		}},
-		{Response: harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "Done writing."}},
+		{Response: gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "Done writing."}},
 	})
 
 	shared := bufio.NewReader(strings.NewReader("overwrite my file\ny\n/exit\n"))
@@ -126,7 +126,7 @@ func TestRunREPL_InterruptCancelsOnlyCurrentTurn(t *testing.T) {
 	// call, so it consumes nothing; the surviving second turn consumes this
 	// response. The point is that the second turn runs at all.
 	mgr := newTestManager(t,
-		harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "surviving answer"},
+		gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "surviving answer"},
 	)
 	var out strings.Builder
 	in := strings.NewReader("question one\nquestion two\n/exit\n")
@@ -157,7 +157,7 @@ func TestRunREPL_InterruptCancelsOnlyCurrentTurn(t *testing.T) {
 }
 
 func TestRunREPL_EmptyLineIgnored(t *testing.T) {
-	mgr := newTestManager(t, harness.LLMResponse{StopReason: harness.StopReasonEnd, Content: "answer"})
+	mgr := newTestManager(t, gantry.LLMResponse{StopReason: gantry.StopReasonEnd, Content: "answer"})
 	var out strings.Builder
 	in := strings.NewReader("\n   \nreal question\n/exit\n")
 	if err := runREPL(context.Background(), mgr, "default", in, &out, nil); err != nil {

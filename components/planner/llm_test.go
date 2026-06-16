@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestLLMPlannerProducesNonEmptyPlan(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "1. step one\n2. step two\n3. step three"})
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. step one\n2. step two\n3. step three"})
 	p := planner.NewLLM(mock, "Break down this task into numbered steps.")
 
 	plan, err := p.Plan(context.Background(), "do the thing")

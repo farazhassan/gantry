@@ -5,17 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestTraceScorerPredicate(t *testing.T) {
-	tr := harness.NewTrace()
-	tr.Record(harness.TraceEvent{Name: "phase:tool_exec", Kind: harness.KindSpanStart})
+	tr := gantry.NewTrace()
+	tr.Record(gantry.TraceEvent{Name: "phase:tool_exec", Kind: gantry.KindSpanStart})
 
 	s := eval.TraceScorer{
 		ScorerName: "uses_tool_exec",
-		Pred: func(t *harness.Trace) bool {
+		Pred: func(t *gantry.Trace) bool {
 			for _, e := range t.Snapshot() {
 				if e.Name == "phase:tool_exec" {
 					return true
@@ -35,7 +35,7 @@ func TestTraceScorerPredicate(t *testing.T) {
 
 func TestUsageScorerWithinBudget(t *testing.T) {
 	s := eval.UsageScorer{MaxTokens: 1000, MaxCost: 0.50}
-	r := eval.RunResult{Usage: harness.Usage{InputTokens: 100, OutputTokens: 50, Cost: 0.10}}
+	r := eval.RunResult{Usage: gantry.Usage{InputTokens: 100, OutputTokens: 50, Cost: 0.10}}
 	score, _ := s.Score(context.Background(), eval.Case{}, r)
 	if !score.Pass {
 		t.Errorf("expected Pass; got %+v", score)
@@ -44,7 +44,7 @@ func TestUsageScorerWithinBudget(t *testing.T) {
 
 func TestUsageScorerOverTokens(t *testing.T) {
 	s := eval.UsageScorer{MaxTokens: 100}
-	r := eval.RunResult{Usage: harness.Usage{InputTokens: 200, OutputTokens: 50}}
+	r := eval.RunResult{Usage: gantry.Usage{InputTokens: 200, OutputTokens: 50}}
 	score, _ := s.Score(context.Background(), eval.Case{}, r)
 	if score.Pass {
 		t.Errorf("expected Fail; got %+v", score)

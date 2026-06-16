@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -80,7 +80,7 @@ func runREPL(ctx context.Context, mgr *session.Manager, sessionID string, in io.
 			switch {
 			case errors.Is(runErr, context.Canceled):
 				fmt.Fprintln(out, "\n(turn cancelled)")
-			case errors.Is(runErr, harness.ErrHumanAborted):
+			case errors.Is(runErr, gantry.ErrHumanAborted):
 				fmt.Fprintln(out, "(action denied — turn aborted, nothing was changed)")
 			case errors.Is(runErr, session.ErrSaveFailed):
 				fmt.Fprintln(out, replyText(state))
@@ -105,7 +105,7 @@ func runREPL(ctx context.Context, mgr *session.Manager, sessionID string, in io.
 // the interrupt handler armed only for the turn's duration. The child context
 // and the handler are always released before returning, so a cancellation
 // never leaks into the next turn.
-func runTurn(ctx context.Context, mgr *session.Manager, sessionID, line string, arm armInterrupt) (*harness.State, error) {
+func runTurn(ctx context.Context, mgr *session.Manager, sessionID, line string, arm armInterrupt) (*gantry.State, error) {
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if arm != nil {

@@ -3,14 +3,14 @@ package session
 import (
 	"sync"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // Manager hands out keyed Session handles backed by one shared agent and store.
 // It is safe for concurrent use.
 type Manager struct {
-	agent    *harness.Agent
+	agent    *gantry.Agent
 	store    checkpointer.Checkpointer
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -20,7 +20,7 @@ type Manager struct {
 // store is nil (programmer error), matching the lightweight constructors
 // elsewhere in the repo. The agent MUST NOT carry WithMemory or
 // WithCheckpointer (see package doc).
-func NewManager(a *harness.Agent, store checkpointer.Checkpointer) *Manager {
+func NewManager(a *gantry.Agent, store checkpointer.Checkpointer) *Manager {
 	if a == nil {
 		panic("gantry/session: NewManager requires a non-nil agent")
 	}

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/ask"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -20,14 +20,14 @@ func TestBuildAgent_FullTurnWithToolCall(t *testing.T) {
 	tools := newStubFSTools(t)
 
 	llm := eval.NewMockLLMClientFromScript([]eval.MockTurn{
-		{Response: harness.LLMResponse{
-			StopReason: harness.StopReasonToolUse,
-			ToolCalls: []harness.ToolCall{
+		{Response: gantry.LLMResponse{
+			StopReason: gantry.StopReasonToolUse,
+			ToolCalls: []gantry.ToolCall{
 				{ID: "c1", Name: "fs__read_file", Input: json.RawMessage(`{"path":"/tmp/notes.txt"}`)},
 			},
 		}},
-		{Response: harness.LLMResponse{
-			StopReason: harness.StopReasonEnd,
+		{Response: gantry.LLMResponse{
+			StopReason: gantry.StopReasonEnd,
 			Content:    "Your notes say hello.",
 		}},
 	})
@@ -59,9 +59,9 @@ func TestBuildAgent_FullTurnWithToolCall(t *testing.T) {
 func TestBuildAgent_DenyAbortsTurn(t *testing.T) {
 	tools := newStubFSTools(t)
 	llm := eval.NewMockLLMClientFromScript([]eval.MockTurn{
-		{Response: harness.LLMResponse{
-			StopReason: harness.StopReasonToolUse,
-			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "fs__write_file", Input: json.RawMessage(`{"path":"/tmp/x","content":"hi"}`)}},
+		{Response: gantry.LLMResponse{
+			StopReason: gantry.StopReasonToolUse,
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "fs__write_file", Input: json.RawMessage(`{"path":"/tmp/x","content":"hi"}`)}},
 		}},
 	})
 	confirmer := newCLIConfirmer(strings.NewReader("n\n"), &strings.Builder{})
@@ -81,8 +81,8 @@ func TestBuildAgent_DenyAbortsTurn(t *testing.T) {
 // through the full middleware stack into the LLM request. The mock LLM records
 // every request; the first request's System must equal the wired persona.
 func TestBuildAgent_PersonaReachesModel(t *testing.T) {
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
-		StopReason: harness.StopReasonEnd,
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
+		StopReason: gantry.StopReasonEnd,
 		Content:    "Hello.",
 	})
 

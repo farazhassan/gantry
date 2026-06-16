@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -38,8 +38,8 @@ type mcpTool struct {
 }
 
 // Definition implements tool.Tool.
-func (t *mcpTool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (t *mcpTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        t.defName,
 		Description: t.desc,
 		Schema:      t.schema,

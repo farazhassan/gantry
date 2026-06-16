@@ -4,20 +4,20 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
-func makeMockFactory(t *testing.T, replies ...harness.LLMResponse) eval.AgentFactory {
+func makeMockFactory(t *testing.T, replies ...gantry.LLMResponse) eval.AgentFactory {
 	t.Helper()
-	return func(ctx context.Context) (*harness.Agent, error) {
-		return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(replies...)))
+	return func(ctx context.Context) (*gantry.Agent, error) {
+		return gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(replies...)))
 	}
 }
 
 func TestRunnerSingleConfigSingleCase(t *testing.T) {
 	runner := eval.Runner{
-		Configs: []eval.Config{{Name: "cfg", Factory: makeMockFactory(t, harness.LLMResponse{Content: "hi", StopReason: harness.StopReasonEnd})}},
+		Configs: []eval.Config{{Name: "cfg", Factory: makeMockFactory(t, gantry.LLMResponse{Content: "hi", StopReason: gantry.StopReasonEnd})}},
 		Dataset: eval.SliceDataset{{ID: "c1", Input: "hello"}},
 		Scorers: []eval.Scorer{eval.ContainsScorer{Required: []string{"hi"}}},
 	}
@@ -37,10 +37,10 @@ func TestRunnerMultipleConfigsAndCases(t *testing.T) {
 	runner := eval.Runner{
 		Configs: []eval.Config{
 			{Name: "cfg-a", Factory: makeMockFactory(t,
-				harness.LLMResponse{Content: "first", StopReason: harness.StopReasonEnd},
+				gantry.LLMResponse{Content: "first", StopReason: gantry.StopReasonEnd},
 			)},
 			{Name: "cfg-b", Factory: makeMockFactory(t,
-				harness.LLMResponse{Content: "second", StopReason: harness.StopReasonEnd},
+				gantry.LLMResponse{Content: "second", StopReason: gantry.StopReasonEnd},
 			)},
 		},
 		Dataset: eval.SliceDataset{
@@ -59,9 +59,9 @@ func TestRunnerMultipleConfigsAndCases(t *testing.T) {
 }
 
 func TestRunnerCapturesRunError(t *testing.T) {
-	failingFactory := func(ctx context.Context) (*harness.Agent, error) {
+	failingFactory := func(ctx context.Context) (*gantry.Agent, error) {
 		// MockLLMClient with empty script → first call returns ErrMockExhausted.
-		return harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient()))
+		return gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient()))
 	}
 	runner := eval.Runner{
 		Configs: []eval.Config{{Name: "fail", Factory: failingFactory}},

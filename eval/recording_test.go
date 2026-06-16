@@ -6,26 +6,26 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestRecordingLLMClientCapturesRequestsAndResponses(t *testing.T) {
 	upstream := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "first"},
-		harness.LLMResponse{Content: "second"},
+		gantry.LLMResponse{Content: "first"},
+		gantry.LLMResponse{Content: "second"},
 	)
 	rec := eval.NewRecordingLLMClient(upstream)
 	ctx := context.Background()
 
-	r1, err := rec.Generate(ctx, harness.LLMRequest{System: "s1"})
+	r1, err := rec.Generate(ctx, gantry.LLMRequest{System: "s1"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if r1.Content != "first" {
 		t.Errorf("content = %q", r1.Content)
 	}
-	_, _ = rec.Generate(ctx, harness.LLMRequest{System: "s2"})
+	_, _ = rec.Generate(ctx, gantry.LLMRequest{System: "s2"})
 
 	turns := rec.Recording()
 	if len(turns) != 2 {
@@ -37,9 +37,9 @@ func TestRecordingLLMClientCapturesRequestsAndResponses(t *testing.T) {
 }
 
 func TestRecordingLLMClientWriteAndLoad(t *testing.T) {
-	upstream := eval.NewMockLLMClient(harness.LLMResponse{Content: "x"})
+	upstream := eval.NewMockLLMClient(gantry.LLMResponse{Content: "x"})
 	rec := eval.NewRecordingLLMClient(upstream)
-	_, _ = rec.Generate(context.Background(), harness.LLMRequest{System: "sys"})
+	_, _ = rec.Generate(context.Background(), gantry.LLMRequest{System: "sys"})
 
 	var buf bytes.Buffer
 	if err := rec.WriteJSONL(&buf); err != nil {
@@ -56,12 +56,12 @@ func TestRecordingLLMClientWriteAndLoad(t *testing.T) {
 
 func TestReplayLLMClientReplaysInOrder(t *testing.T) {
 	turns := []eval.RecordedTurn{
-		{Request: harness.LLMRequest{}, Response: harness.LLMResponse{Content: "a"}},
-		{Request: harness.LLMRequest{}, Response: harness.LLMResponse{Content: "b"}},
+		{Request: gantry.LLMRequest{}, Response: gantry.LLMResponse{Content: "a"}},
+		{Request: gantry.LLMRequest{}, Response: gantry.LLMResponse{Content: "b"}},
 	}
 	rp := eval.NewReplayLLMClient(turns)
-	r1, _ := rp.Generate(context.Background(), harness.LLMRequest{})
-	r2, _ := rp.Generate(context.Background(), harness.LLMRequest{})
+	r1, _ := rp.Generate(context.Background(), gantry.LLMRequest{})
+	r2, _ := rp.Generate(context.Background(), gantry.LLMRequest{})
 	if r1.Content != "a" || r2.Content != "b" {
 		t.Errorf("got %q, %q", r1.Content, r2.Content)
 	}
@@ -69,7 +69,7 @@ func TestReplayLLMClientReplaysInOrder(t *testing.T) {
 
 func TestReplayLLMClientExhausted(t *testing.T) {
 	rp := eval.NewReplayLLMClient(nil)
-	_, err := rp.Generate(context.Background(), harness.LLMRequest{})
+	_, err := rp.Generate(context.Background(), gantry.LLMRequest{})
 	if !errors.Is(err, eval.ErrReplayExhausted) {
 		t.Errorf("err = %v, want ErrReplayExhausted", err)
 	}

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // CheckpointerSuite verifies the contract of checkpointer.Checkpointer.
@@ -16,7 +16,7 @@ func CheckpointerSuite(t *testing.T, factory func() checkpointer.Checkpointer) {
 	t.Run("save_then_load_round_trip", func(t *testing.T) {
 		c := factory()
 		ctx := context.Background()
-		want := &harness.State{Input: "in", Iteration: 7, FinalOutput: "out"}
+		want := &gantry.State{Input: "in", Iteration: 7, FinalOutput: "out"}
 		if err := c.Save(ctx, "id-1", want); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
@@ -43,8 +43,8 @@ func CheckpointerSuite(t *testing.T, factory func() checkpointer.Checkpointer) {
 	t.Run("overwrite_same_id", func(t *testing.T) {
 		c := factory()
 		ctx := context.Background()
-		_ = c.Save(ctx, "id-2", &harness.State{Input: "v1"})
-		_ = c.Save(ctx, "id-2", &harness.State{Input: "v2"})
+		_ = c.Save(ctx, "id-2", &gantry.State{Input: "v1"})
+		_ = c.Save(ctx, "id-2", &gantry.State{Input: "v2"})
 		got, _ := c.Load(ctx, "id-2")
 		if got.Input != "v2" {
 			t.Errorf("Input = %q, want v2", got.Input)

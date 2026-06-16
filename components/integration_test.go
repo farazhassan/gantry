@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/limiter"
@@ -14,13 +15,12 @@ import (
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 type calcTool struct{}
 
-func (calcTool) Definition() harness.ToolDef {
-	return harness.ToolDef{Name: "calc", Description: "adds two ints", Schema: json.RawMessage(`{}`)}
+func (calcTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "calc", Description: "adds two ints", Schema: json.RawMessage(`{}`)}
 }
 
 func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, error) {
@@ -38,28 +38,28 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // requesting a tool call, second producing the final answer.
 func TestComponentsInteroperate(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{
-			ToolCalls: []harness.ToolCall{
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
 				{ID: "c1", Name: "calc", Input: json.RawMessage(`{"A":2,"B":3}`)},
 			},
-			StopReason: harness.StopReasonToolUse,
-			Usage:      harness.Usage{InputTokens: 100, OutputTokens: 50},
+			StopReason: gantry.StopReasonToolUse,
+			Usage:      gantry.Usage{InputTokens: 100, OutputTokens: 50},
 		},
-		harness.LLMResponse{
+		gantry.LLMResponse{
 			Content:    "answer is 5",
-			StopReason: harness.StopReasonEnd,
-			Usage:      harness.Usage{InputTokens: 30, OutputTokens: 10},
+			StopReason: gantry.StopReasonEnd,
+			Usage:      gantry.Usage{InputTokens: 30, OutputTokens: 10},
 		},
 	)
 
-	a, err := harness.NewAgent(harness.WithLLM(mock), harness.WithMaxIterations(5))
+	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
 	memory.WithMemory(a, memory.NewInMemoryStore())
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
-	retriever.WithRetriever(a, retriever.NewStatic([]harness.Document{
+	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
 		{ID: "doc1", Content: "context: arithmetic is good"},
 	}), 5)
 	compactor.WithCompactor(a, compactor.NewSlidingWindow(10), compactor.Budget{})
@@ -74,7 +74,7 @@ func TestComponentsInteroperate(t *testing.T) {
 	if state.FinalOutput != "answer is 5" {
 		t.Errorf("FinalOutput = %q", state.FinalOutput)
 	}
-	if state.DoneReason != harness.DoneNoToolCalls {
+	if state.DoneReason != gantry.DoneNoToolCalls {
 		t.Errorf("DoneReason = %q", state.DoneReason)
 	}
 	if state.Iteration != 2 {
@@ -96,7 +96,7 @@ func TestComponentsInteroperate(t *testing.T) {
 	// Second call saw the tool result.
 	foundTool := false
 	for _, m := range reqs[1].Messages {
-		if m.Role == harness.RoleTool && m.ToolCallID == "c1" && m.Content == "5" {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" && m.Content == "5" {
 			foundTool = true
 		}
 	}

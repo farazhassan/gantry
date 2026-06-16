@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // sse writes lines as a Server-Sent Events body (each event is "data: <p>\n\n").
@@ -35,9 +35,9 @@ func TestGenerateStreamAggregatesDeltas(t *testing.T) {
 	})
 
 	var deltas []string
-	resp, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
-	}, func(ch harness.StreamChunk) error {
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
 		if ch.TextDelta != "" {
 			deltas = append(deltas, ch.TextDelta)
 		}
@@ -55,8 +55,8 @@ func TestGenerateStreamAggregatesDeltas(t *testing.T) {
 	if resp.Content != "Hello world" {
 		t.Errorf("resp.Content = %q, want %q", resp.Content, "Hello world")
 	}
-	if resp.StopReason != harness.StopReasonEnd {
-		t.Errorf("StopReason = %q, want %q", resp.StopReason, harness.StopReasonEnd)
+	if resp.StopReason != gantry.StopReasonEnd {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonEnd)
 	}
 	if resp.Usage.InputTokens != 5 || resp.Usage.OutputTokens != 3 {
 		t.Errorf("Usage = %+v, want In=5 Out=3", resp.Usage)
@@ -73,10 +73,10 @@ func TestGenerateStreamYieldsTerminalUsageChunk(t *testing.T) {
 		)
 	})
 
-	var terminal *harness.StreamChunk
-	_, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
-	}, func(ch harness.StreamChunk) error {
+	var terminal *gantry.StreamChunk
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
 		if ch.TextDelta == "" {
 			cp := ch
 			terminal = &cp
@@ -89,8 +89,8 @@ func TestGenerateStreamYieldsTerminalUsageChunk(t *testing.T) {
 	if terminal == nil {
 		t.Fatal("expected a terminal (empty-delta) chunk carrying StopReason + Usage")
 	}
-	if terminal.StopReason != harness.StopReasonEnd {
-		t.Errorf("terminal StopReason = %q, want %q", terminal.StopReason, harness.StopReasonEnd)
+	if terminal.StopReason != gantry.StopReasonEnd {
+		t.Errorf("terminal StopReason = %q, want %q", terminal.StopReason, gantry.StopReasonEnd)
 	}
 	if terminal.Usage == nil || terminal.Usage.OutputTokens != 1 {
 		t.Errorf("terminal Usage = %+v, want OutputTokens=1", terminal.Usage)
@@ -108,9 +108,9 @@ func TestGenerateStreamAccumulatesToolCallFragments(t *testing.T) {
 		)
 	})
 
-	resp, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "calc"}},
-	}, func(harness.StreamChunk) error { return nil })
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "calc"}},
+	}, func(gantry.StreamChunk) error { return nil })
 	if err != nil {
 		t.Fatalf("GenerateStream: %v", err)
 	}
@@ -124,8 +124,8 @@ func TestGenerateStreamAccumulatesToolCallFragments(t *testing.T) {
 	if string(tc.Input) != `{"a":2}` {
 		t.Errorf("ToolCall.Input = %s, want {\"a\":2}", tc.Input)
 	}
-	if resp.StopReason != harness.StopReasonToolUse {
-		t.Errorf("StopReason = %q, want %q", resp.StopReason, harness.StopReasonToolUse)
+	if resp.StopReason != gantry.StopReasonToolUse {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonToolUse)
 	}
 }
 
@@ -139,9 +139,9 @@ func TestGenerateStreamYieldErrorPropagates(t *testing.T) {
 	})
 
 	boom := errors.New("yield boom")
-	_, err := c.GenerateStream(context.Background(), harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
-	}, func(harness.StreamChunk) error { return boom })
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return boom })
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want yield error propagated", err)
 	}
@@ -153,9 +153,9 @@ func TestGenerateStreamPropagatesContextCancellation(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := c.GenerateStream(ctx, harness.LLMRequest{
-		Messages: []harness.Message{{Role: harness.RoleUser, Content: "x"}},
-	}, func(harness.StreamChunk) error { return nil })
+	_, err := c.GenerateStream(ctx, gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
+	}, func(gantry.StreamChunk) error { return nil })
 	if err == nil {
 		t.Error("want error on canceled context, got nil")
 	}

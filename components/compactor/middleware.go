@@ -3,7 +3,7 @@ package compactor
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // WithCompactor installs PhaseAssembleContext middleware that compacts
@@ -11,10 +11,10 @@ import (
 // WithRetriever so it is the outermost PhaseAssembleContext middleware; it
 // runs the inner context-assembly middleware first (via next) and then
 // compacts the fully-assembled transcript.
-func WithCompactor(a *harness.Agent, c Compactor, b Budget) {
+func WithCompactor(a *gantry.Agent, c Compactor, b Budget) {
 	const name = "components/compactor:compact"
-	_ = a.UseNamed(harness.PhaseAssembleContext, name, func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseAssembleContext, name, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			// Let inner context-assembly middleware populate s.Messages first,
 			// then compact the result.
 			if err := next(ctx, s); err != nil {

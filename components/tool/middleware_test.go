@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 type addOneTool struct{}
 
-func (addOneTool) Definition() harness.ToolDef {
-	return harness.ToolDef{Name: "add_one", Description: "adds one", Schema: json.RawMessage(`{}`)}
+func (addOneTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "add_one", Description: "adds one", Schema: json.RawMessage(`{}`)}
 }
 
 func (addOneTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
@@ -26,8 +26,8 @@ func (addOneTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 }
 
 func TestWithToolRegistersDefinitionAtStart(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	tool.WithTool(a, addOneTool{})
 
@@ -45,13 +45,13 @@ func TestWithToolRegistersDefinitionAtStart(t *testing.T) {
 
 func TestWithToolDispatchesPendingCalls(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{
-			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
-			StopReason: harness.StopReasonToolUse,
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
+			StopReason: gantry.StopReasonToolUse,
 		},
-		harness.LLMResponse{Content: "final", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	tool.WithTool(a, addOneTool{})
 
 	state, err := a.Run(context.Background(), "go")
@@ -68,7 +68,7 @@ func TestWithToolDispatchesPendingCalls(t *testing.T) {
 	}
 	found := false
 	for _, m := range reqs[1].Messages {
-		if m.Role == harness.RoleTool && m.ToolCallID == "c1" && m.Content == "6" {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" && m.Content == "6" {
 			found = true
 		}
 	}
@@ -79,17 +79,17 @@ func TestWithToolDispatchesPendingCalls(t *testing.T) {
 
 func TestWithToolsParallelDispatch(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{
-			ToolCalls: []harness.ToolCall{
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
 				{ID: "a", Name: "add_one", Input: json.RawMessage(`1`)},
 				{ID: "b", Name: "add_one", Input: json.RawMessage(`2`)},
 				{ID: "c", Name: "add_one", Input: json.RawMessage(`3`)},
 			},
-			StopReason: harness.StopReasonToolUse,
+			StopReason: gantry.StopReasonToolUse,
 		},
-		harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	tool.WithTools(a, 2, addOneTool{})
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -102,7 +102,7 @@ func TestWithToolsParallelDispatch(t *testing.T) {
 	}
 	results := map[string]string{}
 	for _, m := range reqs[1].Messages {
-		if m.Role == harness.RoleTool {
+		if m.Role == gantry.RoleTool {
 			results[m.ToolCallID] = m.Content
 		}
 	}
@@ -115,13 +115,13 @@ func TestWithToolsParallelDispatch(t *testing.T) {
 
 func TestWithToolUnknownToolRecordsError(t *testing.T) {
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{
-			ToolCalls:  []harness.ToolCall{{ID: "g", Name: "ghost"}},
-			StopReason: harness.StopReasonToolUse,
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "g", Name: "ghost"}},
+			StopReason: gantry.StopReasonToolUse,
 		},
-		harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	tool.WithTool(a, addOneTool{})
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -130,7 +130,7 @@ func TestWithToolUnknownToolRecordsError(t *testing.T) {
 	reqs := mock.Requests()
 	found := false
 	for _, m := range reqs[1].Messages {
-		if m.Role == harness.RoleTool && m.ToolCallID == "g" {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "g" {
 			found = true
 			if m.Content == "" {
 				t.Errorf("expected error content in tool result")
@@ -145,8 +145,8 @@ func TestWithToolUnknownToolRecordsError(t *testing.T) {
 // addTwoTool is a second tool used to prove runtime reg.Add is visible.
 type addTwoTool struct{}
 
-func (addTwoTool) Definition() harness.ToolDef {
-	return harness.ToolDef{Name: "add_two", Description: "adds two", Schema: json.RawMessage(`{}`)}
+func (addTwoTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "add_two", Description: "adds two", Schema: json.RawMessage(`{}`)}
 }
 
 func (addTwoTool) Invoke(_ context.Context, input json.RawMessage) (json.RawMessage, error) {
@@ -159,8 +159,8 @@ func (addTwoTool) Invoke(_ context.Context, input json.RawMessage) (json.RawMess
 }
 
 func TestWithRegistryHappyPath(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
@@ -179,10 +179,10 @@ func TestWithRegistrySharedAcrossAgents(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
 
-	mockA := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	mockB := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mockA))
-	b, _ := harness.NewAgent(harness.WithLLM(mockB))
+	mockA := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	mockB := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mockA))
+	b, _ := gantry.NewAgent(gantry.WithLLM(mockB))
 
 	tool.WithRegistry(a, reg, 1)
 	tool.WithRegistry(b, reg, 1)
@@ -209,10 +209,10 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 	reg.Add(addOneTool{})
 
 	mock := eval.NewMockLLMClient(
-		harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd},
-		harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd},
+		gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd},
 	)
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	tool.WithRegistry(a, reg, 1)
 
 	if _, err := a.Run(context.Background(), "first"); err != nil {
@@ -240,8 +240,8 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 }
 
 func TestWithRegistryDoubleInstallPanics(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
@@ -256,8 +256,8 @@ func TestWithRegistryDoubleInstallPanics(t *testing.T) {
 }
 
 func TestWithToolDoubleInstallPanics(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	tool.WithTool(a, addOneTool{})
 

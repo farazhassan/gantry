@@ -8,29 +8,29 @@ import (
 	"io"
 	"sync"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // RecordedTurn is a captured request/response pair (plus error, if any).
 type RecordedTurn struct {
-	Request  harness.LLMRequest  `json:"request"`
-	Response harness.LLMResponse `json:"response"`
-	Err      string              `json:"err,omitempty"`
+	Request  gantry.LLMRequest  `json:"request"`
+	Response gantry.LLMResponse `json:"response"`
+	Err      string             `json:"err,omitempty"`
 }
 
 // RecordingLLMClient wraps an upstream LLMClient and records every turn.
 type RecordingLLMClient struct {
-	upstream harness.LLMClient
+	upstream gantry.LLMClient
 	mu       sync.Mutex
 	turns    []RecordedTurn
 }
 
 // NewRecordingLLMClient wraps upstream.
-func NewRecordingLLMClient(upstream harness.LLMClient) *RecordingLLMClient {
+func NewRecordingLLMClient(upstream gantry.LLMClient) *RecordingLLMClient {
 	return &RecordingLLMClient{upstream: upstream}
 }
 
-func (r *RecordingLLMClient) Generate(ctx context.Context, req harness.LLMRequest) (harness.LLMResponse, error) {
+func (r *RecordingLLMClient) Generate(ctx context.Context, req gantry.LLMRequest) (gantry.LLMResponse, error) {
 	resp, err := r.upstream.Generate(ctx, req)
 	r.mu.Lock()
 	t := RecordedTurn{Request: req, Response: resp}
@@ -95,11 +95,11 @@ func NewReplayLLMClient(turns []RecordedTurn) *ReplayLLMClient {
 	return &ReplayLLMClient{turns: turns}
 }
 
-func (r *ReplayLLMClient) Generate(_ context.Context, _ harness.LLMRequest) (harness.LLMResponse, error) {
+func (r *ReplayLLMClient) Generate(_ context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.pos >= len(r.turns) {
-		return harness.LLMResponse{}, ErrReplayExhausted
+		return gantry.LLMResponse{}, ErrReplayExhausted
 	}
 	t := r.turns[r.pos]
 	r.pos++

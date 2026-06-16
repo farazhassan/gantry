@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
@@ -17,21 +18,20 @@ import (
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/conformance"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestMockLLMClientConformance(t *testing.T) {
-	conformance.LLMClientSuite(t, func() harness.LLMClient {
+	conformance.LLMClientSuite(t, func() gantry.LLMClient {
 		return eval.NewMockLLMClient(
-			harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd},
+			gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd},
 		)
 	})
 }
 
 func TestMockStreamingLLMClientConformance(t *testing.T) {
-	conformance.StreamingLLMClientSuite(t, func() harness.StreamingLLMClient {
+	conformance.StreamingLLMClientSuite(t, func() gantry.StreamingLLMClient {
 		return eval.NewMockLLMClient(
-			harness.LLMResponse{Content: "hello world", StopReason: harness.StopReasonEnd},
+			gantry.LLMResponse{Content: "hello world", StopReason: gantry.StopReasonEnd},
 		)
 	})
 }
@@ -45,8 +45,8 @@ func TestInMemoryMemoryConformance(t *testing.T) {
 // echoTool is a minimal Tool used to test the ToolSuite against itself.
 type echoTool struct{}
 
-func (echoTool) Definition() harness.ToolDef {
-	return harness.ToolDef{Name: "echo", Description: "echo", Schema: []byte(`{}`)}
+func (echoTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "echo", Description: "echo", Schema: []byte(`{}`)}
 }
 
 func (echoTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, error) {
@@ -58,8 +58,8 @@ func TestEchoToolConformance(t *testing.T) {
 }
 
 func TestDefaultTracerConformance(t *testing.T) {
-	conformance.TracerSuite(t, func() harness.Tracer {
-		return harness.NewDefaultTracer(harness.NewTrace())
+	conformance.TracerSuite(t, func() gantry.Tracer {
+		return gantry.NewDefaultTracer(gantry.NewTrace())
 	})
 }
 
@@ -83,7 +83,7 @@ func TestBudgetLimiterConformance(t *testing.T) {
 
 func TestStaticRetrieverConformance(t *testing.T) {
 	conformance.RetrieverSuite(t, func() retriever.Retriever {
-		return retriever.NewStatic([]harness.Document{{ID: "x", Content: "x"}})
+		return retriever.NewStatic([]gantry.Document{{ID: "x", Content: "x"}})
 	})
 }
 
@@ -95,13 +95,13 @@ func TestRegexGuardrailConformance(t *testing.T) {
 
 func TestLLMCriticConformance(t *testing.T) {
 	conformance.CriticSuite(t, func() critic.Critic {
-		return critic.NewLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "PASS"}), "rubric")
+		return critic.NewLLM(eval.NewMockLLMClient(gantry.LLMResponse{Content: "PASS"}), "rubric")
 	})
 }
 
 func TestLLMPlannerConformance(t *testing.T) {
 	conformance.PlannerSuite(t, func() planner.Planner {
-		return planner.NewLLM(eval.NewMockLLMClient(harness.LLMResponse{Content: "1. step"}), "")
+		return planner.NewLLM(eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. step"}), "")
 	})
 }
 

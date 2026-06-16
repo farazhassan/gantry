@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // RunAgentInput is the AG-UI request body POSTed to the handler. v1 honors
@@ -46,13 +46,13 @@ type InputToolFunction struct {
 }
 
 // ToRun reconstructs the prior conversation State and extracts the final user
-// message for harness.RunFromStream. Because RunFromStream appends its input as
+// message for gantry.RunFromStream. Because RunFromStream appends its input as
 // a fresh user message, prior.Messages holds the history EXCLUDING that final
 // turn and input is the final turn's content.
 //
 // It errors if Messages is empty, the last message is not a user turn, or any
 // history message has an unrecognized role (so context is never silently lost).
-func (in *RunAgentInput) ToRun() (prior *harness.State, input string, err error) {
+func (in *RunAgentInput) ToRun() (prior *gantry.State, input string, err error) {
 	if len(in.Messages) == 0 {
 		return nil, "", errors.New("agui: messages is empty")
 	}
@@ -61,7 +61,7 @@ func (in *RunAgentInput) ToRun() (prior *harness.State, input string, err error)
 		return nil, "", fmt.Errorf("agui: last message role = %q, want \"user\"", last.Role)
 	}
 	head := in.Messages[:len(in.Messages)-1]
-	msgs := make([]harness.Message, 0, len(head))
+	msgs := make([]gantry.Message, 0, len(head))
 	for i := range head {
 		m, err := toHarnessMessage(head[i])
 		if err != nil {
@@ -69,40 +69,40 @@ func (in *RunAgentInput) ToRun() (prior *harness.State, input string, err error)
 		}
 		msgs = append(msgs, m)
 	}
-	return &harness.State{Messages: msgs}, last.Content, nil
+	return &gantry.State{Messages: msgs}, last.Content, nil
 }
 
-// toHarnessMessage maps one AG-UI input message to a harness.Message, mapping
+// toHarnessMessage maps one AG-UI input message to a gantry.Message, mapping
 // roles and tool linkage. Unknown roles are an error.
-func toHarnessMessage(im InputMessage) (harness.Message, error) {
-	var role harness.Role
+func toHarnessMessage(im InputMessage) (gantry.Message, error) {
+	var role gantry.Role
 	switch im.Role {
 	case "system":
-		role = harness.RoleSystem
+		role = gantry.RoleSystem
 	case "user":
-		role = harness.RoleUser
+		role = gantry.RoleUser
 	case "assistant":
-		role = harness.RoleAssistant
+		role = gantry.RoleAssistant
 	case "tool":
-		role = harness.RoleTool
+		role = gantry.RoleTool
 	default:
-		return harness.Message{}, fmt.Errorf("agui: unknown message role %q", im.Role)
+		return gantry.Message{}, fmt.Errorf("agui: unknown message role %q", im.Role)
 	}
 
 	// Enforce role/tool-call linkage invariants. The handler is a trust
 	// boundary, and silently corrupting tool linkage in the reconstructed
 	// transcript is worse than a clear 400 (mirrors the unknown-role error).
-	if len(im.ToolCalls) > 0 && role != harness.RoleAssistant {
-		return harness.Message{}, fmt.Errorf("agui: only assistant messages may carry toolCalls, got role %q", im.Role)
+	if len(im.ToolCalls) > 0 && role != gantry.RoleAssistant {
+		return gantry.Message{}, fmt.Errorf("agui: only assistant messages may carry toolCalls, got role %q", im.Role)
 	}
-	if role == harness.RoleTool && im.ToolCallID == "" {
-		return harness.Message{}, errors.New("agui: tool message missing toolCallId")
+	if role == gantry.RoleTool && im.ToolCallID == "" {
+		return gantry.Message{}, errors.New("agui: tool message missing toolCallId")
 	}
-	if role != harness.RoleTool && im.ToolCallID != "" {
-		return harness.Message{}, fmt.Errorf("agui: only tool messages may set toolCallId, got role %q", im.Role)
+	if role != gantry.RoleTool && im.ToolCallID != "" {
+		return gantry.Message{}, fmt.Errorf("agui: only tool messages may set toolCallId, got role %q", im.Role)
 	}
 
-	m := harness.Message{
+	m := gantry.Message{
 		Role:       role,
 		Content:    im.Content,
 		Name:       im.Name,
@@ -110,16 +110,16 @@ func toHarnessMessage(im InputMessage) (harness.Message, error) {
 	}
 	for _, tc := range im.ToolCalls {
 		if tc.ID == "" {
-			return harness.Message{}, errors.New("agui: tool call missing id")
+			return gantry.Message{}, errors.New("agui: tool call missing id")
 		}
 		if tc.Function.Name == "" {
-			return harness.Message{}, fmt.Errorf("agui: tool call %q missing function name", tc.ID)
+			return gantry.Message{}, fmt.Errorf("agui: tool call %q missing function name", tc.ID)
 		}
 		// Type is optional; AG-UI/OpenAI only define "function" today, so accept
 		// an empty type but reject anything else rather than mapping a shape we
 		// can't represent.
 		if tc.Type != "" && tc.Type != "function" {
-			return harness.Message{}, fmt.Errorf("agui: tool call %q has unsupported type %q", tc.ID, tc.Type)
+			return gantry.Message{}, fmt.Errorf("agui: tool call %q has unsupported type %q", tc.ID, tc.Type)
 		}
 		// Arguments is a JSON string per the AG-UI/OpenAI shape. Forwarding
 		// invalid JSON into a json.RawMessage would silently corrupt the call
@@ -128,11 +128,11 @@ func toHarnessMessage(im InputMessage) (harness.Message, error) {
 		var input json.RawMessage
 		if args := strings.TrimSpace(tc.Function.Arguments); args != "" {
 			if !json.Valid([]byte(args)) {
-				return harness.Message{}, fmt.Errorf("agui: tool call %q has invalid JSON arguments", tc.ID)
+				return gantry.Message{}, fmt.Errorf("agui: tool call %q has invalid JSON arguments", tc.ID)
 			}
 			input = json.RawMessage(tc.Function.Arguments)
 		}
-		m.ToolCalls = append(m.ToolCalls, harness.ToolCall{
+		m.ToolCalls = append(m.ToolCalls, gantry.ToolCall{
 			ID:    tc.ID,
 			Name:  tc.Function.Name,
 			Input: input,

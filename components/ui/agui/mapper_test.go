@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestMapperLazyRunStartedThenStep(t *testing.T) {
 	m := NewMapper("t1", "r1")
-	got := m.Map(harness.Event{Type: harness.EventPhaseStart, Phase: harness.PhaseStart})
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart})
 	want := []Event{
 		newRunStarted("t1", "r1"),
 		newStepStarted("start"),
@@ -19,7 +19,7 @@ func TestMapperLazyRunStartedThenStep(t *testing.T) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
 	}
 	// RunStarted is emitted only once.
-	got2 := m.Map(harness.Event{Type: harness.EventPhaseEnd, Phase: harness.PhaseStart})
+	got2 := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart})
 	want2 := []Event{newStepFinished("start")}
 	if !reflect.DeepEqual(got2, want2) {
 		t.Fatalf("got  %#v\nwant %#v", got2, want2)
@@ -28,10 +28,10 @@ func TestMapperLazyRunStartedThenStep(t *testing.T) {
 
 func TestMapperTextMessageLifecycle(t *testing.T) {
 	m := NewMapper("t1", "r1")
-	_ = m.Map(harness.Event{Type: harness.EventPhaseStart, Phase: harness.PhaseLLMCall}) // RunStarted + StepStarted
-	d1 := m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "He"})
-	d2 := m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "llo"})
-	end := m.Map(harness.Event{Type: harness.EventPhaseEnd, Phase: harness.PhaseLLMCall})
+	_ = m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseLLMCall}) // RunStarted + StepStarted
+	d1 := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "He"})
+	d2 := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "llo"})
+	end := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseLLMCall})
 
 	wantD1 := []Event{
 		newTextMessageStart("r1:msg:1"),
@@ -56,9 +56,9 @@ func TestMapperTextMessageLifecycle(t *testing.T) {
 
 func TestMapperToolCallClosesOpenText(t *testing.T) {
 	m := NewMapper("t1", "r1")
-	_ = m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "hi"}) // RunStarted + start + content
-	tc := &harness.ToolCall{ID: "c1", Name: "search", Input: json.RawMessage(`{"q":"x"}`)}
-	got := m.Map(harness.Event{Type: harness.EventToolCall, ToolCall: tc})
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi"}) // RunStarted + start + content
+	tc := &gantry.ToolCall{ID: "c1", Name: "search", Input: json.RawMessage(`{"q":"x"}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolCall, ToolCall: tc})
 	want := []Event{
 		newTextMessageEnd("r1:msg:1"),
 		newToolCallStart("c1", "search"),
@@ -73,13 +73,13 @@ func TestMapperToolCallClosesOpenText(t *testing.T) {
 func TestMapperToolResultAndDone(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true // skip lazy RunStarted for a focused assertion
-	tr := &harness.ToolResult{CallID: "c1", Content: "ok"}
-	gotRes := m.Map(harness.Event{Type: harness.EventToolResult, ToolResult: tr})
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	gotRes := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr})
 	wantRes := []Event{newToolCallResult("r1:toolmsg:c1", "c1", "ok")}
 	if !reflect.DeepEqual(gotRes, wantRes) {
 		t.Fatalf("res got %#v\nwant %#v", gotRes, wantRes)
 	}
-	gotDone := m.Map(harness.Event{Type: harness.EventDone, DoneReason: harness.DoneNoToolCalls})
+	gotDone := m.Map(gantry.Event{Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls})
 	wantDone := []Event{newRunFinished("t1", "r1")}
 	if !reflect.DeepEqual(gotDone, wantDone) {
 		t.Fatalf("done got %#v\nwant %#v", gotDone, wantDone)
@@ -91,11 +91,11 @@ func TestMapperSecondTextMessageIncrementsID(t *testing.T) {
 	m.started = true // focus on message-id sequencing
 
 	// First message opens at :msg:1, then a phase boundary closes it.
-	_ = m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "one"})
-	_ = m.Map(harness.Event{Type: harness.EventPhaseEnd, Phase: harness.PhaseLLMCall})
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "one"})
+	_ = m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseLLMCall})
 
 	// A later text delta must open a FRESH message at :msg:2.
-	got := m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "two"})
+	got := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "two"})
 	want := []Event{
 		newTextMessageStart("r1:msg:2"),
 		newTextMessageContent("r1:msg:2", "two"),
@@ -109,8 +109,8 @@ func TestMapperDoneClosesOpenText(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
 
-	_ = m.Map(harness.Event{Type: harness.EventTextDelta, TextDelta: "bye"}) // opens r1:msg:1
-	got := m.Map(harness.Event{Type: harness.EventDone, DoneReason: harness.DoneNoToolCalls})
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "bye"}) // opens r1:msg:1
+	got := m.Map(gantry.Event{Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls})
 	want := []Event{
 		newTextMessageEnd("r1:msg:1"),
 		newRunFinished("t1", "r1"),

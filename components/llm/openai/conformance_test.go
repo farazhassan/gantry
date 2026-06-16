@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/conformance"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // conformanceHandler answers /v1/chat/completions for both stream=false (single
@@ -31,13 +31,13 @@ func conformanceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestOpenAIConformsToLLMClient(t *testing.T) {
-	conformance.LLMClientSuite(t, func() harness.LLMClient {
+	conformance.LLMClientSuite(t, func() gantry.LLMClient {
 		return newServerClient(t, conformanceHandler)
 	})
 }
 
 func TestOpenAIConformsToStreamingLLMClient(t *testing.T) {
-	conformance.StreamingLLMClientSuite(t, func() harness.StreamingLLMClient {
+	conformance.StreamingLLMClientSuite(t, func() gantry.StreamingLLMClient {
 		return newServerClient(t, conformanceHandler)
 	})
 }

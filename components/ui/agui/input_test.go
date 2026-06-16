@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestToRunSplitsHistoryAndLastUser(t *testing.T) {
@@ -26,10 +26,10 @@ func TestToRunSplitsHistoryAndLastUser(t *testing.T) {
 	if input != "second" {
 		t.Fatalf("input = %q, want %q", input, "second")
 	}
-	want := []harness.Message{
-		{Role: harness.RoleSystem, Content: "be nice"},
-		{Role: harness.RoleUser, Content: "first"},
-		{Role: harness.RoleAssistant, Content: "hi there"},
+	want := []gantry.Message{
+		{Role: gantry.RoleSystem, Content: "be nice"},
+		{Role: gantry.RoleUser, Content: "first"},
+		{Role: gantry.RoleAssistant, Content: "hi there"},
 	}
 	if !reflect.DeepEqual(prior.Messages, want) {
 		t.Fatalf("prior.Messages =\n%#v\nwant\n%#v", prior.Messages, want)
@@ -56,7 +56,7 @@ func TestToRunMapsToolLinkage(t *testing.T) {
 		t.Fatalf("assistant tool call not mapped: %#v", assistant.ToolCalls)
 	}
 	tool := prior.Messages[1]
-	if tool.Role != harness.RoleTool || tool.ToolCallID != "c1" || tool.Content != "result" {
+	if tool.Role != gantry.RoleTool || tool.ToolCallID != "c1" || tool.Content != "result" {
 		t.Fatalf("tool message not mapped: %#v", tool)
 	}
 }

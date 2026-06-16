@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Registry is a name-keyed collection of Tools. Safe for concurrent use.
@@ -37,7 +37,7 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 
 // Definitions returns the ToolDef for every registered tool, sorted by
 // name for deterministic LLM prompts.
-func (r *Registry) Definitions() []harness.ToolDef {
+func (r *Registry) Definitions() []gantry.ToolDef {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	names := make([]string, 0, len(r.tools))
@@ -50,7 +50,7 @@ func (r *Registry) Definitions() []harness.ToolDef {
 			names[j-1], names[j] = names[j], names[j-1]
 		}
 	}
-	out := make([]harness.ToolDef, 0, len(names))
+	out := make([]gantry.ToolDef, 0, len(names))
 	for _, n := range names {
 		out = append(out, r.tools[n].Definition())
 	}
@@ -58,15 +58,15 @@ func (r *Registry) Definitions() []harness.ToolDef {
 }
 
 // Invoke runs the tool referenced by the call. Errors are wrapped with
-// harness.ErrToolExecution.
-func (r *Registry) Invoke(ctx context.Context, call harness.ToolCall) (json.RawMessage, error) {
+// gantry.ErrToolExecution.
+func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMessage, error) {
 	t, ok := r.Lookup(call.Name)
 	if !ok {
-		return nil, fmt.Errorf("%w: unknown tool %q", harness.ErrToolExecution, call.Name)
+		return nil, fmt.Errorf("%w: unknown tool %q", gantry.ErrToolExecution, call.Name)
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
-		return out, fmt.Errorf("%w: %v", harness.ErrToolExecution, err)
+		return out, fmt.Errorf("%w: %v", gantry.ErrToolExecution, err)
 	}
 	return out, nil
 }

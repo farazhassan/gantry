@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestMiddlewareRetriesThenSucceeds(t *testing.T) {
@@ -22,7 +22,7 @@ func TestMiddlewareRetriesThenSucceeds(t *testing.T) {
 	if res.State.FinalOutput == "" {
 		t.Error("FinalOutput is empty, want the recovered reply")
 	}
-	if res.State.DoneReason != harness.DoneNoToolCalls {
-		t.Errorf("DoneReason = %q, want %q", res.State.DoneReason, harness.DoneNoToolCalls)
+	if res.State.DoneReason != gantry.DoneNoToolCalls {
+		t.Errorf("DoneReason = %q, want %q", res.State.DoneReason, gantry.DoneNoToolCalls)
 	}
 }

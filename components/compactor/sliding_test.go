@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/compactor"
-	"github.com/farazhassan/gantry/harness"
 )
 
 func TestSlidingWindowKeepsLastN(t *testing.T) {
 	c := compactor.NewSlidingWindow(2)
-	msgs := []harness.Message{
+	msgs := []gantry.Message{
 		{Content: "a"}, {Content: "b"}, {Content: "c"}, {Content: "d"},
 	}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{})
@@ -27,7 +27,7 @@ func TestSlidingWindowKeepsLastN(t *testing.T) {
 
 func TestSlidingWindowAllowsLargerInput(t *testing.T) {
 	c := compactor.NewSlidingWindow(10)
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}}
 	got, _ := c.Compact(context.Background(), msgs, compactor.Budget{})
 	if len(got) != 2 {
 		t.Errorf("len = %d, want 2", len(got))
@@ -67,7 +67,7 @@ func TestNewSlidingWindowValidatesN(t *testing.T) {
 
 func TestSlidingWindowReturnsIndependentCopy(t *testing.T) {
 	c := compactor.NewSlidingWindow(2)
-	msgs := []harness.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
+	msgs := []gantry.Message{{Content: "a"}, {Content: "b"}, {Content: "c"}}
 	got, err := c.Compact(context.Background(), msgs, compactor.Budget{})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)

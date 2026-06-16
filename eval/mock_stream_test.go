@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestGenerateStreamReconstructsContent(t *testing.T) {
 	want := "hello streaming world"
-	m := NewMockLLMClient(harness.LLMResponse{Content: want, StopReason: harness.StopReasonEnd})
+	m := NewMockLLMClient(gantry.LLMResponse{Content: want, StopReason: gantry.StopReasonEnd})
 
 	var sb strings.Builder
-	var sawStop harness.StopReason
-	resp, err := m.GenerateStream(context.Background(), harness.LLMRequest{}, func(ch harness.StreamChunk) error {
+	var sawStop gantry.StopReason
+	resp, err := m.GenerateStream(context.Background(), gantry.LLMRequest{}, func(ch gantry.StreamChunk) error {
 		sb.WriteString(ch.TextDelta)
 		if ch.StopReason != "" {
 			sawStop = ch.StopReason
@@ -31,16 +31,16 @@ func TestGenerateStreamReconstructsContent(t *testing.T) {
 	if resp.Content != want {
 		t.Errorf("final resp.Content = %q, want %q", resp.Content, want)
 	}
-	if sawStop != harness.StopReasonEnd {
-		t.Errorf("final chunk StopReason = %q, want %q", sawStop, harness.StopReasonEnd)
+	if sawStop != gantry.StopReasonEnd {
+		t.Errorf("final chunk StopReason = %q, want %q", sawStop, gantry.StopReasonEnd)
 	}
 }
 
 func TestGenerateStreamYieldErrorPropagates(t *testing.T) {
-	m := NewMockLLMClient(harness.LLMResponse{Content: "abcdefghijkl", StopReason: harness.StopReasonEnd})
+	m := NewMockLLMClient(gantry.LLMResponse{Content: "abcdefghijkl", StopReason: gantry.StopReasonEnd})
 	sentinel := errors.New("consumer boom")
 
-	_, err := m.GenerateStream(context.Background(), harness.LLMRequest{}, func(harness.StreamChunk) error {
+	_, err := m.GenerateStream(context.Background(), gantry.LLMRequest{}, func(gantry.StreamChunk) error {
 		return sentinel
 	})
 	if !errors.Is(err, sentinel) {
@@ -50,7 +50,7 @@ func TestGenerateStreamYieldErrorPropagates(t *testing.T) {
 
 func TestGenerateStreamExhausted(t *testing.T) {
 	m := NewMockLLMClient() // empty script
-	_, err := m.GenerateStream(context.Background(), harness.LLMRequest{}, func(harness.StreamChunk) error { return nil })
+	_, err := m.GenerateStream(context.Background(), gantry.LLMRequest{}, func(gantry.StreamChunk) error { return nil })
 	if !errors.Is(err, ErrMockExhausted) {
 		t.Errorf("err = %v, want ErrMockExhausted", err)
 	}

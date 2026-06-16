@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // flakyLLM is a hand-written LLMClient — the whole interface is one method,
@@ -16,21 +16,21 @@ type flakyLLM struct {
 	calls     int
 }
 
-func (f *flakyLLM) Generate(_ context.Context, _ harness.LLMRequest) (harness.LLMResponse, error) {
+func (f *flakyLLM) Generate(_ context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
 	f.calls++
 	if f.calls <= f.failFirst {
-		return harness.LLMResponse{}, fmt.Errorf("%w: simulated transient failure (call %d)", harness.ErrLLMTransient, f.calls)
+		return gantry.LLMResponse{}, fmt.Errorf("%w: simulated transient failure (call %d)", gantry.ErrLLMTransient, f.calls)
 	}
-	return harness.LLMResponse{
+	return gantry.LLMResponse{
 		Content:    "Succeeded after a retry.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	}, nil
 }
 
 // Result bundles the terminal state with what the middleware observed, so the
 // test can prove the retry actually happened.
 type Result struct {
-	State    *harness.State
+	State    *gantry.State
 	Attempts int      // how many times the LLM was invoked
 	Logged   []string // one entry per LLM attempt, recorded by the logging middleware
 }
@@ -41,19 +41,19 @@ type Result struct {
 func RunExample(ctx context.Context) (*Result, error) {
 	llm := &flakyLLM{failFirst: 1}
 
-	a, err := harness.NewAgent(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
 
 	var logged []string
 
-	// Registration order is innermost-first (see harness.Compose): the chain
+	// Registration order is innermost-first (see gantry.Compose): the chain
 	// [logging, retry] composes to retry(logging(inner)). retry is the outer
 	// layer, so each retry re-enters logging and the inner LLM call — that is
 	// why Logged gets one entry per attempt.
-	if err := a.UseNamed(harness.PhaseLLMCall, "logging", func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	if err := a.UseNamed(gantry.PhaseLLMCall, "logging", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			logged = append(logged, "llm_call")
 			return next(ctx, s)
 		}
@@ -61,8 +61,8 @@ func RunExample(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 
-	if err := a.UseNamed(harness.PhaseLLMCall, "retry", func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, s *harness.State) error {
+	if err := a.UseNamed(gantry.PhaseLLMCall, "retry", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
 			const maxAttempts = 3
 			var lastErr error
 			for attempt := 1; attempt <= maxAttempts; attempt++ {

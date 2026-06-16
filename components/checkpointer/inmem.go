@@ -6,22 +6,22 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // InMemoryCheckpointer is a process-local store. Useful for tests; not
 // suitable for production resume across processes (use a Redis/SQL adapter).
 type InMemoryCheckpointer struct {
 	mu     sync.Mutex
-	states map[string]*harness.State
+	states map[string]*gantry.State
 }
 
 // NewInMemory returns an empty store.
 func NewInMemory() *InMemoryCheckpointer {
-	return &InMemoryCheckpointer{states: map[string]*harness.State{}}
+	return &InMemoryCheckpointer{states: map[string]*gantry.State{}}
 }
 
-func (c *InMemoryCheckpointer) Save(_ context.Context, id string, state *harness.State) error {
+func (c *InMemoryCheckpointer) Save(_ context.Context, id string, state *gantry.State) error {
 	// Reject nil for parity with FileCheckpointer: a nil state signals an
 	// upstream bug and would otherwise panic on the dereference below.
 	if state == nil {
@@ -35,7 +35,7 @@ func (c *InMemoryCheckpointer) Save(_ context.Context, id string, state *harness
 	return nil
 }
 
-func (c *InMemoryCheckpointer) Load(_ context.Context, id string) (*harness.State, error) {
+func (c *InMemoryCheckpointer) Load(_ context.Context, id string) (*gantry.State, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s, ok := c.states[id]

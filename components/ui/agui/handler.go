@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Handler returns an http.Handler that serves a single AG-UI run per POST. It
@@ -17,7 +17,7 @@ import (
 // and tools are ignored. The caller is responsible for auth/middleware around
 // this handler. Cancellation follows the request context, so a client
 // disconnect stops the run.
-func Handler(agent *harness.Agent) http.Handler {
+func Handler(agent *gantry.Agent) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -3,18 +3,18 @@ package session_test
 import (
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
-func newTestAgent(t *testing.T, responses ...harness.LLMResponse) *harness.Agent {
+func newTestAgent(t *testing.T, responses ...gantry.LLMResponse) *gantry.Agent {
 	t.Helper()
 	if len(responses) == 0 {
-		responses = []harness.LLMResponse{{Content: "ok", StopReason: harness.StopReasonEnd}}
+		responses = []gantry.LLMResponse{{Content: "ok", StopReason: gantry.StopReasonEnd}}
 	}
-	a, err := harness.NewAgent(harness.WithLLM(eval.NewMockLLMClient(responses...)))
+	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(responses...)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

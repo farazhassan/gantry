@@ -4,19 +4,19 @@ import (
 	"context"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/systemprompt"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 const persona = "You are a helpful assistant."
 
-func newAgent(t *testing.T) (*harness.Agent, *eval.MockLLMClient) {
+func newAgent(t *testing.T) (*gantry.Agent, *eval.MockLLMClient) {
 	t.Helper()
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "ok", StopReason: harness.StopReasonEnd})
-	a, err := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, err := gantry.NewAgent(gantry.WithLLM(mock))
 	if err != nil {
-		t.Fatalf("harness.New: %v", err)
+		t.Fatalf("gantry.New: %v", err)
 	}
 	return a, mock
 }
@@ -47,8 +47,8 @@ func TestSetsSystemWhenEmpty(t *testing.T) {
 func TestDoesNotOverwriteSystemSetByOuterMiddleware(t *testing.T) {
 	a, mock := newAgent(t)
 	systemprompt.WithSystemPrompt(a, persona)
-	_ = a.UseNamed(harness.PhaseAssembleContext, "test/presetter", func(next harness.Handler) harness.Handler {
-		return func(ctx context.Context, state *harness.State) error {
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "test/presetter", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, state *gantry.State) error {
 			if state.System == "" {
 				state.System = "PRESET"
 			}
@@ -71,9 +71,9 @@ func TestDoesNotOverwriteSystemSetByOuterMiddleware(t *testing.T) {
 // TestEmptyPromptRegistersNoMiddleware: a blank prompt installs nothing.
 func TestEmptyPromptRegistersNoMiddleware(t *testing.T) {
 	a, _ := newAgent(t)
-	before := a.MiddlewareCount(harness.PhaseAssembleContext)
+	before := a.MiddlewareCount(gantry.PhaseAssembleContext)
 	systemprompt.WithSystemPrompt(a, "")
-	if got := a.MiddlewareCount(harness.PhaseAssembleContext); got != before {
+	if got := a.MiddlewareCount(gantry.PhaseAssembleContext); got != before {
 		t.Fatalf("empty prompt should register nothing: count %d -> %d", before, got)
 	}
 }
@@ -82,9 +82,9 @@ func TestEmptyPromptRegistersNoMiddleware(t *testing.T) {
 // middleware on the context-assembly phase.
 func TestRegistersExactlyOneMiddleware(t *testing.T) {
 	a, _ := newAgent(t)
-	before := a.MiddlewareCount(harness.PhaseAssembleContext)
+	before := a.MiddlewareCount(gantry.PhaseAssembleContext)
 	systemprompt.WithSystemPrompt(a, persona)
-	if got := a.MiddlewareCount(harness.PhaseAssembleContext); got != before+1 {
+	if got := a.MiddlewareCount(gantry.PhaseAssembleContext); got != before+1 {
 		t.Fatalf("want one middleware added: count %d -> %d", before, got)
 	}
 }

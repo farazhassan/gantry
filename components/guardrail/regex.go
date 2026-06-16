@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // RegexGuardrail blocks if the configured pattern matches any inspected text.
@@ -23,7 +23,7 @@ func NewRegex(pattern string, dir Direction) *RegexGuardrail {
 	}
 }
 
-func (r *RegexGuardrail) Check(_ context.Context, state *harness.State, dir Direction) error {
+func (r *RegexGuardrail) Check(_ context.Context, state *gantry.State, dir Direction) error {
 	if dir != r.dir {
 		return nil
 	}
@@ -31,12 +31,12 @@ func (r *RegexGuardrail) Check(_ context.Context, state *harness.State, dir Dire
 	case DirectionInput:
 		for _, m := range state.Messages {
 			if r.pattern.MatchString(m.Content) {
-				return fmt.Errorf("%w: input matched %q", harness.ErrGuardrailBlocked, r.pattern.String())
+				return fmt.Errorf("%w: input matched %q", gantry.ErrGuardrailBlocked, r.pattern.String())
 			}
 		}
 	case DirectionOutput:
 		if state.LastResponse != nil && r.pattern.MatchString(state.LastResponse.Content) {
-			return fmt.Errorf("%w: output matched %q", harness.ErrGuardrailBlocked, r.pattern.String())
+			return fmt.Errorf("%w: output matched %q", gantry.ErrGuardrailBlocked, r.pattern.String())
 		}
 	}
 	return nil

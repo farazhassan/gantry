@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // HeadTail keeps the first head messages and the last tail messages,
@@ -23,13 +23,13 @@ func NewHeadTail(head, tail int) *HeadTail {
 	return &HeadTail{head: head, tail: tail}
 }
 
-func (h *HeadTail) Compact(_ context.Context, msgs []harness.Message, _ Budget) ([]harness.Message, error) {
+func (h *HeadTail) Compact(_ context.Context, msgs []gantry.Message, _ Budget) ([]gantry.Message, error) {
 	if len(msgs) <= h.head+h.tail {
-		out := make([]harness.Message, len(msgs))
+		out := make([]gantry.Message, len(msgs))
 		copy(out, msgs)
 		return out, nil
 	}
-	out := make([]harness.Message, 0, h.head+h.tail)
+	out := make([]gantry.Message, 0, h.head+h.tail)
 	out = append(out, msgs[:h.head]...)
 	out = append(out, msgs[len(msgs)-h.tail:]...)
 	return out, nil

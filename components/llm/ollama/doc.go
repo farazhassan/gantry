@@ -1,4 +1,4 @@
-// Package ollama provides a gantry harness.StreamingLLMClient backed by an
+// Package ollama provides a gantry.StreamingLLMClient backed by an
 // Ollama server's /api/chat endpoint. It maps harness request/response types
 // to Ollama's wire format, supports tool calling, and streams NDJSON deltas.
 //
@@ -6,8 +6,8 @@
 // http://localhost:11434):
 //
 //	client := ollama.New("llama3.1", ollama.WithBaseURL("http://host:11434"))
-//	resp, err := client.Generate(ctx, harness.LLMRequest{
-//	    Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
+//	resp, err := client.Generate(ctx, gantry.LLMRequest{
+//	    Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
 //	})
 //
 // Ollama omits per-tool-call IDs, so the client synthesizes stable index-based

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 func TestSinkWritesSSEFrames(t *testing.T) {
@@ -14,7 +14,7 @@ func TestSinkWritesSSEFrames(t *testing.T) {
 	s := NewSink(&buf, "t1", "r1")
 	sink := s.Sink()
 
-	if err := sink(harness.Event{Type: harness.EventTextDelta, TextDelta: "hi"}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi"}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	out := buf.String()
@@ -36,7 +36,7 @@ func TestSinkFlushesAfterEachEvent(t *testing.T) {
 	s := NewSink(&buf, "t1", "r1")
 	s.SetFlusher(func() { flushed++ })
 	sink := s.Sink()
-	if err := sink(harness.Event{Type: harness.EventDone}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventDone}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	if flushed == 0 {
@@ -50,7 +50,7 @@ func TestSinkEmitError(t *testing.T) {
 	// Simulate an error after the run has already begun streaming, so EmitError
 	// only needs to append the RUN_ERROR frame.
 	sink := s.Sink()
-	if err := sink(harness.Event{Type: harness.EventPhaseStart, Phase: harness.Phase("start")}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.Phase("start")}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	buf.Reset() // discard the RUN_STARTED + STEP_STARTED frames
@@ -86,7 +86,7 @@ func TestSinkEmitErrorClosesOpenTextMessage(t *testing.T) {
 	s := NewSink(&buf, "t1", "r1")
 	sink := s.Sink()
 	// Open a text message but never let the run finish normally.
-	if err := sink(harness.Event{Type: harness.EventTextDelta, TextDelta: "partial"}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "partial"}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	if err := s.EmitError(errors.New("boom")); err != nil {

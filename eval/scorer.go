@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // RunResult is the output of one agent execution.
@@ -12,8 +12,8 @@ type RunResult struct {
 	Case        Case
 	Config      string
 	FinalOutput string
-	Trace       *harness.Trace
-	Usage       harness.Usage
+	Trace       *gantry.Trace
+	Usage       gantry.Usage
 	Duration    time.Duration
 	Err         error
 }

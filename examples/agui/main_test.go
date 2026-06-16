@@ -6,17 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // TestServerStreamsRunToFinish exercises the example's handler wiring with a
 // scripted mock LLM, so it stays hermetic with respect to any LLM provider: it
 // proves the server emits a well-formed AG-UI SSE stream ending in RUN_FINISHED.
 func TestServerStreamsRunToFinish(t *testing.T) {
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "Hi there friend.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	})
 
 	handler, err := newHandler(llm)

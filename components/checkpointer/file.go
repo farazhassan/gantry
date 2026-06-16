@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // FileCheckpointer persists one JSON file per session id under a directory.
@@ -56,7 +56,7 @@ func (c *FileCheckpointer) path(id string) string {
 //
 // A nil state is rejected: persisting it would write JSON null and later load
 // back a zero-value State, silently masking an upstream bug.
-func (c *FileCheckpointer) Save(_ context.Context, id string, state *harness.State) error {
+func (c *FileCheckpointer) Save(_ context.Context, id string, state *gantry.State) error {
 	if state == nil {
 		return errors.New("checkpointer: Save requires a non-nil state")
 	}
@@ -96,7 +96,7 @@ func (c *FileCheckpointer) Save(_ context.Context, id string, state *harness.Sta
 
 // Load reads and decodes the session file, returning ErrNotFound (wrapped)
 // when no file exists for id.
-func (c *FileCheckpointer) Load(_ context.Context, id string) (*harness.State, error) {
+func (c *FileCheckpointer) Load(_ context.Context, id string) (*gantry.State, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -107,7 +107,7 @@ func (c *FileCheckpointer) Load(_ context.Context, id string) (*harness.State, e
 		}
 		return nil, fmt.Errorf("checkpointer: read %q: %w", id, err)
 	}
-	var state harness.State
+	var state gantry.State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("checkpointer: unmarshal %q: %w", id, err)
 	}

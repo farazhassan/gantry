@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // The structs below mirror Anthropic's /v1/messages wire format. They are
@@ -65,7 +65,7 @@ type usage struct {
 }
 
 // toolBlock is the adapter-internal form of a tool call, shared by the
-// streaming and non-streaming paths before mapping to harness.ToolCall.
+// streaming and non-streaming paths before mapping to gantry.ToolCall.
 type toolBlock struct {
 	ID    string
 	Name  string
@@ -80,7 +80,7 @@ const defaultMaxTokens = 4096
 // toChatRequest maps a harness request to the Anthropic wire format. System is
 // a top-level field (not a message), and tool results become user-role
 // tool_result blocks.
-func toChatRequest(model string, req harness.LLMRequest, stream bool) chatRequest {
+func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
@@ -100,12 +100,12 @@ func toChatRequest(model string, req harness.LLMRequest, stream bool) chatReques
 // form. Anthropic has only those two roles, so tool results are carried as
 // tool_result blocks inside a user message; consecutive tool results are merged
 // into a single user message as Anthropic expects.
-func toMessages(in []harness.Message) []reqMessage {
+func toMessages(in []gantry.Message) []reqMessage {
 	var out []reqMessage
 	lastToolResult := false
 	for _, m := range in {
 		switch m.Role {
-		case harness.RoleTool:
+		case gantry.RoleTool:
 			block := reqBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}
 			if lastToolResult {
 				out[len(out)-1].Content = append(out[len(out)-1].Content, block)
@@ -113,7 +113,7 @@ func toMessages(in []harness.Message) []reqMessage {
 				out = append(out, reqMessage{Role: "user", Content: []reqBlock{block}})
 				lastToolResult = true
 			}
-		case harness.RoleAssistant:
+		case gantry.RoleAssistant:
 			var blocks []reqBlock
 			if m.Content != "" {
 				blocks = append(blocks, reqBlock{Type: "text", Text: m.Content})
@@ -131,7 +131,7 @@ func toMessages(in []harness.Message) []reqMessage {
 	return out
 }
 
-func toTools(defs []harness.ToolDef) []reqTool {
+func toTools(defs []gantry.ToolDef) []reqTool {
 	if len(defs) == 0 {
 		return nil
 	}
@@ -164,33 +164,33 @@ func splitBlocks(blocks []respBlock) (string, []toolBlock) {
 
 // assembleResponse builds the harness response from aggregated stream/non-stream
 // fields. It is the single place stop-reason and tool-call mapping live.
-func assembleResponse(content string, calls []toolBlock, stopReasonStr string, u usage) harness.LLMResponse {
-	return harness.LLMResponse{
+func assembleResponse(content string, calls []toolBlock, stopReasonStr string, u usage) gantry.LLMResponse {
+	return gantry.LLMResponse{
 		Content:    content,
 		ToolCalls:  toToolCalls(calls),
 		StopReason: stopReason(stopReasonStr, len(calls) > 0),
-		Usage:      harness.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens},
+		Usage:      gantry.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens},
 	}
 }
 
-func toToolCalls(calls []toolBlock) []harness.ToolCall {
+func toToolCalls(calls []toolBlock) []gantry.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
-	out := make([]harness.ToolCall, len(calls))
+	out := make([]gantry.ToolCall, len(calls))
 	for i, c := range calls {
-		out[i] = harness.ToolCall{ID: c.ID, Name: c.Name, Input: c.Input}
+		out[i] = gantry.ToolCall{ID: c.ID, Name: c.Name, Input: c.Input}
 	}
 	return out
 }
 
-func stopReason(stopReasonStr string, hasTools bool) harness.StopReason {
+func stopReason(stopReasonStr string, hasTools bool) gantry.StopReason {
 	switch {
 	case hasTools || stopReasonStr == "tool_use":
-		return harness.StopReasonToolUse
+		return gantry.StopReasonToolUse
 	case stopReasonStr == "max_tokens":
-		return harness.StopReasonMaxTokens
+		return gantry.StopReasonMaxTokens
 	default:
-		return harness.StopReasonEnd
+		return gantry.StopReasonEnd
 	}
 }

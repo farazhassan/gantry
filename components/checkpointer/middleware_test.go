@@ -5,27 +5,27 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // failingCheckpointer always errors on Save, to exercise the non-fatal
 // failure path of WithCheckpointer.
 type failingCheckpointer struct{}
 
-func (failingCheckpointer) Save(context.Context, string, *harness.State) error {
+func (failingCheckpointer) Save(context.Context, string, *gantry.State) error {
 	return errors.New("disk full")
 }
 
-func (failingCheckpointer) Load(context.Context, string) (*harness.State, error) {
+func (failingCheckpointer) Load(context.Context, string) (*gantry.State, error) {
 	return nil, errors.New("not implemented")
 }
 
 func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
 	store := checkpointer.NewInMemory()
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	checkpointer.WithCheckpointer(a, store, "run-1")
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
@@ -41,8 +41,8 @@ func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 }
 
 func TestWithCheckpointerSaveErrorIsNonFatalAndTraced(t *testing.T) {
-	mock := eval.NewMockLLMClient(harness.LLMResponse{Content: "done", StopReason: harness.StopReasonEnd})
-	a, _ := harness.NewAgent(harness.WithLLM(mock))
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	checkpointer.WithCheckpointer(a, failingCheckpointer{}, "run-err")
 
 	// A Save failure must not abort the run.
@@ -53,7 +53,7 @@ func TestWithCheckpointerSaveErrorIsNonFatalAndTraced(t *testing.T) {
 
 	// The failure must be recorded on the trace as a checkpoint_failed event
 	// carrying a wrapped ErrCheckpointFailed and the checkpoint id.
-	var found *harness.TraceEvent
+	var found *gantry.TraceEvent
 	for _, ev := range state.Trace.Snapshot() {
 		if ev.Name == "checkpoint_failed" {
 			e := ev
@@ -64,7 +64,7 @@ func TestWithCheckpointerSaveErrorIsNonFatalAndTraced(t *testing.T) {
 	if found == nil {
 		t.Fatalf("expected a checkpoint_failed trace event; got none")
 	}
-	if !errors.Is(found.Err, harness.ErrCheckpointFailed) {
+	if !errors.Is(found.Err, gantry.ErrCheckpointFailed) {
 		t.Errorf("trace event Err = %v, want wrapped ErrCheckpointFailed", found.Err)
 	}
 	if found.Attrs["id"] != "run-err" {

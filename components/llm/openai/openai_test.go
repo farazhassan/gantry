@@ -3,12 +3,12 @@ package openai_test
 import (
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/openai"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // Compile-time guarantee the client satisfies the streaming interface.
-var _ harness.StreamingLLMClient = (*openai.Client)(nil)
+var _ gantry.StreamingLLMClient = (*openai.Client)(nil)
 
 func TestNewPanicsOnEmptyModel(t *testing.T) {
 	defer func() {

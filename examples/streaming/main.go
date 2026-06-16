@@ -7,16 +7,16 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // calcTool adds two integers; the model calls it on the first turn.
 type calcTool struct{}
 
-func (calcTool) Definition() harness.ToolDef {
-	return harness.ToolDef{
+func (calcTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{
 		Name:        "calc",
 		Description: "adds two integers a and b",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}`),
@@ -38,20 +38,20 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // tool registered. The scripted MockLLMClient is streaming-capable (its
 // GenerateStream chunks Content), so the example exercises the real streaming
 // path while staying hermetic.
-func newAgent() (*harness.Agent, error) {
+func newAgent() (*gantry.Agent, error) {
 	llm := eval.NewMockLLMClient(
 		// Turn 1: call the calc tool (StopReasonToolUse keeps the loop going).
-		harness.LLMResponse{
-			ToolCalls:  []harness.ToolCall{{ID: "call-1", Name: "calc", Input: json.RawMessage(`{"a":2,"b":3}`)}},
-			StopReason: harness.StopReasonToolUse,
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "call-1", Name: "calc", Input: json.RawMessage(`{"a":2,"b":3}`)}},
+			StopReason: gantry.StopReasonToolUse,
 		},
 		// Turn 2: report the final answer.
-		harness.LLMResponse{
+		gantry.LLMResponse{
 			Content:    "2 + 3 = 5 (computed by the calc tool).",
-			StopReason: harness.StopReasonEnd,
+			StopReason: gantry.StopReasonEnd,
 		},
 	)
-	a, err := harness.NewAgent(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	enc := json.NewEncoder(w)
-	sink := func(ev harness.Event) error {
+	sink := func(ev gantry.Event) error {
 		// SSE frame: "data: " + <json> + "\n" (from Encode) + "\n".
 		if _, err := fmt.Fprint(w, "data: "); err != nil {
 			return err

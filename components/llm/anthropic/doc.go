@@ -1,4 +1,4 @@
-// Package anthropic provides a gantry harness.StreamingLLMClient backed by
+// Package anthropic provides a gantry.StreamingLLMClient backed by
 // Anthropic's /v1/messages endpoint. It maps harness request/response types to
 // Anthropic's content-block wire format, supports tool calling, and streams
 // Server-Sent Events.
@@ -7,8 +7,8 @@
 // that, the ANTHROPIC_API_KEY environment variable:
 //
 //	client := anthropic.New("claude-sonnet-4-6", anthropic.WithAPIKey(key))
-//	resp, err := client.Generate(ctx, harness.LLMRequest{
-//	    Messages: []harness.Message{{Role: harness.RoleUser, Content: "hi"}},
+//	resp, err := client.Generate(ctx, gantry.LLMRequest{
+//	    Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
 //	})
 //
 // Anthropic carries the system prompt as a top-level field, models messages as

@@ -5,7 +5,7 @@ package skill
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Skill is a chunk of conditional instructions or context. When Matches
@@ -14,5 +14,5 @@ import (
 type Skill interface {
 	Name() string
 	SystemPrompt() string
-	Matches(ctx context.Context, state *harness.State) bool
+	Matches(ctx context.Context, state *gantry.State) bool
 }

@@ -5,22 +5,22 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
-	"github.com/farazhassan/gantry/harness"
 )
 
 // RunExample builds the smallest possible agent — just an LLM, no tools or
 // components — and runs it once. It returns the terminal State so the test can
 // assert on how the loop ended.
-func RunExample(ctx context.Context) (*harness.State, error) {
+func RunExample(ctx context.Context) (*gantry.State, error) {
 	// A scripted mock LLM stands in for a real provider, so the example is
 	// hermetic: it compiles and runs under `go test` with no API key.
-	llm := eval.NewMockLLMClient(harness.LLMResponse{
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content:    "Hello! I'm a minimal gantry agent.",
-		StopReason: harness.StopReasonEnd,
+		StopReason: gantry.StopReasonEnd,
 	})
 
-	a, err := harness.NewAgent(harness.WithLLM(llm))
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}

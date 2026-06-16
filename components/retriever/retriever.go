@@ -5,10 +5,10 @@ package retriever
 import (
 	"context"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // Retriever fetches relevant Documents for a query. Used for RAG.
 type Retriever interface {
-	Retrieve(ctx context.Context, query string, k int) ([]harness.Document, error)
+	Retrieve(ctx context.Context, query string, k int) ([]gantry.Document, error)
 }

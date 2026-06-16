@@ -6,14 +6,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
-	"github.com/farazhassan/gantry/harness"
 	"github.com/farazhassan/gantry/session"
 )
 
 func TestConcurrentDifferentSessions(t *testing.T) {
 	const n = 8
-	responses := make([]harness.LLMResponse, n)
+	responses := make([]gantry.LLMResponse, n)
 	for i := range responses {
 		responses[i] = resp(fmt.Sprintf("answer-%d", i), 1, 1)
 	}

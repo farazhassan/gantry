@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/farazhassan/gantry/harness"
+	"github.com/farazhassan/gantry"
 )
 
 // SlidingWindow keeps the last n messages and drops everything older.
@@ -22,13 +22,13 @@ func NewSlidingWindow(n int) *SlidingWindow {
 	return &SlidingWindow{n: n}
 }
 
-func (s *SlidingWindow) Compact(_ context.Context, msgs []harness.Message, _ Budget) ([]harness.Message, error) {
+func (s *SlidingWindow) Compact(_ context.Context, msgs []gantry.Message, _ Budget) ([]gantry.Message, error) {
 	start := 0
 	if len(msgs) > s.n {
 		start = len(msgs) - s.n
 	}
 	window := msgs[start:]
-	out := make([]harness.Message, len(window))
+	out := make([]gantry.Message, len(window))
 	copy(out, window)
 	return out, nil
 }
