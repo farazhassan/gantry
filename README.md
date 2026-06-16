@@ -197,43 +197,15 @@ Conformance suites, the eval harness, and the CI/release pipeline are documented
 
 ## Roadmap
 
-The core loop and component contracts are in place; the items below are planned
-built-ins and adapters. More ideas, feature requests or contributions toward any of these are especially welcome
-— see [Contributing](#contributing).
-
-**LLM clients / agents**
-- [ ] OpenAI adapter
-- [ ] Anthropic adapter
-- [ ] Llama adapter
-- [ ] Others
-
-**Memory**
-- [ ] File-backed store
-- [ ] Vector store
-
-**Observability**
-- [ ] Langfuse tracer
-- [ ] Custom tracer hooks
-- [ ] Logging to terminal
-- [ ] Logging to file
-
-**Streaming**
-- [x] Optional `StreamingLLMClient` + `RunStream` whole-run event stream
+The core loop and component contracts are in place; planned built-ins, adapters,
+and capabilities — grouped by milestone — live in **[docs/roadmap.md](docs/roadmap.md)**.
+Contributions toward any of them are especially welcome.
 
 ## Contributing
 
-Contributions are welcome! Bug fixes, new components, LLM adapters, and docs
-improvements are all appreciated.
-
-- **Found a bug or have an idea?** Open an issue to discuss it first.
-- **Building a component?** Implement the relevant interface, validate it against
-  the matching [conformance suite](docs/reference.md#conformance), and add tests.
-- **Before opening a PR:** run `go vet ./...` and `go test -race ./...` and make
-  sure everything passes — that's what CI checks.
-- Picking up something from the [Roadmap](#roadmap) is a great place to start.
-
-By contributing, you agree that your contributions will be licensed under the
-project's [MIT License](LICENSE).
+Contributions are welcome — bug fixes, new components, LLM adapters, examples, and
+docs. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, component
+and commit conventions, and the PR checklist.
 
 ## License
 
