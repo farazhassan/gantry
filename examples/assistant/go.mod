@@ -19,4 +19,4 @@ require (
 
 replace github.com/farazhassan/gantry => ../../
 
-replace github.com/farazhassan/gantry/mcp => ../../gantry/mcp
+replace github.com/farazhassan/gantry/mcp => ../../mcp
