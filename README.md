@@ -191,9 +191,9 @@ reference once the pieces click — its full wiring is in
 
 ## Testing
 
-Run the full suite across all modules with `go test ./...` (CI runs
-`go test -race`). Conformance suites, the eval harness, and the CI/release
-pipeline are documented in **[docs/reference.md](docs/reference.md#testing)**.
+Run the root module test suite with `go test ./...` (CI runs `go test -race ./...`).
+This repo also contains nested Go modules (e.g. `gantry/mcp`, `examples/assistant`); run `go test ./...` inside them as needed.
+Conformance suites, the eval harness, and the CI/release pipeline are documented in **[docs/reference.md](docs/reference.md)**.
 
 ## Roadmap
 
