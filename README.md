@@ -32,6 +32,24 @@ and shipping LLM agents in Go.
   supply one interface — `LLMClient` — and wire in Anthropic, OpenAI, a local
   model, or a mock. Adapters and components are opt-in, never load-bearing.
 
+## Why a phase loop + middleware?
+
+Gantry runs a fixed, inspectable sequence of phases every turn — assemble
+context, call the LLM, post-process, run tools, observe — so you know exactly
+what runs, and in what order, before anything executes. There's no graph to wire
+and no edges to trace.
+
+Behavior attaches as middleware: each phase is a chain of
+`func(next Handler) Handler`, and you insert logic anywhere with `Use`,
+`UseBefore`, or `UseAfter` a named anchor — no rewiring, no rebuilding a graph.
+
+Graph/DAG and workflow-builder frameworks express agent logic as nodes and edges
+in a bespoke abstraction. It's powerful, but you end up debugging the graph
+rather than your code, and each node is awkward to exercise on its own. Gantry's
+units are ordinary Go functions: unit-test one in a line, compose them by plain
+wrapping, and read the whole loop top to bottom. The payoff is the control and
+testability the wedge promises, made concrete.
+
 ## Install
 
 ```sh
