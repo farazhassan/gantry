@@ -89,6 +89,19 @@ func toHarnessMessage(im InputMessage) (harness.Message, error) {
 		return harness.Message{}, fmt.Errorf("agui: unknown message role %q", im.Role)
 	}
 
+	// Enforce role/tool-call linkage invariants. The handler is a trust
+	// boundary, and silently corrupting tool linkage in the reconstructed
+	// transcript is worse than a clear 400 (mirrors the unknown-role error).
+	if len(im.ToolCalls) > 0 && role != harness.RoleAssistant {
+		return harness.Message{}, fmt.Errorf("agui: only assistant messages may carry toolCalls, got role %q", im.Role)
+	}
+	if role == harness.RoleTool && im.ToolCallID == "" {
+		return harness.Message{}, errors.New("agui: tool message missing toolCallId")
+	}
+	if role != harness.RoleTool && im.ToolCallID != "" {
+		return harness.Message{}, fmt.Errorf("agui: only tool messages may set toolCallId, got role %q", im.Role)
+	}
+
 	m := harness.Message{
 		Role:       role,
 		Content:    im.Content,
@@ -96,6 +109,18 @@ func toHarnessMessage(im InputMessage) (harness.Message, error) {
 		ToolCallID: im.ToolCallID,
 	}
 	for _, tc := range im.ToolCalls {
+		if tc.ID == "" {
+			return harness.Message{}, errors.New("agui: tool call missing id")
+		}
+		if tc.Function.Name == "" {
+			return harness.Message{}, fmt.Errorf("agui: tool call %q missing function name", tc.ID)
+		}
+		// Type is optional; AG-UI/OpenAI only define "function" today, so accept
+		// an empty type but reject anything else rather than mapping a shape we
+		// can't represent.
+		if tc.Type != "" && tc.Type != "function" {
+			return harness.Message{}, fmt.Errorf("agui: tool call %q has unsupported type %q", tc.ID, tc.Type)
+		}
 		// Arguments is a JSON string per the AG-UI/OpenAI shape. Forwarding
 		// invalid JSON into a json.RawMessage would silently corrupt the call
 		// and later break adapter (un)marshaling, so reject it up front. An

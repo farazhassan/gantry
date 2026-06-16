@@ -30,11 +30,7 @@ func NewMapper(threadID, runID string) *Mapper {
 // RUN_ERROR is intentionally not produced here — a Go error is not part of the
 // Event stream; the Sink emits it from RunStream's returned error.
 func (m *Mapper) Map(ev harness.Event) []Event {
-	var out []Event
-	if !m.started {
-		m.started = true
-		out = append(out, newRunStarted(m.threadID, m.runID))
-	}
+	out := m.startFrame()
 
 	switch ev.Type {
 	case harness.EventTextDelta:
@@ -76,6 +72,18 @@ func (m *Mapper) Map(ev harness.Event) []Event {
 	}
 
 	return out
+}
+
+// startFrame returns a RUN_STARTED event the first time it is called, marking
+// the run started; later calls return nil. Map uses it lazily, and the Sink
+// uses it so a RUN_ERROR emitted before any Gantry event is still preceded by
+// RUN_STARTED.
+func (m *Mapper) startFrame() []Event {
+	if m.started {
+		return nil
+	}
+	m.started = true
+	return []Event{newRunStarted(m.threadID, m.runID)}
 }
 
 // closeText emits TEXT_MESSAGE_END for an open text message, if any, and clears

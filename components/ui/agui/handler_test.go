@@ -81,6 +81,24 @@ func TestHandlerBadRequest(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsOversizedBody(t *testing.T) {
+	a := newTestAgent(t, harness.LLMResponse{Content: "x", StopReason: harness.StopReasonEnd})
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	// A body larger than maxRequestBytes must be rejected before any SSE.
+	big := strings.Repeat("a", maxRequestBytes+1)
+	body := `{"messages":[{"role":"user","content":"` + big + `"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestHandlerMidStreamError(t *testing.T) {
 	// A mock LLM that returns an error makes RunFromStream fail after headers
 	// are sent, so the handler must emit a RUN_ERROR frame.

@@ -75,6 +75,38 @@ func TestToRunErrors(t *testing.T) {
 			}},
 			{Role: "user", Content: "hi"},
 		}}},
+		{"toolcalls_on_non_assistant", &RunAgentInput{Messages: []InputMessage{
+			{Role: "user", ToolCalls: []InputToolCall{
+				{ID: "c1", Function: InputToolFunction{Name: "search", Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "hi"},
+		}}},
+		{"tool_missing_toolcallid", &RunAgentInput{Messages: []InputMessage{
+			{Role: "tool", Content: "result"},
+			{Role: "user", Content: "hi"},
+		}}},
+		{"toolcallid_on_non_tool", &RunAgentInput{Messages: []InputMessage{
+			{Role: "assistant", Content: "hi", ToolCallID: "c1"},
+			{Role: "user", Content: "hi"},
+		}}},
+		{"tool_call_missing_id", &RunAgentInput{Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{Function: InputToolFunction{Name: "search", Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "hi"},
+		}}},
+		{"tool_call_missing_name", &RunAgentInput{Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "c1", Function: InputToolFunction{Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "hi"},
+		}}},
+		{"tool_call_bad_type", &RunAgentInput{Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "c1", Type: "retrieval", Function: InputToolFunction{Name: "search", Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "hi"},
+		}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

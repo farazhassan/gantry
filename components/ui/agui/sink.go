@@ -46,18 +46,23 @@ func (s *Sink) Sink() harness.EventSink {
 
 // EmitError writes a RUN_ERROR frame. The HTTP handler calls this when
 // RunFromStream returns an error after the SSE response has already begun, so
-// the client learns the run failed (the status code is already committed). Any
-// open text message is closed first so clients are never left with an
-// unterminated TEXT_MESSAGE lifecycle.
+// the client learns the run failed (the status code is already committed).
+//
+// RUN_STARTED is emitted first if it hasn't been already (the run can fail
+// before any Gantry event arrives, e.g. a cancelled context), and any open text
+// message is closed, so clients always see a well-formed RUN_STARTED → … →
+// RUN_ERROR stream.
 func (s *Sink) EmitError(err error) error {
-	for _, ae := range s.mapper.closeText() {
+	frames := s.mapper.startFrame()
+	frames = append(frames, s.mapper.closeText()...)
+	frames = append(frames, newRunError(err.Error()))
+	for _, ae := range frames {
 		if werr := WriteSSE(s.w, ae); werr != nil {
 			return werr
 		}
 	}
-	werr := WriteSSE(s.w, newRunError(err.Error()))
 	if s.flush != nil {
 		s.flush()
 	}
-	return werr
+	return nil
 }
