@@ -2,6 +2,7 @@ package checkpointer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -21,6 +22,11 @@ func NewInMemory() *InMemoryCheckpointer {
 }
 
 func (c *InMemoryCheckpointer) Save(_ context.Context, id string, state *harness.State) error {
+	// Reject nil for parity with FileCheckpointer: a nil state signals an
+	// upstream bug and would otherwise panic on the dereference below.
+	if state == nil {
+		return errors.New("checkpointer: Save requires a non-nil state")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Shallow copy is sufficient because callers stop using state after PhaseEnd.
