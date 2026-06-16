@@ -3,7 +3,7 @@
 // Run it, then POST a RunAgentInput and watch the AG-UI event frames stream
 // back (use curl's -N to disable buffering so tokens appear as produced):
 //
-//	go run ./examples/agui
+//	go run -ldflags=-linkmode=external ./examples/agui
 //
 //	curl -N -X POST http://localhost:8080/agui \
 //	  -H 'Content-Type: application/json' \

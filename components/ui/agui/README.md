@@ -40,8 +40,13 @@ A runnable server lives at [`examples/agui`](../../../examples/agui). It wraps
 swap in any `harness` LLM client you have configured. Run it from the repo root:
 
 ```bash
-go run ./examples/agui
+go run -ldflags=-linkmode=external ./examples/agui
 ```
+
+The `-ldflags=-linkmode=external` flag is required on macOS: the default
+internal linker can emit a binary without an `LC_UUID` load command, which newer
+macOS refuses to run ("missing LC_UUID load command"). The external linker fixes
+it — the same reason this repo's tests use that flag.
 
 Configure via env vars: `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_HOST`
 (default `http://localhost:11434`), `AGUI_ADDR` (default `:8080`).
