@@ -222,18 +222,9 @@ built-ins and adapters. More ideas, feature requests or contributions toward any
 
 ## Contributing
 
-Contributions are welcome! Bug fixes, new components, LLM adapters, and docs
-improvements are all appreciated.
-
-- **Found a bug or have an idea?** Open an issue to discuss it first.
-- **Building a component?** Implement the relevant interface, validate it against
-  the matching [conformance suite](docs/reference.md#conformance), and add tests.
-- **Before opening a PR:** run `go vet ./...` and `go test -race ./...` and make
-  sure everything passes — that's what CI checks.
-- Picking up something from the [Roadmap](#roadmap) is a great place to start.
-
-By contributing, you agree that your contributions will be licensed under the
-project's [MIT License](LICENSE).
+Contributions are welcome — bug fixes, new components, LLM adapters, examples, and
+docs. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, component
+and commit conventions, and the PR checklist.
 
 ## License
 
