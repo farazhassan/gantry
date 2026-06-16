@@ -1,8 +1,10 @@
 # Gantry
 
-An agent framework for Go. Gantry gives you a phase-based agent loop with
-onion-style (`net/http`-style) middleware at every phase — a small, dependency-free
-foundation for prototyping and shipping LLM agents in Go.
+**A tiny, testable, Go-native agent runtime for teams that want control, conformance, and no framework lock-ins.**
+
+Gantry gives you a phase-based agent loop with onion-style (`net/http`-style)
+middleware at every phase — a small, dependency-free foundation for prototyping
+and shipping LLM agents in Go.
 
 [![CI](https://github.com/farazhassan/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml)
@@ -16,19 +18,19 @@ foundation for prototyping and shipping LLM agents in Go.
 
 ## Why Gantry
 
-- **Tiny core, zero vendor lock-in.** The agent core depends only on the Go
-  standard library. You supply one interface — `LLMClient` — and wire in
-  Anthropic, OpenAI, a local model, or a mock. No SDK is imported for you.
-- **Middleware all the way down.** Every stage of the loop is an onion of
-  middleware you control. Retries, caching, timing, short-circuiting, and state
-  mutation are all just middleware — the same pattern you already know from HTTP.
-- **Batteries-included components.** Memory, tools, skills, retrieval (RAG),
-  planning, self-critique, guardrails, rate/budget limiting, checkpointing,
-  human-in-the-loop, and context compaction all ship as drop-in components.
-- **Built for confidence.** Every component is defined by a contract, and Gantry
-  ships a reusable **conformance** test suite so your own implementations can
-  prove they honor that contract. An **eval** harness sweeps configs × cases ×
-  scorers and produces machine- and human-readable reports.
+- **Control.** Every stage of the loop is an onion of middleware you compose
+  with ordinary Go — retries, caching, timing, short-circuiting, and state
+  mutation are all just middleware. No DSL, no hidden control flow; you decide
+  what runs and when.
+- **Conformance.** Every component is defined by a contract, and Gantry ships a
+  reusable **conformance** test suite so your own implementations can prove they
+  honor that contract.
+- **Testability.** Units are plain `func(ctx, *State) error` handlers; a mock
+  LLM client and a black-box **eval** harness (configs × cases × scorers) let
+  you test agents like normal Go code, with no API keys.
+- **No lock-in.** The agent core depends only on the Go standard library. You
+  supply one interface — `LLMClient` — and wire in Anthropic, OpenAI, a local
+  model, or a mock. Adapters and components are opt-in, never load-bearing.
 
 ## Install
 
