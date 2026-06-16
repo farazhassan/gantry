@@ -35,42 +35,16 @@ re-run with sandboxing disabled.)
 
 ### 2. Run a live server and stream from it
 
-Wrap the handler in an `http.Server` with a real LLM. This example uses the
-local Ollama adapter (no API key); swap in any `harness` LLM client you have
-configured.
-
-```go
-// main.go
-package main
-
-import (
-	"log"
-	"net/http"
-
-	"github.com/farazhassan/gantry/components/llm/ollama"
-	"github.com/farazhassan/gantry/components/ui/agui"
-	"github.com/farazhassan/gantry/harness"
-)
-
-func main() {
-	llm := ollama.New("llama3.2") // or openai.New(...), etc.
-
-	agent, err := harness.New(harness.WithLLM(llm))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	http.Handle("/agui", agui.Handler(agent))
-	log.Println("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-```
-
-Run it:
+A runnable server lives at [`examples/agui`](../../../examples/agui). It wraps
+`agui.Handler` around an agent backed by the local Ollama adapter (no API key);
+swap in any `harness` LLM client you have configured. Run it from the repo root:
 
 ```bash
-go run main.go
+go run ./examples/agui
 ```
+
+Configure via env vars: `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_HOST`
+(default `http://localhost:11434`), `AGUI_ADDR` (default `:8080`).
 
 Then POST a `RunAgentInput` and watch the SSE frames stream back. The `-N` flag
 disables curl buffering so you see tokens as they arrive:
