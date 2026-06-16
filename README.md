@@ -197,28 +197,9 @@ Conformance suites, the eval harness, and the CI/release pipeline are documented
 
 ## Roadmap
 
-The core loop and component contracts are in place; the items below are planned
-built-ins and adapters. More ideas, feature requests or contributions toward any of these are especially welcome
-— see [Contributing](#contributing).
-
-**LLM clients / agents**
-- [ ] OpenAI adapter
-- [ ] Anthropic adapter
-- [ ] Llama adapter
-- [ ] Others
-
-**Memory**
-- [ ] File-backed store
-- [ ] Vector store
-
-**Observability**
-- [ ] Langfuse tracer
-- [ ] Custom tracer hooks
-- [ ] Logging to terminal
-- [ ] Logging to file
-
-**Streaming**
-- [x] Optional `StreamingLLMClient` + `RunStream` whole-run event stream
+The core loop and component contracts are in place; planned built-ins, adapters,
+and capabilities — grouped by milestone — live in **[docs/roadmap.md](docs/roadmap.md)**.
+Contributions toward any of them are especially welcome.
 
 ## Contributing
 
