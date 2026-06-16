@@ -1,0 +1,105 @@
+package agui
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/farazhassan/gantry/harness"
+)
+
+// RunAgentInput is the AG-UI request body POSTed to the handler. v1 honors
+// Messages (the replayed thread); State and Tools are accepted but ignored
+// (client-supplied state-merge and client-advertised tools are out of scope).
+type RunAgentInput struct {
+	ThreadID string          `json:"threadId"`
+	RunID    string          `json:"runId"`
+	Messages []InputMessage  `json:"messages"`
+	State    json.RawMessage `json:"state,omitempty"`
+	Tools    json.RawMessage `json:"tools,omitempty"`
+}
+
+// InputMessage is one entry in RunAgentInput.Messages. Tool linkage uses the
+// OpenAI-style shape AG-UI adopts: assistant messages may carry ToolCalls, and
+// tool messages carry ToolCallID.
+type InputMessage struct {
+	ID         string          `json:"id,omitempty"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	ToolCalls  []InputToolCall `json:"toolCalls,omitempty"`
+}
+
+// InputToolCall is an assistant tool-call request in the replayed history.
+type InputToolCall struct {
+	ID       string            `json:"id"`
+	Type     string            `json:"type"`
+	Function InputToolFunction `json:"function"`
+}
+
+// InputToolFunction is the function name + raw JSON argument string.
+type InputToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToRun reconstructs the prior conversation State and extracts the final user
+// message for harness.RunFromStream. Because RunFromStream appends its input as
+// a fresh user message, prior.Messages holds the history EXCLUDING that final
+// turn and input is the final turn's content.
+//
+// It errors if Messages is empty, the last message is not a user turn, or any
+// history message has an unrecognized role (so context is never silently lost).
+func (in *RunAgentInput) ToRun() (prior *harness.State, input string, err error) {
+	if len(in.Messages) == 0 {
+		return nil, "", errors.New("agui: messages is empty")
+	}
+	last := in.Messages[len(in.Messages)-1]
+	if last.Role != "user" {
+		return nil, "", fmt.Errorf("agui: last message role = %q, want \"user\"", last.Role)
+	}
+	head := in.Messages[:len(in.Messages)-1]
+	msgs := make([]harness.Message, 0, len(head))
+	for i := range head {
+		m, err := toHarnessMessage(head[i])
+		if err != nil {
+			return nil, "", err
+		}
+		msgs = append(msgs, m)
+	}
+	return &harness.State{Messages: msgs}, last.Content, nil
+}
+
+// toHarnessMessage maps one AG-UI input message to a harness.Message, mapping
+// roles and tool linkage. Unknown roles are an error.
+func toHarnessMessage(im InputMessage) (harness.Message, error) {
+	var role harness.Role
+	switch im.Role {
+	case "system":
+		role = harness.RoleSystem
+	case "user":
+		role = harness.RoleUser
+	case "assistant":
+		role = harness.RoleAssistant
+	case "tool":
+		role = harness.RoleTool
+	default:
+		return harness.Message{}, fmt.Errorf("agui: unknown message role %q", im.Role)
+	}
+
+	m := harness.Message{
+		Role:       role,
+		Content:    im.Content,
+		Name:       im.Name,
+		ToolCallID: im.ToolCallID,
+	}
+	for _, tc := range im.ToolCalls {
+		m.ToolCalls = append(m.ToolCalls, harness.ToolCall{
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+	return m, nil
+}
