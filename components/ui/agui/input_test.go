@@ -69,6 +69,12 @@ func TestToRunErrors(t *testing.T) {
 		{"empty", &RunAgentInput{Messages: nil}},
 		{"last_not_user", &RunAgentInput{Messages: []InputMessage{{Role: "assistant", Content: "hi"}}}},
 		{"unknown_role", &RunAgentInput{Messages: []InputMessage{{Role: "wizard", Content: "?"}, {Role: "user", Content: "hi"}}}},
+		{"invalid_tool_args", &RunAgentInput{Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "c1", Type: "function", Function: InputToolFunction{Name: "search", Arguments: "not json"}},
+			}},
+			{Role: "user", Content: "hi"},
+		}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

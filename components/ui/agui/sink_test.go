@@ -55,3 +55,25 @@ func TestSinkEmitError(t *testing.T) {
 		t.Fatalf("got  %q\nwant %q", buf.String(), want)
 	}
 }
+
+func TestSinkEmitErrorClosesOpenTextMessage(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "t1", "r1")
+	sink := s.Sink()
+	// Open a text message but never let the run finish normally.
+	if err := sink(harness.Event{Type: harness.EventTextDelta, TextDelta: "partial"}); err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	if err := s.EmitError(errors.New("boom")); err != nil {
+		t.Fatalf("EmitError: %v", err)
+	}
+	out := buf.String()
+	end := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1"}` + "\n\n"
+	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
+	if !strings.Contains(out, end) {
+		t.Fatalf("expected open text message to be closed before error\nfull output:\n%s", out)
+	}
+	if strings.Index(out, end) > strings.Index(out, runErr) {
+		t.Fatalf("TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
+	}
+}

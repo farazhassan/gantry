@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/farazhassan/gantry/harness"
 )
@@ -95,10 +96,21 @@ func toHarnessMessage(im InputMessage) (harness.Message, error) {
 		ToolCallID: im.ToolCallID,
 	}
 	for _, tc := range im.ToolCalls {
+		// Arguments is a JSON string per the AG-UI/OpenAI shape. Forwarding
+		// invalid JSON into a json.RawMessage would silently corrupt the call
+		// and later break adapter (un)marshaling, so reject it up front. An
+		// empty string means "no arguments" and maps to a nil Input.
+		var input json.RawMessage
+		if args := strings.TrimSpace(tc.Function.Arguments); args != "" {
+			if !json.Valid([]byte(args)) {
+				return harness.Message{}, fmt.Errorf("agui: tool call %q has invalid JSON arguments", tc.ID)
+			}
+			input = json.RawMessage(tc.Function.Arguments)
+		}
 		m.ToolCalls = append(m.ToolCalls, harness.ToolCall{
 			ID:    tc.ID,
 			Name:  tc.Function.Name,
-			Input: json.RawMessage(tc.Function.Arguments),
+			Input: input,
 		})
 	}
 	return m, nil

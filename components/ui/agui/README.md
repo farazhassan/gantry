@@ -73,11 +73,11 @@ You should see a stream of SSE frames, each `data: {...}\n\n`, beginning with
 ```
 data: {"type":"RUN_STARTED","threadId":"demo-thread","runId":"demo-run"}
 
-data: {"type":"TEXT_MESSAGE_START","messageId":"demo-run:msg:0","role":"assistant"}
+data: {"type":"TEXT_MESSAGE_START","messageId":"demo-run:msg:1","role":"assistant"}
 
-data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"demo-run:msg:0","delta":"Hello"}
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"demo-run:msg:1","delta":"Hello"}
 
-data: {"type":"TEXT_MESSAGE_END","messageId":"demo-run:msg:0"}
+data: {"type":"TEXT_MESSAGE_END","messageId":"demo-run:msg:1"}
 
 data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
 ```

@@ -49,6 +49,9 @@ func Handler(agent *harness.Agent) http.Handler {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		// X-Accel-Buffering disables response buffering in nginx and similar
+		// reverse proxies, which otherwise defeats live SSE streaming.
+		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
 		sink := NewSink(w, threadID, runID)
