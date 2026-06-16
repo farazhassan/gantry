@@ -64,3 +64,51 @@ func TestRetrieveEmbedsQueryAndMapsHits(t *testing.T) {
 		t.Error("doc[0].Metadata still contains the content key")
 	}
 }
+
+func TestRetrieveMissingTextKeyYieldsEmptyContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": []map[string]any{
+				{"id": 3, "score": 0.7, "payload": map[string]any{"title": "no-content"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	store := qdrant.New(qdrant.WithCollection("docs"), qdrant.WithDim(2),
+		qdrant.WithBaseURL(srv.URL), qdrant.WithHTTPClient(srv.Client()))
+	r := qdrant.NewRetriever(store, &stubEmbedder{})
+
+	docs, err := r.Retrieve(context.Background(), "q", 1)
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("got %d docs, want 1", len(docs))
+	}
+	if docs[0].Content != "" {
+		t.Errorf("Content = %q, want empty (textKey absent)", docs[0].Content)
+	}
+	if docs[0].Metadata["title"] != "no-content" {
+		t.Errorf("Metadata = %v, want title no-content", docs[0].Metadata)
+	}
+}
+
+func TestRetrieveZeroHitsReturnsEmptyNoError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": []map[string]any{}})
+	}))
+	defer srv.Close()
+
+	store := qdrant.New(qdrant.WithCollection("docs"), qdrant.WithDim(2),
+		qdrant.WithBaseURL(srv.URL), qdrant.WithHTTPClient(srv.Client()))
+	r := qdrant.NewRetriever(store, &stubEmbedder{})
+
+	docs, err := r.Retrieve(context.Background(), "q", 5)
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("got %d docs, want 0", len(docs))
+	}
+}
