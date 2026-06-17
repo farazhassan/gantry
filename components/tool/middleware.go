@@ -52,7 +52,22 @@ func WithRegistry(a *gantry.Agent, reg *Registry, parallelism int) {
 
 	_ = a.UseNamed(gantry.PhaseToolExec, dispatchName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
-			calls := s.PendingToolCalls
+			set := clientToolSet(s)
+			// A client-tool name that also names a registered tool is a wiring
+			// bug: dispatch would skip the executable tool. Catch it loudly.
+			for name := range set {
+				if _, ok := reg.Lookup(name); ok {
+					panic("tool: client tool name collides with a registered tool: " + name)
+				}
+			}
+			// Dispatch only server-side (non-client) calls; client-side calls
+			// stay in s.PendingToolCalls for the suspend middleware.
+			var calls []gantry.ToolCall
+			for _, c := range s.PendingToolCalls {
+				if !set[c.Name] {
+					calls = append(calls, c)
+				}
+			}
 			if len(calls) == 0 {
 				return next(ctx, s)
 			}
