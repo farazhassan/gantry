@@ -27,9 +27,13 @@ const (
 	// DoneClientToolCall means the run suspended awaiting client fulfillment of
 	// a client-side tool call: the model invoked a tool that has no server
 	// implementation, so the unfulfilled call(s) are left in
-	// state.PendingToolCalls for the caller to fulfill (append a tool result
-	// and Resume). Distinct from DoneMaxIterations and the normal
-	// DoneNoToolCalls finish.
+	// state.PendingToolCalls for the caller to fulfill. The suspended State is
+	// terminal (Done == true), so Resume/ResumeStream no-op on it as-is: the
+	// caller appends a tool-result Message for each pending call and must first
+	// clear the terminal fields (Done = false, DoneReason = "", PendingToolCalls
+	// = nil) or rebuild a fresh non-terminal State from the transcript before
+	// resuming (see tool.WithClientTools). Distinct from DoneMaxIterations and
+	// the normal DoneNoToolCalls finish.
 	DoneClientToolCall DoneReason = "client_tool_call"
 )
 

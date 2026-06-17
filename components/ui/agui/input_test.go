@@ -213,6 +213,43 @@ func TestToResumeRejectsDuplicateResult(t *testing.T) {
 	}
 }
 
+func TestToResumeRejectsDuplicateCallID(t *testing.T) {
+	// Two assistant tool calls reuse the same id; the transcript is malformed
+	// even though each id appears to get a result.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"a"}`},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"b"}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for duplicate assistant tool call id")
+	}
+}
+
+func TestToRunRejectsUnansweredToolCall(t *testing.T) {
+	// History contains an assistant tool call with no matching result before the
+	// final user turn; the provider would reject this, so ToRun must 400 it.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "c1", Type: "function", Function: InputToolFunction{Name: "search", Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "go on"},
+		},
+	}
+	if _, _, err := in.ToRun(); err == nil {
+		t.Fatalf("expected error for unanswered tool call in run history")
+	}
+}
+
 func TestRunAgentInputDecodes(t *testing.T) {
 	raw := `{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"hi"}]}`
 	var in RunAgentInput
