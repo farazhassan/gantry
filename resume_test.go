@@ -2,9 +2,12 @@ package gantry_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/ask"
+	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -217,5 +220,48 @@ func TestResumeNilPriorReturnsError(t *testing.T) {
 	// The returned State should be a fresh empty one, not a partial stub.
 	if got.Input != "" || got.Done || got.DoneReason != "" {
 		t.Errorf("Resume(nil): want fresh empty State, got %+v", got)
+	}
+}
+
+func TestClientToolSuspendResumeRoundTrip(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"name?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "Hello, Ada!", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	tool.WithClientTools(a, ask.Definition())
+
+	// 1. Run suspends on the client tool call.
+	suspended, err := a.Run(context.Background(), "hi, I am Ada")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if suspended.DoneReason != gantry.DoneClientToolCall || len(suspended.PendingToolCalls) != 1 {
+		t.Fatalf("not suspended: reason=%q pending=%#v", suspended.DoneReason, suspended.PendingToolCalls)
+	}
+
+	// 2. Fulfill the client call: append a tool result and clear terminal flags.
+	suspended.Messages = append(suspended.Messages, gantry.Message{
+		Role:       gantry.RoleTool,
+		ToolCallID: suspended.PendingToolCalls[0].ID,
+		Content:    `{"answer":"Ada"}`,
+	})
+	suspended.Done = false
+	suspended.DoneReason = ""
+	suspended.PendingToolCalls = nil
+
+	// 3. Resume continues the transcript to a normal finish.
+	final, err := a.Resume(context.Background(), suspended)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "Hello, Ada!" {
+		t.Fatalf("resume did not finish normally: reason=%q out=%q", final.DoneReason, final.FinalOutput)
 	}
 }
