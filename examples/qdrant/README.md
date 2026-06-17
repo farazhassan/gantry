@@ -30,6 +30,26 @@ go run ./examples/qdrant -ingest
 go run ./examples/qdrant
 ```
 
+### Against a live / remote Qdrant
+
+Supply `QDRANT_URL` (and `QDRANT_API_KEY` for a secured instance) inline on the
+command — they override the `http://localhost:6333` default:
+
+```bash
+# Ingest into a remote Qdrant:
+QDRANT_URL=https://your-qdrant.example.com:6333 \
+QDRANT_API_KEY=your-qdrant-api-key \
+  go run ./examples/qdrant -ingest
+
+# Query against it:
+QDRANT_URL=https://your-qdrant.example.com:6333 \
+QDRANT_API_KEY=your-qdrant-api-key \
+  go run ./examples/qdrant
+```
+
+For Qdrant Cloud, use your cluster endpoint as `QDRANT_URL` and the cluster API
+key as `QDRANT_API_KEY`. Drop `QDRANT_API_KEY` for an unsecured instance.
+
 ## Notes
 
 - Documents store their text under the `content` payload key, matching the
