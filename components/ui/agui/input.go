@@ -72,6 +72,64 @@ func (in *RunAgentInput) ToRun() (prior *gantry.State, input string, err error) 
 	return &gantry.State{Messages: msgs}, last.Content, nil
 }
 
+// ToResume reconstructs the full prior conversation as a non-terminal State for
+// gantry.ResumeStream. Unlike ToRun, it keeps the final message — a tool-role
+// result fulfilling a suspended client tool call — in the transcript and adds
+// no fresh user input. The handler uses it when the posted history is
+// tool-result-terminated (the AG-UI human-in-the-loop resume signal).
+//
+// It errors if Messages is empty, any message has an unrecognized role or
+// invalid tool linkage (same invariants as ToRun), or any assistant tool call
+// lacks a matching tool result — resuming with an outstanding call would
+// surface as a provider error mid-stream.
+func (in *RunAgentInput) ToResume() (*gantry.State, error) {
+	if len(in.Messages) == 0 {
+		return nil, errors.New("agui: messages is empty")
+	}
+	msgs := make([]gantry.Message, 0, len(in.Messages))
+	for i := range in.Messages {
+		m, err := toHarnessMessage(in.Messages[i])
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := requireToolResults(msgs); err != nil {
+		return nil, err
+	}
+	// ResumeStream runs this State directly (no newStateFrom rebuild), so Meta
+	// and Trace must be initialized here. Meta is needed by the client-tools
+	// advertise middleware (it assigns into the map); Trace is needed by run().
+	return &gantry.State{
+		Messages: msgs,
+		Meta:     map[string]any{},
+		Trace:    gantry.NewTrace(),
+	}, nil
+}
+
+// requireToolResults verifies every assistant tool call id has a matching
+// tool-role result later in the transcript. Without this, an outstanding
+// client tool call would make the next provider request invalid.
+func requireToolResults(msgs []gantry.Message) error {
+	fulfilled := map[string]bool{}
+	for _, m := range msgs {
+		if m.Role == gantry.RoleTool && m.ToolCallID != "" {
+			fulfilled[m.ToolCallID] = true
+		}
+	}
+	for _, m := range msgs {
+		if m.Role != gantry.RoleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if !fulfilled[tc.ID] {
+				return fmt.Errorf("agui: tool call %q has no matching tool result; cannot resume", tc.ID)
+			}
+		}
+	}
+	return nil
+}
+
 // toHarnessMessage maps one AG-UI input message to a gantry.Message, mapping
 // roles and tool linkage. Unknown roles are an error.
 func toHarnessMessage(im InputMessage) (gantry.Message, error) {

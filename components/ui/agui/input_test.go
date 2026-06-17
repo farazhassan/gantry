@@ -117,6 +117,56 @@ func TestToRunErrors(t *testing.T) {
 	}
 }
 
+func TestToResumeKeepsFullHistory(t *testing.T) {
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{"q":"name?"}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"Ada"}`},
+		},
+	}
+	prior, err := in.ToResume()
+	if err != nil {
+		t.Fatalf("ToResume: %v", err)
+	}
+	if prior.Done {
+		t.Fatalf("prior.Done = true, want false (resumable)")
+	}
+	if len(prior.Messages) != 3 {
+		t.Fatalf("len(Messages) = %d, want 3 (full history kept)", len(prior.Messages))
+	}
+	if prior.Messages[2].Role != gantry.RoleTool || prior.Messages[2].ToolCallID != "q1" {
+		t.Fatalf("trailing tool result not preserved: %#v", prior.Messages[2])
+	}
+	if prior.Meta == nil || prior.Trace == nil {
+		t.Fatalf("ToResume must initialize Meta and Trace for direct ResumeStream")
+	}
+}
+
+func TestToResumeRejectsOutstandingClientCall(t *testing.T) {
+	// Assistant called ask_user but no tool result was posted: not resumable.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for outstanding tool call without result")
+	}
+}
+
+func TestToResumeRejectsEmpty(t *testing.T) {
+	in := &RunAgentInput{}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for empty messages")
+	}
+}
+
 func TestRunAgentInputDecodes(t *testing.T) {
 	raw := `{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"hi"}]}`
 	var in RunAgentInput
