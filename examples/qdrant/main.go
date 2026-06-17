@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/farazhassan/gantry"
 	embopenai "github.com/farazhassan/gantry/components/embeddings/openai"
@@ -16,10 +17,21 @@ import (
 
 const (
 	collection = "gantry-docs"
-	embedDim   = 1536 // text-embedding-3-small
-	embedModel = "text-embedding-3-small"
-	chatModel  = "gpt-4o-mini"
 	topK       = 3
+)
+
+// Provider settings. The defaults target OpenAI; override the env vars to point
+// at any OpenAI-compatible server (e.g. Ollama at http://localhost:11434).
+var (
+	// LLM_BASE_URL: API root, without the /v1 suffix. Empty uses the OpenAI
+	// default. For Ollama: http://localhost:11434
+	baseURL = os.Getenv("LLM_BASE_URL")
+	// EMBED_MODEL / CHAT_MODEL: model names for the two roles.
+	embedModel = getenv("EMBED_MODEL", "text-embedding-3-small")
+	chatModel  = getenv("CHAT_MODEL", "gpt-4o-mini")
+	// EMBED_DIM: vector size of the embedding model — must match the model.
+	// text-embedding-3-small is 1536; Ollama's nomic-embed-text is 768.
+	embedDim = atoi(getenv("EMBED_DIM", "1536"))
 )
 
 var seedDocs = []struct {
@@ -35,7 +47,7 @@ func main() {
 	ingest := flag.Bool("ingest", false, "embed and upsert seed documents, then exit")
 	flag.Parse()
 
-	emb := embopenai.New(embedModel) // reads OPENAI_API_KEY
+	emb := embopenai.New(embedModel, embedOpts()...)
 	store := qdrant.New(
 		qdrant.WithCollection(collection),
 		qdrant.WithDim(embedDim),
@@ -81,7 +93,7 @@ func runIngest(ctx context.Context, store *qdrant.Store, emb *embopenai.Client) 
 }
 
 func runQuery(ctx context.Context, store *qdrant.Store, emb *embopenai.Client) error {
-	llm := openai.New(chatModel) // reads OPENAI_API_KEY
+	llm := openai.New(chatModel, chatOpts()...)
 	a, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return err
@@ -97,9 +109,51 @@ func runQuery(ctx context.Context, store *qdrant.Store, emb *embopenai.Client) e
 	return nil
 }
 
+// embedOpts and chatOpts apply the shared base URL and API key. They differ
+// only in the Option type each adapter defines.
+func embedOpts() []embopenai.Option {
+	var opts []embopenai.Option
+	if baseURL != "" {
+		opts = append(opts, embopenai.WithBaseURL(baseURL))
+	}
+	opts = append(opts, embopenai.WithAPIKey(apiKey()))
+	return opts
+}
+
+func chatOpts() []openai.Option {
+	var opts []openai.Option
+	if baseURL != "" {
+		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
+	opts = append(opts, openai.WithAPIKey(apiKey()))
+	return opts
+}
+
+// apiKey returns OPENAI_API_KEY, or a placeholder when pointed at a custom
+// base URL (e.g. Ollama) that ignores auth — the adapters require a non-empty
+// key. Against the default OpenAI endpoint an empty key is left as-is so the
+// adapter panics with a clear "missing key" message.
+func apiKey() string {
+	if k := os.Getenv("OPENAI_API_KEY"); k != "" {
+		return k
+	}
+	if baseURL != "" {
+		return "ollama" // any non-empty value; keyless servers ignore it
+	}
+	return ""
+}
+
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		log.Fatalf("EMBED_DIM must be an integer, got %q: %v", s, err)
+	}
+	return n
 }
