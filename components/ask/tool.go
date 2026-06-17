@@ -86,6 +86,27 @@ func (t *Tool) Definition() gantry.ToolDef {
 	}
 }
 
+// Definition returns the ask_user tool as a declaration-only gantry.ToolDef,
+// with no Prompter and no server-side Invoke. Use it with
+// tool.WithClientTools to route ask_user over a client-in-the-loop transport
+// (e.g. AG-UI): the model's call suspends the run, the client collects the
+// answer, and a resume continues the conversation. WithName applies, mirroring
+// NewTool. The returned ToolDef is identical to NewTool(p, opts...).Definition().
+func Definition(opts ...Option) gantry.ToolDef {
+	t := &Tool{name: defaultName}
+	for _, o := range opts {
+		o(t)
+	}
+	if t.name == "" {
+		panic("ask: tool name must be non-empty")
+	}
+	return gantry.ToolDef{
+		Name:        t.name,
+		Description: description,
+		Schema:      json.RawMessage(schema),
+	}
+}
+
 // Invoke parses the questions, validates them, prompts the human, and returns
 // the answers as JSON for the model's next turn. A validation failure returns
 // an error, which the tool middleware surfaces to the LLM as an error result
