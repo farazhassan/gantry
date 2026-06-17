@@ -104,6 +104,9 @@ func WithHTTPClient(h *http.Client) Option {
 // EnsureCollection creates the collection if it does not already exist. It is
 // idempotent: an existing collection is left untouched.
 func (s *Store) EnsureCollection(ctx context.Context) error {
+	if s.dim <= 0 {
+		return fmt.Errorf("qdrant: EnsureCollection requires a positive vector dimension (set WithDim); got %d", s.dim)
+	}
 	exists, err := s.collectionExists(ctx)
 	if err != nil {
 		return err
@@ -150,6 +153,9 @@ func (s *Store) Upsert(ctx context.Context, points ...Point) error {
 
 // Search returns the k nearest points to vector, with payloads.
 func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]Hit, error) {
+	if k <= 0 {
+		return nil, nil
+	}
 	var out searchResponse
 	body := searchRequest{Vector: vector, Limit: k, WithPayload: true}
 	if err := s.doJSON(ctx, http.MethodPost, "/collections/"+s.collection+"/points/search", body, &out); err != nil {

@@ -92,6 +92,25 @@ func TestEmbedReturnsVectorsInInputOrder(t *testing.T) {
 	}
 }
 
+func TestEmbedErrorsOnDuplicateIndex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Same length as input (2) but index 0 is duplicated and 1 is missing.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"index": 0, "embedding": []float32{0.1, 0.2}},
+				{"index": 0, "embedding": []float32{0.3, 0.4}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := openai.New("m", openai.WithAPIKey("k"), openai.WithBaseURL(srv.URL),
+		openai.WithHTTPClient(srv.Client()))
+	if _, err := c.Embed(context.Background(), []string{"a", "b"}); err == nil {
+		t.Error("Embed: want error on duplicate/missing index, got nil")
+	}
+}
+
 func TestEmbedErrorsOnNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad", http.StatusBadRequest)

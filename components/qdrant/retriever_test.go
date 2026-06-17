@@ -94,6 +94,29 @@ func TestRetrieveMissingTextKeyYieldsEmptyContent(t *testing.T) {
 	}
 }
 
+func TestRetrieveNonPositiveKSkipsWork(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("Retrieve made an HTTP call for k <= 0")
+	}))
+	defer srv.Close()
+
+	emb := &stubEmbedder{}
+	store := qdrant.New(qdrant.WithCollection("docs"), qdrant.WithDim(2),
+		qdrant.WithBaseURL(srv.URL), qdrant.WithHTTPClient(srv.Client()))
+	r := qdrant.NewRetriever(store, emb)
+
+	docs, err := r.Retrieve(context.Background(), "q", 0)
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("got %d docs, want 0", len(docs))
+	}
+	if len(emb.seen) != 0 {
+		t.Errorf("embedder was called with %v, want no work for k <= 0", emb.seen)
+	}
+}
+
 func TestRetrieveZeroHitsReturnsEmptyNoError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"result": []map[string]any{}})

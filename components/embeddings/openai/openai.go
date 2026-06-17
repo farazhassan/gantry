@@ -121,7 +121,17 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		if d.Index < 0 || d.Index >= len(texts) {
 			return nil, fmt.Errorf("embeddings/openai: response index %d out of range", d.Index)
 		}
+		if out[d.Index] != nil {
+			return nil, fmt.Errorf("embeddings/openai: duplicate response index %d", d.Index)
+		}
 		out[d.Index] = d.Embedding
+	}
+	// A duplicate index (caught above) means another slot was never filled; the
+	// matching length check can't catch that on its own.
+	for i, v := range out {
+		if v == nil {
+			return nil, fmt.Errorf("embeddings/openai: missing vector for input %d", i)
+		}
 	}
 	return out, nil
 }

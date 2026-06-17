@@ -72,6 +72,44 @@ func TestEnsureCollectionNoOpWhenExists(t *testing.T) {
 	}
 }
 
+func TestEnsureCollectionFailsWithoutDim(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	s := qdrant.New(qdrant.WithCollection("docs"),
+		qdrant.WithBaseURL(srv.URL), qdrant.WithHTTPClient(srv.Client()))
+	if err := s.EnsureCollection(context.Background()); err == nil {
+		t.Error("EnsureCollection without WithDim: want error, got nil")
+	}
+	if called {
+		t.Error("EnsureCollection made an HTTP call despite missing dimension")
+	}
+}
+
+func TestSearchNonPositiveKReturnsNoHits(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	s := qdrant.New(qdrant.WithCollection("docs"), qdrant.WithDim(2),
+		qdrant.WithBaseURL(srv.URL), qdrant.WithHTTPClient(srv.Client()))
+	hits, err := s.Search(context.Background(), []float32{0.1, 0.2}, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("got %d hits, want 0", len(hits))
+	}
+	if called {
+		t.Error("Search made an HTTP call for k <= 0")
+	}
+}
+
 func TestUpsertSendsPoints(t *testing.T) {
 	var path string
 	var pointCount int

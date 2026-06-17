@@ -45,6 +45,9 @@ func NewRetriever(store *Store, emb embeddings.Embeddings, opts ...RetrieverOpti
 // gantry.Document. The textKey payload entry becomes Content; the rest becomes
 // Metadata.
 func (r *Retriever) Retrieve(ctx context.Context, query string, k int) ([]gantry.Document, error) {
+	if k <= 0 {
+		return nil, nil
+	}
 	vecs, err := r.emb.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("qdrant: embed query: %w", err)
