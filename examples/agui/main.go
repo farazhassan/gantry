@@ -18,18 +18,24 @@ import (
 	"os"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/ask"
 	"github.com/farazhassan/gantry/components/llm/ollama"
+	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/ui/agui"
 )
 
-// newHandler builds the AG-UI HTTP handler for an agent backed by llm. The LLM
-// is a parameter so the hermetic test can inject a mock while main() wires the
-// real Ollama client.
+// newHandler builds the AG-UI HTTP handler for an agent backed by llm. ask_user
+// is declared as a client-side tool: when the model asks a question, the run
+// suspends over AG-UI (a tool call with no result), the client collects the
+// answer and re-POSTs the history with a tool result, and the run resumes. The
+// LLM is a parameter so the hermetic test can inject a mock while main() wires
+// the real Ollama client.
 func newHandler(llm gantry.LLMClient) (http.Handler, error) {
 	agent, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
 	}
+	tool.WithClientTools(agent, ask.Definition())
 	return agui.Handler(agent), nil
 }
 

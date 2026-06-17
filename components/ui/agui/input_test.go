@@ -117,6 +117,139 @@ func TestToRunErrors(t *testing.T) {
 	}
 }
 
+func TestToResumeKeepsFullHistory(t *testing.T) {
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{"q":"name?"}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"Ada"}`},
+		},
+	}
+	prior, err := in.ToResume()
+	if err != nil {
+		t.Fatalf("ToResume: %v", err)
+	}
+	if prior.Done {
+		t.Fatalf("prior.Done = true, want false (resumable)")
+	}
+	if len(prior.Messages) != 3 {
+		t.Fatalf("len(Messages) = %d, want 3 (full history kept)", len(prior.Messages))
+	}
+	if prior.Messages[2].Role != gantry.RoleTool || prior.Messages[2].ToolCallID != "q1" {
+		t.Fatalf("trailing tool result not preserved: %#v", prior.Messages[2])
+	}
+	if prior.Meta == nil || prior.Trace == nil {
+		t.Fatalf("ToResume must initialize Meta and Trace for direct ResumeStream")
+	}
+}
+
+func TestToResumeRejectsOutstandingClientCall(t *testing.T) {
+	// Assistant called ask_user but no tool result was posted: not resumable.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for outstanding tool call without result")
+	}
+}
+
+func TestToResumeRejectsEmpty(t *testing.T) {
+	in := &RunAgentInput{}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for empty messages")
+	}
+}
+
+func TestToResumeRejectsResultForUnknownCall(t *testing.T) {
+	// A tool result whose id was never produced by an assistant call is
+	// malformed and would fail at the provider.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "tool", ToolCallID: "ghost", Content: `{}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for tool result referencing unknown call id")
+	}
+}
+
+func TestToResumeRejectsResultBeforeCall(t *testing.T) {
+	// The tool result precedes the assistant call that introduces its id.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "tool", ToolCallID: "q1", Content: `{}`},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for tool result appearing before its call")
+	}
+}
+
+func TestToResumeRejectsDuplicateResult(t *testing.T) {
+	// Two tool results answer the same call id; the second is invalid.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"a"}`},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"b"}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for duplicate tool result for the same call id")
+	}
+}
+
+func TestToResumeRejectsDuplicateCallID(t *testing.T) {
+	// Two assistant tool calls reuse the same id; the transcript is malformed
+	// even though each id appears to get a result.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"a"}`},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"b"}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for duplicate assistant tool call id")
+	}
+}
+
+func TestToRunRejectsUnansweredToolCall(t *testing.T) {
+	// History contains an assistant tool call with no matching result before the
+	// final user turn; the provider would reject this, so ToRun must 400 it.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "c1", Type: "function", Function: InputToolFunction{Name: "search", Arguments: `{}`}},
+			}},
+			{Role: "user", Content: "go on"},
+		},
+	}
+	if _, _, err := in.ToRun(); err == nil {
+		t.Fatalf("expected error for unanswered tool call in run history")
+	}
+}
+
 func TestRunAgentInputDecodes(t *testing.T) {
 	raw := `{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"hi"}]}`
 	var in RunAgentInput

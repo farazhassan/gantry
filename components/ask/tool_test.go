@@ -133,3 +133,29 @@ func TestInvokeDoesNotCallPrompterOnValidationError(t *testing.T) {
 		t.Errorf("Prompter must not be called when validation fails")
 	}
 }
+
+func TestDefinitionMatchesNewToolDefinition(t *testing.T) {
+	def := ask.Definition()
+	if def.Name != "ask_user" {
+		t.Errorf("Name = %q, want ask_user", def.Name)
+	}
+	if def.Description == "" {
+		t.Errorf("Description is empty")
+	}
+	var v any
+	if err := json.Unmarshal(def.Schema, &v); err != nil {
+		t.Errorf("Schema is not valid JSON: %v", err)
+	}
+
+	withTool := ask.NewTool(ask.NewAuto(ask.Response{})).Definition()
+	if def.Name != withTool.Name || def.Description != withTool.Description ||
+		string(def.Schema) != string(withTool.Schema) {
+		t.Errorf("Definition() = %#v, want %#v", def, withTool)
+	}
+}
+
+func TestDefinitionWithNameApplies(t *testing.T) {
+	if got := ask.Definition(ask.WithName("clarify")).Name; got != "clarify" {
+		t.Errorf("Name = %q, want clarify", got)
+	}
+}

@@ -34,6 +34,7 @@ func TestDoneReasonConstants(t *testing.T) {
 		gantry.DoneGuardrailBlocked,
 		gantry.DoneHumanAborted,
 		gantry.DoneError,
+		gantry.DoneClientToolCall,
 	}
 	seen := map[gantry.DoneReason]bool{}
 	for _, c := range cases {

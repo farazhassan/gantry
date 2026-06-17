@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/farazhassan/gantry"
@@ -31,9 +32,38 @@ func Handler(agent *gantry.Agent) http.Handler {
 			http.Error(w, "agui: invalid request JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		prior, input, err := in.ToRun()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if len(in.Messages) == 0 {
+			http.Error(w, "agui: messages is empty", http.StatusBadRequest)
+			return
+		}
+
+		// Decide run vs resume from the terminal message before writing any SSE
+		// so input errors stay clean 400s. A user-terminated history starts/continues
+		// a turn (RunFromStream); a tool-terminated history fulfills a suspended
+		// client tool call and resumes the transcript as-is (ResumeStream).
+		last := in.Messages[len(in.Messages)-1]
+		var run func(sink gantry.EventSink) (*gantry.State, error)
+		switch last.Role {
+		case "user":
+			prior, input, err := in.ToRun()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			run = func(sink gantry.EventSink) (*gantry.State, error) {
+				return agent.RunFromStream(r.Context(), prior, input, sink)
+			}
+		case "tool":
+			prior, err := in.ToResume()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			run = func(sink gantry.EventSink) (*gantry.State, error) {
+				return agent.ResumeStream(r.Context(), prior, sink)
+			}
+		default:
+			http.Error(w, fmt.Sprintf("agui: last message role = %q, want \"user\" or \"tool\"", last.Role), http.StatusBadRequest)
 			return
 		}
 
@@ -62,7 +92,7 @@ func Handler(agent *gantry.Agent) http.Handler {
 			sink.SetFlusher(f.Flush)
 		}
 
-		if _, err := agent.RunFromStream(r.Context(), prior, input, sink.Sink()); err != nil {
+		if _, err := run(sink.Sink()); err != nil {
 			_ = sink.EmitError(err)
 		}
 	})
