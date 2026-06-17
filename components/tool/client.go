@@ -22,8 +22,14 @@ const (
 // they have no server-side Invoke: when the model calls one, the dispatch
 // middleware skips it and the run suspends at the observe boundary with
 // state.Done == true and state.DoneReason == gantry.DoneClientToolCall, leaving
-// the unfulfilled client call(s) in state.PendingToolCalls. The caller fulfills
-// each by appending a tool-result message and resuming (Resume / ResumeStream).
+// the unfulfilled client call(s) in state.PendingToolCalls.
+//
+// To fulfill a suspended run the caller appends a tool-result Message for each
+// pending call. Because the suspended state is terminal (Done == true), Resume
+// and ResumeStream no-op on it as-is: the caller must first clear the terminal
+// fields (set Done = false, DoneReason = "", PendingToolCalls = nil) before
+// resuming, or build a fresh non-terminal State from the transcript (this is
+// what the AG-UI handler does via input.ToResume).
 //
 // Mixed turns are handled cleanly: when one assistant message mixes server and
 // client tool calls, the server calls execute and their results are recorded;

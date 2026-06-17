@@ -107,25 +107,35 @@ func (in *RunAgentInput) ToResume() (*gantry.State, error) {
 	}, nil
 }
 
-// requireToolResults verifies every assistant tool call id has a matching
-// tool-role result later in the transcript. Without this, an outstanding
-// client tool call would make the next provider request invalid.
+// requireToolResults validates that the transcript is a well-formed resumable
+// history by walking it in order and tracking outstanding tool calls: each
+// assistant tool call opens an id, and each tool-role result must close an id
+// opened by an earlier message. It rejects a tool result that references an
+// unknown id, that appears before the call that introduces it, or that
+// duplicates an already-answered call, and it rejects any assistant tool call
+// left unanswered at the end. Any of these would make the next provider request
+// invalid, so they are caught here as a clean error rather than failing
+// mid-stream.
 func requireToolResults(msgs []gantry.Message) error {
-	fulfilled := map[string]bool{}
+	open := map[string]bool{} // tool-call ids seen but not yet answered
 	for _, m := range msgs {
-		if m.Role == gantry.RoleTool && m.ToolCallID != "" {
-			fulfilled[m.ToolCallID] = true
+		switch m.Role {
+		case gantry.RoleAssistant:
+			for _, tc := range m.ToolCalls {
+				open[tc.ID] = true
+			}
+		case gantry.RoleTool:
+			if m.ToolCallID == "" {
+				continue
+			}
+			if !open[m.ToolCallID] {
+				return fmt.Errorf("agui: tool result for %q has no preceding unanswered tool call; cannot resume", m.ToolCallID)
+			}
+			delete(open, m.ToolCallID)
 		}
 	}
-	for _, m := range msgs {
-		if m.Role != gantry.RoleAssistant {
-			continue
-		}
-		for _, tc := range m.ToolCalls {
-			if !fulfilled[tc.ID] {
-				return fmt.Errorf("agui: tool call %q has no matching tool result; cannot resume", tc.ID)
-			}
-		}
+	for id := range open {
+		return fmt.Errorf("agui: tool call %q has no matching tool result; cannot resume", id)
 	}
 	return nil
 }

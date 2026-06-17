@@ -167,6 +167,52 @@ func TestToResumeRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestToResumeRejectsResultForUnknownCall(t *testing.T) {
+	// A tool result whose id was never produced by an assistant call is
+	// malformed and would fail at the provider.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "tool", ToolCallID: "ghost", Content: `{}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for tool result referencing unknown call id")
+	}
+}
+
+func TestToResumeRejectsResultBeforeCall(t *testing.T) {
+	// The tool result precedes the assistant call that introduces its id.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "tool", ToolCallID: "q1", Content: `{}`},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for tool result appearing before its call")
+	}
+}
+
+func TestToResumeRejectsDuplicateResult(t *testing.T) {
+	// Two tool results answer the same call id; the second is invalid.
+	in := &RunAgentInput{
+		Messages: []InputMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []InputToolCall{
+				{ID: "q1", Type: "function", Function: InputToolFunction{Name: "ask_user", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"a"}`},
+			{Role: "tool", ToolCallID: "q1", Content: `{"answer":"b"}`},
+		},
+	}
+	if _, err := in.ToResume(); err == nil {
+		t.Fatalf("expected error for duplicate tool result for the same call id")
+	}
+}
+
 func TestRunAgentInputDecodes(t *testing.T) {
 	raw := `{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"hi"}]}`
 	var in RunAgentInput

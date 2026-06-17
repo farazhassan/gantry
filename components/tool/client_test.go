@@ -98,6 +98,47 @@ func TestNoClientToolsLeavesLoopUnchanged(t *testing.T) {
 	}
 }
 
+func TestResumeDoesNotDuplicateAdvertisedTools(t *testing.T) {
+	// Reusing the same *State across Run -> (clear terminal fields) -> Resume
+	// must re-run PhaseStart cleanly, not accumulate duplicate ToolDefs.
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"name?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	tool.WithClientTools(a, askDef())
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Fulfill the client call and clear terminal fields, then resume in place.
+	suspended.Messages = append(suspended.Messages, gantry.Message{
+		Role:       gantry.RoleTool,
+		ToolCallID: suspended.PendingToolCalls[0].ID,
+		Content:    `{"answer":"Ada"}`,
+	})
+	suspended.Done = false
+	suspended.DoneReason = ""
+	suspended.PendingToolCalls = nil
+
+	if _, err := a.Resume(context.Background(), suspended); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("got %d LLM requests, want 2 (run + resume)", len(reqs))
+	}
+	if len(reqs[1].Tools) != 1 || reqs[1].Tools[0].Name != "ask_user" {
+		t.Fatalf("resume request advertised %#v, want exactly one ask_user (no duplicates)", reqs[1].Tools)
+	}
+}
+
 func TestClientToolNameCollisionPanics(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

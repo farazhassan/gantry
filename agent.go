@@ -258,6 +258,15 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	ctx, runSpan := tracer.StartSpan(ctx, "run")
 	defer func() { runSpan.End(retErr) }()
 
+	// Tool advertisements are per-run scratch that PhaseStart middleware rebuilds
+	// (e.g. components/tool register_defs and the client-tools advertise both
+	// append to state.Tools). PhaseStart runs once per a.run call, including
+	// Resume/ResumeStream, which reuse the prior *State in place — so reset the
+	// list here to rebuild cleanly instead of accumulating duplicate ToolDefs
+	// across Run -> Resume. Fresh-run states already have a nil Tools slice, so
+	// this is a no-op for them.
+	state.Tools = nil
+
 	// PhaseStart (once).
 	if err := a.runPhase(ctx, tracer, PhaseStart, state); err != nil {
 		return state, wrap(err)
