@@ -3,6 +3,12 @@
 *.test
 *.out
 
+# Compiled example binaries (go build in examples/<name>/ emits an
+# extensionless file named <name>); ignore those, keep all source.
+/examples/*/*
+!/examples/*/*/
+!/examples/*/*.*
+
 # Dependency directories
 vendor/
 
