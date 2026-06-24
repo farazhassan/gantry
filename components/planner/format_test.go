@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -26,10 +25,23 @@ func TestRenderPlanWithStatusTags(t *testing.T) {
 		{Description: "ship", Status: gantry.StepPending},
 	}}
 	got := renderPlan(p)
-	for _, want := range []string{"1. [done] design", "2. [active] build", "3. [pending] ship"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("renderPlan() missing %q in:\n%s", want, got)
-		}
+	want := "\n\nPlan:\n1. [done] design\n2. [active] build\n3. [pending] ship\n"
+	if got != want {
+		t.Errorf("renderPlan() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderPlanMixedStatus(t *testing.T) {
+	// Tagged and status-less steps interleave: each renders in its own form.
+	p := &gantry.Plan{Steps: []gantry.PlanStep{
+		{Description: "design", Status: gantry.StepDone},
+		{Description: "build"},
+		{Description: "ship", Status: gantry.StepPending},
+	}}
+	got := renderPlan(p)
+	want := "\n\nPlan:\n1. [done] design\n2. build\n3. [pending] ship\n"
+	if got != want {
+		t.Errorf("renderPlan() =\n%q\nwant\n%q", got, want)
 	}
 }
 
