@@ -13,13 +13,14 @@ they relate. For the mechanics of the *existing* session layer, see the
 
 | Layer | What it is | Lifetime | Status |
 |-------|------------|----------|--------|
-| **Run** | One bounded agent loop (`Load → loop → Save`), capped by `maxIterations` | One call | Implemented |
+| **Run** | One bounded agent phase loop (`PhaseStart → … → PhaseEnd`), capped by `maxIterations` | One call | Implemented |
 | **Session** | Keyed, durable **chat context**: the user-facing transcript + conversational state | Many runs | Implemented |
 | **Task** | Keyed, durable **work item with a plan**: goal, plan-ledger, budget, status | Many runs | Planned |
 
 ```
-Run        one bounded agent loop, capped by maxIterations
+Run        one bounded agent phase loop (PhaseStart → … → PhaseEnd), capped by maxIterations
 Session    keyed chat context: user-facing transcript + conversational state
+             (wraps each turn as Load → RunFrom → Save)
 Task       keyed durable work item: goal + plan-ledger + budget + status
              (owned by a Session, executed across many Runs by a task driver)
 ```
