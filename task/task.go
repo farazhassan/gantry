@@ -24,8 +24,8 @@ const (
 	TaskActive        TaskStatus = "active"         // has >=1 step; executing
 	TaskAwaitingInput TaskStatus = "awaiting_input" // suspended for user input
 	TaskDone          TaskStatus = "done"           // explicit, verifier-gated
-	TaskFailed        TaskStatus = "failed"
-	TaskCancelled     TaskStatus = "cancelled"
+	TaskFailed        TaskStatus = "failed"         // terminal; execution error
+	TaskCancelled     TaskStatus = "cancelled"      // terminal; explicitly stopped
 )
 
 // IsTerminal reports whether the status is a final resting state (no further
@@ -54,7 +54,7 @@ type TaskBudget struct {
 // any schedule time — those are creation/orchestration concerns.
 type Task struct {
 	ID        string
-	SessionID string // back-reference to the owning session (historical link)
+	SessionID string // ID of the session that created this task
 	Title     string
 	Goal      string
 	Status    TaskStatus
