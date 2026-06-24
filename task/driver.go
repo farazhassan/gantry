@@ -81,8 +81,11 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 		}
 
 		// ---- seed a fresh, non-terminal run ----
+		// Working is authoritative: the request/answer was already appended to it
+		// above, so Input is left empty. DefaultStartHandler no-ops on a non-empty
+		// transcript, so seeding Input here would be dead weight (and misleading on
+		// resume, where input is the answer, not a fresh request).
 		state := &gantry.State{
-			Input:    input,
 			Messages: cloneMessages(t.Working),
 			Plan:     Hydrate(t), // nil on the first run → planner builds the skeleton
 			Meta:     map[string]any{},
@@ -121,9 +124,15 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 				}
 				return t, nil
 			}
-			input = "" // verifier-fail → continue (dormant under NoopVerifier)
+			// Verifier-fail → continue from the working context (no new input).
+			// Dormant under NoopVerifier (always passes), so it cannot spin today.
+			// A real Phase-3 verifier that rejects while the run keeps returning
+			// DoneNoToolCalls with no plan progress would loop until the budget
+			// stops it; that path should grow a no-progress guard when the critic
+			// lands. The next iteration re-seeds from t.Working — see above.
 		case state.DoneReason == gantry.DoneMaxIterations:
-			input = "" // continue: another run from the working context
+			// Run hit its per-run cap mid-work; continue with another run from the
+			// working context. This is the normal long-running continuation.
 		default:
 			t.Status = TaskFailed // budget/guardrail/human-abort/error terminals
 			if err := d.save(ctx, t); err != nil {
