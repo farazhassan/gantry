@@ -81,6 +81,8 @@ func cloneTask(t *Task) *Task {
 	c := *t
 	if t.Plan != nil {
 		p := *t.Plan
+		// PlanStep.Meta (map[string]any) is intentionally not deep-copied;
+		// callers are expected to treat it as write-once after decomposition.
 		p.Steps = make([]gantry.PlanStep, len(t.Plan.Steps))
 		copy(p.Steps, t.Plan.Steps)
 		c.Plan = &p

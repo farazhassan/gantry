@@ -61,6 +61,19 @@ func TestInMemoryReturnsIndependentCopies(t *testing.T) {
 	}
 }
 
+func TestInMemorySaveIsolatesFromCaller(t *testing.T) {
+	// Mutating the original task after saving must not corrupt the stored copy.
+	s := NewInMemory()
+	ctx := context.Background()
+	in := &Task{ID: "tk-1", Title: "orig", Status: TaskPending}
+	_ = s.SaveTask(ctx, in)
+	in.Title = "mutated-after-save"
+	got, _ := s.LoadTask(ctx, "tk-1")
+	if got.Title != "orig" {
+		t.Errorf("stored copy was mutated through the caller's reference after save: %q", got.Title)
+	}
+}
+
 func TestInMemoryListBySession(t *testing.T) {
 	s := NewInMemory()
 	ctx := context.Background()
