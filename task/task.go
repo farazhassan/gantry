@@ -58,9 +58,10 @@ type Task struct {
 	Title     string
 	Goal      string
 	Status    TaskStatus
-	Plan      *gantry.Plan     // the ledger — source of truth for progress
-	Budget    TaskBudget       // cross-run budget
-	Working   []gantry.Message // task's own working context, separate from the chat transcript
+	Plan      *gantry.Plan      // the ledger — source of truth for progress
+	Budget    TaskBudget        // cross-run budget
+	Working   []gantry.Message  // task's own working context, separate from the chat transcript
+	Pending   []gantry.ToolCall // unfulfilled ask_user call(s); set only while Status == TaskAwaitingInput
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
