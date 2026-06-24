@@ -171,6 +171,9 @@ Each ships a reference built-in (swap in your own by satisfying the component's
 interface). Full reference table, built-ins, and an end-to-end example wiring
 every component onto one agent → **[docs/reference.md](docs/reference.md#components)**.
 
+For keyed, durable multi-turn conversations — how state is shared across every
+message in a session — see the **[sessions guide](docs/sessions.md)**.
+
 ## Examples
 
 Start with the focused examples below — each teaches exactly one idea and runs

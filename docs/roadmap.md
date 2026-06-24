@@ -26,7 +26,8 @@ not committed dates.
 
 - **Guardrails** — HarmfulContent · OutOfBudget
 - **Tools** — internal, production-ready tools
-- **Orchestration** — support for adding Tasks · support for adding subagents
+- **Orchestration** — support for adding Tasks ([design](task-management.md)) ·
+  support for adding subagents
 - **Examples** — a production-ready, runnable end-to-end demo with a frontend
   component
 
