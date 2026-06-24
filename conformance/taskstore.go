@@ -31,8 +31,13 @@ func TaskStoreSuite(t *testing.T, factory func() task.TaskStore) {
 		if err != nil {
 			t.Fatalf("LoadTask: %v", err)
 		}
-		if got.Title != "title" || got.Status != task.TaskActive || len(got.Plan.Steps) != 1 {
+		if got.Title != want.Title || got.Goal != want.Goal ||
+			got.SessionID != want.SessionID || got.Status != want.Status ||
+			len(got.Plan.Steps) != 1 {
 			t.Errorf("round-trip mismatch: %+v", got)
+		}
+		if s0 := got.Plan.Steps[0]; s0.ID != "s1" || s0.Description != "d" || s0.Status != gantry.StepActive {
+			t.Errorf("round-trip lost step content: %+v", s0)
 		}
 	})
 
