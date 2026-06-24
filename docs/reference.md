@@ -2,7 +2,8 @@
 
 Detailed reference for Gantry's components, conformance suites, eval harness,
 testing, and repository layout. For the overview, install steps, quick start,
-and core concepts, see the [main README](../README.md).
+and core concepts, see the [main README](../README.md). For keyed, durable
+multi-turn conversations, see the [sessions guide](sessions.md).
 
 ## Contents
 
