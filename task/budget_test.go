@@ -1,6 +1,7 @@
 package task
 
 import (
+	"math"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -61,7 +62,9 @@ func TestBudgetRecordRun(t *testing.T) {
 	if b.UsedUsage.InputTokens != 11 || b.UsedUsage.OutputTokens != 7 {
 		t.Errorf("tokens = %d/%d, want 11/7", b.UsedUsage.InputTokens, b.UsedUsage.OutputTokens)
 	}
-	if b.UsedUsage.Cost < 0.299 || b.UsedUsage.Cost > 0.301 {
+	// Cost accumulates via repeated float addition, so compare within a tolerance
+	// rather than against an exact literal (0.1+0.2 != 0.3 in IEEE-754).
+	if math.Abs(b.UsedUsage.Cost-0.3) > 1e-9 {
 		t.Errorf("cost = %v, want ~0.3", b.UsedUsage.Cost)
 	}
 }
