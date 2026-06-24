@@ -74,6 +74,29 @@ func TestInMemorySaveIsolatesFromCaller(t *testing.T) {
 	}
 }
 
+func TestInMemoryIsolatesStepMeta(t *testing.T) {
+	// PlanStep.Meta is a map; the store must not share it with callers, or a
+	// caller mutating a loaded step's Meta would corrupt the stored copy.
+	s := NewInMemory()
+	ctx := context.Background()
+	in := &Task{
+		ID:     "tk-1",
+		Status: TaskPending,
+		Plan:   &gantry.Plan{Steps: []gantry.PlanStep{{ID: "s1", Meta: map[string]any{"k": "v1"}}}},
+	}
+	_ = s.SaveTask(ctx, in)
+
+	// Mutate via the caller's reference after save and via a loaded copy.
+	in.Plan.Steps[0].Meta["k"] = "mutated-after-save"
+	got, _ := s.LoadTask(ctx, "tk-1")
+	got.Plan.Steps[0].Meta["k"] = "mutated-via-load"
+
+	again, _ := s.LoadTask(ctx, "tk-1")
+	if again.Plan.Steps[0].Meta["k"] != "v1" {
+		t.Errorf("stored step Meta was mutated through a shared map: %v", again.Plan.Steps[0].Meta["k"])
+	}
+}
+
 func TestInMemoryListBySession(t *testing.T) {
 	s := NewInMemory()
 	ctx := context.Background()

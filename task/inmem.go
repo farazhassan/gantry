@@ -76,15 +76,12 @@ func (s *InMemoryStore) ListBySession(_ context.Context, sessionID string) ([]Ta
 }
 
 // cloneTask deep-copies the mutable parts of a Task so the store and its callers
-// never share backing arrays (plan steps, working messages).
+// never share backing arrays (plan steps, working messages) or step Meta maps.
 func cloneTask(t *Task) *Task {
 	c := *t
 	if t.Plan != nil {
 		p := *t.Plan
-		// PlanStep.Meta (map[string]any) is intentionally not deep-copied;
-		// callers are expected to treat it as write-once after decomposition.
-		p.Steps = make([]gantry.PlanStep, len(t.Plan.Steps))
-		copy(p.Steps, t.Plan.Steps)
+		p.Steps = cloneSteps(t.Plan.Steps)
 		c.Plan = &p
 	}
 	if t.Working != nil {
@@ -92,6 +89,30 @@ func cloneTask(t *Task) *Task {
 		copy(c.Working, t.Working)
 	}
 	return &c
+}
+
+// cloneSteps returns a deep copy of a plan's steps. The Steps slice and each
+// step's Meta map get fresh backing storage so the store and its callers never
+// share mutable state. Meta values themselves are copied by reference (a
+// one-level clone), matching how callers treat Meta entries as immutable once
+// set; the goal is only to prevent map-level mutation from crossing the
+// isolation boundary. A nil input yields a nil result.
+func cloneSteps(src []gantry.PlanStep) []gantry.PlanStep {
+	if src == nil {
+		return nil
+	}
+	out := make([]gantry.PlanStep, len(src))
+	copy(out, src)
+	for i := range src {
+		if src[i].Meta != nil {
+			m := make(map[string]any, len(src[i].Meta))
+			for k, v := range src[i].Meta {
+				m[k] = v
+			}
+			out[i].Meta = m
+		}
+	}
+	return out
 }
 
 // Compile-time check.

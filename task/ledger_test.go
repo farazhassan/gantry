@@ -37,6 +37,19 @@ func TestHydrateIsIndependentDeepCopy(t *testing.T) {
 	}
 }
 
+func TestHydrateIsolatesStepMeta(t *testing.T) {
+	// Meta is a map; mutating it on the projection must not reach the ledger.
+	tk := &Task{
+		ID:   "tk-1",
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{{ID: "s1", Meta: map[string]any{"k": "v1"}}}},
+	}
+	proj := Hydrate(tk)
+	proj.Steps[0].Meta["k"] = "mutated"
+	if tk.Plan.Steps[0].Meta["k"] != "v1" {
+		t.Errorf("ledger step Meta mutated through projection: %v", tk.Plan.Steps[0].Meta["k"])
+	}
+}
+
 func TestHydrateNilPlan(t *testing.T) {
 	if got := Hydrate(&Task{ID: "x"}); got != nil {
 		t.Errorf("Hydrate with nil ledger plan = %+v, want nil", got)
