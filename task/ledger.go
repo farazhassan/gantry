@@ -26,7 +26,9 @@ func Hydrate(t *Task) *gantry.Plan {
 // ledger, matching steps by ID. Only Status and Output are copied back (the run
 // owns progress, the ledger owns structure). Steps present in the projection
 // but not the ledger are ignored; ledger steps absent from the projection are
-// left unchanged. Nil projection or nil ledger plan is a safe no-op.
+// left unchanged. Steps with empty IDs in either the ledger or projection are
+// not reconciled (there is no key to match on). Nil projection or nil ledger
+// plan is a safe no-op.
 func Flush(t *Task, proj *gantry.Plan) {
 	if t == nil || t.Plan == nil || proj == nil {
 		return

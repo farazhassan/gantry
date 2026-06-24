@@ -90,4 +90,11 @@ func TaskStoreSuite(t *testing.T, factory func() task.TaskStore) {
 			t.Error("SaveTask(nil) should error")
 		}
 	})
+
+	t.Run("save_empty_id_is_rejected", func(t *testing.T) {
+		s := factory()
+		if err := s.SaveTask(context.Background(), &task.Task{Status: task.TaskPending}); err == nil {
+			t.Error("SaveTask with empty ID should error")
+		}
+	})
 }
