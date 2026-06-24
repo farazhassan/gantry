@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -41,5 +42,12 @@ func TestTaskZeroValueAndConstruction(t *testing.T) {
 	}
 	if tk.Budget.MaxRuns != 5 || tk.Budget.UsedRuns != 0 {
 		t.Errorf("budget = %+v", tk.Budget)
+	}
+}
+
+func TestErrNotFoundIsSentinel(t *testing.T) {
+	wrapped := errWrap(ErrNotFound, "tk-x")
+	if !errors.Is(wrapped, ErrNotFound) {
+		t.Errorf("wrapped error should match ErrNotFound via errors.Is")
 	}
 }
