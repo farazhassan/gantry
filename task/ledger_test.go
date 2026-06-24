@@ -80,11 +80,16 @@ func TestFlushIgnoresUnknownAndMissingIDs(t *testing.T) {
 	if len(tk.Plan.Steps) != 3 {
 		t.Errorf("Flush changed step count to %d", len(tk.Plan.Steps))
 	}
+	// Steps not present in the projection must be left entirely unchanged.
+	if tk.Plan.Steps[0].Status != gantry.StepDone || tk.Plan.Steps[2].Status != gantry.StepPending {
+		t.Errorf("unmatched steps were mutated: %+v / %+v", tk.Plan.Steps[0], tk.Plan.Steps[2])
+	}
 }
 
 func TestFlushNilSafe(t *testing.T) {
 	tk := newLedgerTask()
 	Flush(tk, nil)                 // no projection: no-op
 	Flush(&Task{ID: "x"}, tk.Plan) // nil ledger plan: no-op
+	Flush(nil, tk.Plan)            // nil task: no-op
 	// Reaching here without a panic is the assertion.
 }

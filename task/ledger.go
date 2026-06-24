@@ -16,6 +16,8 @@ func Hydrate(t *Task) *gantry.Plan {
 	}
 	p := *t.Plan
 	p.Steps = make([]gantry.PlanStep, len(t.Plan.Steps))
+	// PlanStep.Meta (map[string]any) is intentionally not deep-copied here, same
+	// as cloneTask in inmem.go; callers treat it as write-once after decomposition.
 	copy(p.Steps, t.Plan.Steps)
 	return &p
 }
