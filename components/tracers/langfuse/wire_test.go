@@ -1,6 +1,7 @@
 package langfuse
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -77,6 +78,47 @@ func TestEventCreateItem(t *testing.T) {
 	}
 	if _, ok := noParent.Body["metadata"]; ok {
 		t.Fatal("event with nil attrs must omit metadata")
+	}
+}
+
+func TestGenerationCreateItem(t *testing.T) {
+	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Second)
+	input := json.RawMessage(`{"system":"s"}`)
+	output := json.RawMessage(`{"content":"hi"}`)
+	usage := json.RawMessage(`{"input":7,"output":5}`)
+
+	it := generationCreateItem("t1", "s1", "p1", "phase:llm_call", start, end,
+		input, output, usage, map[string]any{"iteration": 2}, nil)
+
+	if it.Type != "generation-create" {
+		t.Fatalf("Type = %q, want generation-create", it.Type)
+	}
+	if it.Body["id"] != "s1" || it.Body["traceId"] != "t1" || it.Body["parentObservationId"] != "p1" {
+		t.Fatalf("ids wrong: %v", it.Body)
+	}
+	if _, ok := it.Body["input"].(json.RawMessage); !ok {
+		t.Fatalf("input = %T, want json.RawMessage", it.Body["input"])
+	}
+	if _, ok := it.Body["output"].(json.RawMessage); !ok {
+		t.Fatalf("output = %T, want json.RawMessage", it.Body["output"])
+	}
+	if _, ok := it.Body["usage"].(json.RawMessage); !ok {
+		t.Fatalf("usage = %T, want json.RawMessage", it.Body["usage"])
+	}
+	md, ok := it.Body["metadata"].(map[string]any)
+	if !ok || md["iteration"] != 2 {
+		t.Fatalf("metadata = %v, want iteration=2", it.Body["metadata"])
+	}
+}
+
+func TestGenerationCreateItemOmitsEmpty(t *testing.T) {
+	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	it := generationCreateItem("t1", "s1", "", "g", start, start, nil, nil, nil, nil, nil)
+	for _, k := range []string{"input", "output", "usage", "metadata", "parentObservationId"} {
+		if _, ok := it.Body[k]; ok {
+			t.Fatalf("empty %q must be omitted, body=%v", k, it.Body)
+		}
 	}
 }
 

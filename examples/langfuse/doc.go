@@ -17,5 +17,9 @@
 //	LANGFUSE_PUBLIC_KEY=pk-... LANGFUSE_SECRET_KEY=sk-... go run ./examples/langfuse
 //
 // After it prints "flushed", open your Langfuse project and look for the most
-// recent trace named "run" — it should contain a nested span per agent phase.
+// recent trace named "run" — it should contain a nested span per agent phase,
+// the run input/output, a sanitized state snapshot, and a "generation"
+// observation for the llm_call phase. Set LANGFUSE_REDACT=1 to instead wire a
+// WithRedactor that masks message content and drops the state snapshot before
+// anything leaves the process.
 package main

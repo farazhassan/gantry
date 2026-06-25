@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/farazhassan/gantry"
@@ -82,9 +83,64 @@ func (s *span) RecordEvent(name string, attrs map[string]any) {
 
 func (s *span) End(err error) {
 	end := time.Now()
-	if s.parentID == "" {
-		s.client.enqueue(traceCreateItem(s.traceID, s.name, s.start))
+
+	// Partition attrs: reserved content keys get native treatment (eagerly
+	// marshaled + redacted here, on this goroutine, where state is stable);
+	// everything else stays as metadata exactly as before.
+	var input, output, state, usage json.RawMessage
+	var hasInput, hasOutput, hasState, hasUsage bool
+	obsType := ""
+	var leftover map[string]any // allocated lazily on the first non-reserved attr
+	for k, v := range s.attrs {
+		switch k {
+		case gantry.AttrObservationType:
+			if str, ok := v.(string); ok {
+				obsType = str
+			}
+		case gantry.AttrInput:
+			input, hasInput = s.client.redact(k, v)
+		case gantry.AttrOutput:
+			output, hasOutput = s.client.redact(k, v)
+		case gantry.AttrState:
+			state, hasState = s.client.redact(k, v)
+		case gantry.AttrUsage:
+			usage, hasUsage = s.client.redact(k, v)
+		default:
+			if leftover == nil {
+				leftover = map[string]any{}
+			}
+			leftover[k] = v
+		}
 	}
-	s.client.enqueue(spanCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, s.attrs, err))
+
+	if s.parentID == "" {
+		trace := traceCreateItem(s.traceID, s.name, s.start)
+		if hasInput {
+			trace.Body["input"] = input
+		}
+		if hasOutput {
+			trace.Body["output"] = output
+		}
+		if hasState {
+			trace.Body["metadata"] = map[string]any{"state": state}
+		}
+		s.client.enqueue(trace)
+	}
+
+	if obsType == gantry.ObservationGeneration {
+		var gi, gOut, gu json.RawMessage
+		if hasInput {
+			gi = input
+		}
+		if hasOutput {
+			gOut = output
+		}
+		if hasUsage {
+			gu = usage
+		}
+		s.client.enqueue(generationCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, gi, gOut, gu, leftover, err))
+	} else {
+		s.client.enqueue(spanCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, leftover, err))
+	}
 	s.client.unregister(s.spanID)
 }
