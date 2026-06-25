@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -225,6 +226,65 @@ func TestAdvanceVerifierRejectThenPass(t *testing.T) {
 	}
 	if v.calls != 2 {
 		t.Errorf("verifier called %d times, want 2", v.calls)
+	}
+}
+
+func TestAdvanceRejectInjectsCriticFeedback(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		done(gantry.DoneNoToolCalls, twoStepPlan()),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	v := &flakyVerifier{passOnCall: 1} // reject once, then pass
+	d := NewDriver(runner, NewInMemory(), WithVerifier(v))
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got.Status != TaskDone {
+		t.Fatalf("status = %q, want done", got.Status)
+	}
+	var found gantry.Message
+	for _, m := range got.Working {
+		if m.Role == gantry.RoleSystem && m.Name == CriticAuthor {
+			found = m
+		}
+	}
+	if found.Content == "" {
+		t.Fatalf("no critic feedback message injected into Working: %+v", got.Working)
+	}
+	if !strings.Contains(found.Content, "not yet") {
+		t.Errorf("feedback missing the rejection reason; got %q", found.Content)
+	}
+	if got.ConsecutiveRejections != 0 {
+		t.Errorf("ConsecutiveRejections = %d, want 0 after a successful done", got.ConsecutiveRejections)
+	}
+}
+
+func TestAdvanceRepeatedRejectionCapFails(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		done(gantry.DoneNoToolCalls, twoStepPlan()),
+		done(gantry.DoneNoToolCalls, nil),
+		done(gantry.DoneNoToolCalls, nil),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	v := &flakyVerifier{passOnCall: 999} // always reject
+	d := NewDriver(runner, NewInMemory(), WithVerifier(v))
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got.Status != TaskFailed {
+		t.Errorf("status = %q, want failed after repeated rejections", got.Status)
+	}
+	if got.ConsecutiveRejections != 3 {
+		t.Errorf("ConsecutiveRejections = %d, want 3 (the cap)", got.ConsecutiveRejections)
+	}
+	if runner.calls != 3 {
+		t.Errorf("runner called %d times, want 3 (cap stops the 4th)", runner.calls)
 	}
 }
 

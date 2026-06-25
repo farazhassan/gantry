@@ -62,8 +62,12 @@ type Task struct {
 	Budget    TaskBudget        // cross-run budget
 	Working   []gantry.Message  // task's own working context, separate from the chat transcript
 	Pending   []gantry.ToolCall // unfulfilled ask_user call(s); set only while Status == TaskAwaitingInput
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// ConsecutiveRejections counts critic rejections in the current done cycle.
+	// It is reset to 0 on any non-reject outcome and bounds how many times the
+	// driver will re-prompt after a rejection before failing the task.
+	ConsecutiveRejections int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // TaskRef is the lightweight reference a Session keeps for each task it owns;

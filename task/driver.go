@@ -8,6 +8,12 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
+// maxConsecutiveRejections bounds how many times the driver re-prompts after a
+// verifier rejection before failing the task. The budget still caps absolute
+// spend; this fails faster with a clearer cause when the model cannot satisfy
+// the critic.
+const maxConsecutiveRejections = 3
+
 // Runner is the run seam the driver depends on: run a prepared, non-terminal
 // State to termination. *gantry.Agent satisfies it via Resume. Depending on this
 // behavior (rather than the concrete *Agent) lets driver tests inject a scripted
@@ -110,6 +116,7 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 		// ---- decide ----
 		switch {
 		case isAskSuspension(state):
+			t.ConsecutiveRejections = 0
 			t.Status = TaskAwaitingInput
 			t.Pending = state.PendingToolCalls
 			if err := d.save(ctx, t); err != nil {
@@ -117,22 +124,37 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 			}
 			return t, nil
 		case state.DoneReason == gantry.DoneNoToolCalls:
-			if ok, _ := d.verifier.Verify(ctx, t); ok {
+			ok, reason := d.verifier.Verify(ctx, t)
+			if ok {
 				t.Status = TaskDone
+				t.ConsecutiveRejections = 0
 				if err := d.save(ctx, t); err != nil {
 					return t, err
 				}
 				return t, nil
 			}
-			// Verifier-fail → continue from the working context (no new input).
-			// Dormant under NoopVerifier (always passes), so it cannot spin today.
-			// A real Phase-3 verifier that rejects while the run keeps returning
-			// DoneNoToolCalls with no plan progress would loop until the budget
-			// stops it; that path should grow a no-progress guard when the critic
-			// lands. The next iteration re-seeds from t.Working — see above.
+			// Rejected: feed the critique back as a hidden system message so the
+			// model can address the unmet criteria on the next run, then continue.
+			// The CriticAuthor tag keeps it out of user-facing transcript rendering
+			// (VisibleTranscript) while the model still sees it as a system note.
+			t.Working = append(t.Working, gantry.Message{
+				Role:    gantry.RoleSystem,
+				Name:    CriticAuthor,
+				Content: "Completion rejected: " + reason + "\nAddress the unmet acceptance criteria, then finish.",
+			})
+			t.ConsecutiveRejections++
+			if t.ConsecutiveRejections >= maxConsecutiveRejections {
+				t.Status = TaskFailed // stubborn rejection — fail fast instead of spinning
+				if err := d.save(ctx, t); err != nil {
+					return t, err
+				}
+				return t, nil
+			}
 		case state.DoneReason == gantry.DoneMaxIterations:
 			// Run hit its per-run cap mid-work; continue with another run from the
-			// working context. This is the normal long-running continuation.
+			// working context. This is the normal long-running continuation, and it
+			// counts as progress, so the rejection streak resets.
+			t.ConsecutiveRejections = 0
 		default:
 			t.Status = TaskFailed // budget/guardrail/human-abort/error terminals
 			if err := d.save(ctx, t); err != nil {
