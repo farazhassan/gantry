@@ -314,6 +314,9 @@ func (c *Client) redact(key string, v any) (json.RawMessage, bool) {
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
+		// Log the key (never the value) so a missing input/output/state/usage
+		// pane in Langfuse can be traced back to a marshal failure.
+		log.Printf("langfuse: dropping %q: marshal failed: %v", key, err)
 		return nil, false
 	}
 	return raw, true

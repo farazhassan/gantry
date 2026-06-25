@@ -90,7 +90,7 @@ func (s *span) End(err error) {
 	var input, output, state, usage json.RawMessage
 	var hasInput, hasOutput, hasState, hasUsage bool
 	obsType := ""
-	leftover := map[string]any{}
+	var leftover map[string]any // allocated lazily on the first non-reserved attr
 	for k, v := range s.attrs {
 		switch k {
 		case gantry.AttrObservationType:
@@ -106,6 +106,9 @@ func (s *span) End(err error) {
 		case gantry.AttrUsage:
 			usage, hasUsage = s.client.redact(k, v)
 		default:
+			if leftover == nil {
+				leftover = map[string]any{}
+			}
 			leftover[k] = v
 		}
 	}

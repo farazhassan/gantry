@@ -1,5 +1,7 @@
 package gantry
 
+import "encoding/json"
+
 // Reserved span-attr keys form the contract between the agent and any Tracer
 // that wants to render content natively (e.g. the Langfuse exporter). Generic
 // tracers may ignore them; they are stored like any other attr.
@@ -81,6 +83,26 @@ func cloneMessages(msgs []Message) []Message {
 	return cp
 }
 
+// marshalableMeta returns the entries of m that JSON-marshal cleanly. Meta is a
+// middleware escape hatch that may hold arbitrary, non-marshalable values; this
+// isolates them so one bad entry cannot drop the whole state snapshot when the
+// exporter marshals it.
+func marshalableMeta(m map[string]any) map[string]any {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if _, err := json.Marshal(v); err == nil {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // stateSnapshot builds a sanitized view of s for tracing. It clones Messages
 // and drops Trace and full tool defs. The remaining slices and pointers are
 // stored by reference, which is safe only because tracers marshal the snapshot
@@ -103,6 +125,6 @@ func stateSnapshot(s *State) stateView {
 		DoneReason:       s.DoneReason,
 		FinalOutput:      s.FinalOutput,
 		Usage:            s.Usage,
-		Meta:             s.Meta,
+		Meta:             marshalableMeta(s.Meta),
 	}
 }

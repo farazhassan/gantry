@@ -2,6 +2,7 @@ package gantry
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -131,5 +132,28 @@ func TestStateSnapshotSanitizes(t *testing.T) {
 	v.Messages[0].Content = "mutated"
 	if s.Messages[0].Content != "hi" {
 		t.Fatal("stateSnapshot must clone Messages, not alias them")
+	}
+}
+
+// A non-marshalable Meta entry must not sink the whole snapshot: it is dropped
+// while marshalable entries survive, so the exporter can still marshal AttrState.
+func TestStateSnapshotDropsUnmarshalableMeta(t *testing.T) {
+	s := &State{
+		Input: "go",
+		Meta: map[string]any{
+			"ok":  "value",
+			"bad": make(chan int), // channels are not JSON-marshalable
+		},
+	}
+	v := stateSnapshot(s)
+
+	if _, err := json.Marshal(v); err != nil {
+		t.Fatalf("snapshot must stay marshalable, got: %v", err)
+	}
+	if v.Meta["ok"] != "value" {
+		t.Errorf("marshalable Meta entry dropped: %v", v.Meta)
+	}
+	if _, present := v.Meta["bad"]; present {
+		t.Error("non-marshalable Meta entry should have been dropped")
 	}
 }
