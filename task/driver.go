@@ -14,6 +14,14 @@ import (
 // the critic.
 const maxConsecutiveRejections = 3
 
+// maxTotalRejections bounds rejections across the task's whole life, regardless of
+// max-iteration continuations resetting the consecutive streak. It backstops a
+// model that oscillates between rejected done attempts and continuations: that
+// pattern keeps ConsecutiveRejections at zero, so without this the only stop would
+// be the budget (a vague cause). This fails with the same clear "stubborn
+// rejection" cause as the consecutive cap, just over a wider window.
+const maxTotalRejections = 5
+
 // Runner is the run seam the driver depends on: run a prepared, non-terminal
 // State to termination. *gantry.Agent satisfies it via Resume. Depending on this
 // behavior (rather than the concrete *Agent) lets driver tests inject a scripted
@@ -143,7 +151,8 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 				Content: "Completion rejected: " + reason + "\nAddress the unmet acceptance criteria, then finish.",
 			})
 			t.ConsecutiveRejections++
-			if t.ConsecutiveRejections >= maxConsecutiveRejections {
+			t.TotalRejections++
+			if t.ConsecutiveRejections >= maxConsecutiveRejections || t.TotalRejections >= maxTotalRejections {
 				t.Status = TaskFailed // stubborn rejection — fail fast instead of spinning
 				if err := d.save(ctx, t); err != nil {
 					return t, err

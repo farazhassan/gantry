@@ -66,8 +66,14 @@ type Task struct {
 	// It is reset to 0 on any non-reject outcome and bounds how many times the
 	// driver will re-prompt after a rejection before failing the task.
 	ConsecutiveRejections int
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// TotalRejections counts critic rejections across the task's whole life. Unlike
+	// ConsecutiveRejections it is never reset, so it catches a model that oscillates
+	// between rejected done attempts and max-iteration continuations (which would
+	// otherwise keep the consecutive streak at zero and only ever be stopped by the
+	// budget). It bounds total rejections at a higher cap than the consecutive one.
+	TotalRejections int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // TaskRef is the lightweight reference a Session keeps for each task it owns;

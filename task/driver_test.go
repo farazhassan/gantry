@@ -288,6 +288,47 @@ func TestAdvanceRepeatedRejectionCapFails(t *testing.T) {
 	}
 }
 
+// TestAdvanceOscillatingRejectionCapFails covers a model that alternates a
+// rejected done attempt with a max-iteration continuation. Each continuation
+// resets ConsecutiveRejections, so the consecutive cap never fires; the
+// TotalRejections cap is the backstop that stops the spin (instead of leaving it
+// to the budget).
+func TestAdvanceOscillatingRejectionCapFails(t *testing.T) {
+	// reject, continue, reject, continue, ... until the total-rejection cap fires.
+	var steps []func(*gantry.State) *gantry.State
+	for i := 0; i < maxTotalRejections; i++ {
+		steps = append(steps,
+			done(gantry.DoneNoToolCalls, nil),   // rejected done attempt
+			done(gantry.DoneMaxIterations, nil), // continuation resets the streak
+		)
+	}
+	steps[0] = done(gantry.DoneNoToolCalls, twoStepPlan()) // seed a plan on the first run
+	runner := &scriptedRunner{steps: steps}
+	v := &flakyVerifier{passOnCall: 999} // always reject
+	d := NewDriver(runner, NewInMemory(), WithVerifier(v))
+	tk := &Task{ID: "tk-1", Status: TaskPending} // unlimited budget — only the cap can stop it
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got.Status != TaskFailed {
+		t.Errorf("status = %q, want failed via the total-rejection cap", got.Status)
+	}
+	if got.TotalRejections != maxTotalRejections {
+		t.Errorf("TotalRejections = %d, want %d (the total cap)", got.TotalRejections, maxTotalRejections)
+	}
+	if got.ConsecutiveRejections >= maxConsecutiveRejections {
+		t.Errorf("ConsecutiveRejections = %d, want < %d (continuations kept resetting it)", got.ConsecutiveRejections, maxConsecutiveRejections)
+	}
+	// One reject + one continuation per cycle, minus the trailing continuation that
+	// never runs because the final reject trips the cap.
+	wantCalls := maxTotalRejections*2 - 1
+	if runner.calls != wantCalls {
+		t.Errorf("runner called %d times, want %d", runner.calls, wantCalls)
+	}
+}
+
 type flakyVerifier struct {
 	calls      int
 	passOnCall int
