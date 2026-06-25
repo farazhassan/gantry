@@ -82,7 +82,10 @@ func cloneMessages(msgs []Message) []Message {
 }
 
 // stateSnapshot builds a sanitized view of s for tracing. It clones Messages
-// and drops Trace and full tool defs.
+// and drops Trace and full tool defs. The remaining slices and pointers are
+// stored by reference, which is safe only because tracers marshal the snapshot
+// eagerly in Span.End on the agent goroutine; deferring that marshal would race
+// with ongoing state mutation.
 func stateSnapshot(s *State) stateView {
 	return stateView{
 		Input:            s.Input,
