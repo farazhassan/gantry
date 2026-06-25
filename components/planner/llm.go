@@ -37,7 +37,8 @@ func (p *LLMPlanner) Plan(ctx context.Context, task string) (*gantry.Plan, error
 		if line == "" {
 			continue
 		}
-		plan.Steps = append(plan.Steps, gantry.PlanStep{Description: line})
+		desc, criteria := splitCriteria(line)
+		plan.Steps = append(plan.Steps, gantry.PlanStep{Description: desc, AcceptanceCriteria: criteria})
 	}
 	return plan, nil
 }
@@ -56,4 +57,14 @@ func stripListMarker(line string) string {
 		return strings.TrimSpace(line[i+1:])
 	}
 	return line
+}
+
+// splitCriteria splits a plan line on the first " :: " into a description and
+// its acceptance criteria. A line without the delimiter yields the whole line
+// as the description and empty criteria (backward compatible).
+func splitCriteria(line string) (desc, criteria string) {
+	if d, c, ok := strings.Cut(line, " :: "); ok {
+		return strings.TrimSpace(d), strings.TrimSpace(c)
+	}
+	return line, ""
 }
