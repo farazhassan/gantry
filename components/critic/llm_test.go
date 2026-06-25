@@ -87,3 +87,24 @@ func TestLLMCriticNoPlanLeavesPromptUnchanged(t *testing.T) {
 		t.Errorf("user message = %q, want exactly %q (unchanged)", user, "the work")
 	}
 }
+
+func TestLLMCriticPlanWithoutCriteriaLeavesPromptUnchanged(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "PASS"})
+	c := critic.NewLLM(mock, "Reply PASS or FAIL.")
+
+	// A plan with steps but no AcceptanceCriteria must not alter the prompt.
+	state := &gantry.State{
+		LastResponse: &gantry.LLMResponse{Content: "the work"},
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+			{Description: "design"},
+			{Description: "build"},
+		}},
+	}
+	if _, err := c.Critique(context.Background(), state); err != nil {
+		t.Fatalf("Critique: %v", err)
+	}
+	user := mock.Requests()[0].Messages[0].Content
+	if user != "the work" {
+		t.Errorf("user message = %q, want exactly %q (unchanged)", user, "the work")
+	}
+}

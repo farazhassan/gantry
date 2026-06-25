@@ -24,7 +24,7 @@ func NewCriticVerifier(c critic.Critic) Verifier { return criticVerifier{c: c} }
 // completes.
 func (v criticVerifier) Verify(ctx context.Context, t *Task) (bool, string) {
 	state := &gantry.State{
-		Messages:     t.Working,
+		Messages:     cloneMessages(t.Working), // defensive: a critic must not mutate the ledger
 		Plan:         t.Plan,
 		LastResponse: lastAssistant(t.Working), // MUST be set; nil -> critic auto-passes
 		Meta:         map[string]any{},

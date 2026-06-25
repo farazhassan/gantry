@@ -62,5 +62,5 @@ func renderCriteria(plan *gantry.Plan) string {
 		b.WriteString(s.AcceptanceCriteria)
 		b.WriteString("\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimSuffix(b.String(), "\n")
 }

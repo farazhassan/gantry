@@ -71,6 +71,18 @@ func TestCriticVerifierErrorIsSoftReject(t *testing.T) {
 	}
 }
 
+func TestCriticVerifierNoAssistantMessageLeavesLastResponseNil(t *testing.T) {
+	// With no assistant message in Working, LastResponse must be nil so the
+	// critic's auto-pass guard fires rather than the adapter fabricating one.
+	sc := &stubCritic{verdict: critic.Verdict{Accept: true}}
+	v := NewCriticVerifier(sc)
+	tk := &Task{Working: []gantry.Message{{Role: gantry.RoleUser, Content: "do it"}}}
+
+	if _, _ = v.Verify(context.Background(), tk); sc.gotLast != nil {
+		t.Errorf("LastResponse = %+v, want nil when no assistant message exists", sc.gotLast)
+	}
+}
+
 func TestCriticVerifierIsVerifier(t *testing.T) {
 	var _ Verifier = NewCriticVerifier(&stubCritic{})
 }
