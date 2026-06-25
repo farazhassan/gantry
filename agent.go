@@ -344,6 +344,20 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 	handler := Compose(inner, mws)
 	err := handler(ctx, state)
 
+	if phase == PhaseLLMCall && state.LastResponse != nil {
+		span.SetAttr(AttrObservationType, ObservationGeneration)
+		span.SetAttr(AttrInput, genInput{
+			System:   state.System,
+			Messages: cloneMessages(state.Messages),
+			Tools:    toolRefs(state.Tools),
+		})
+		span.SetAttr(AttrOutput, genOutput{
+			Content:   state.LastResponse.Content,
+			ToolCalls: state.LastResponse.ToolCalls,
+		})
+		span.SetAttr(AttrUsage, state.LastResponse.Usage)
+	}
+
 	if state.Done {
 		span.SetAttr("done", true)
 		span.SetAttr("done_reason", string(state.DoneReason))

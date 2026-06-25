@@ -76,6 +76,40 @@ func TestRunSpanCapturesInputOutputState(t *testing.T) {
 	}
 }
 
+func TestLLMCallSpanCapturesGeneration(t *testing.T) {
+	llm := stubLLM{resp: LLMResponse{
+		Content: "the answer",
+		Usage:   Usage{InputTokens: 7, OutputTokens: 5},
+	}}
+	a, err := NewAgent(WithLLM(llm))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	state, err := a.Run(context.Background(), "the question")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	gen := findSpanEnd(t, state.Trace, "phase:llm_call")
+	if gen.Attrs[AttrObservationType] != ObservationGeneration {
+		t.Fatalf("observation type = %v, want %q", gen.Attrs[AttrObservationType], ObservationGeneration)
+	}
+	in, ok := gen.Attrs[AttrInput].(genInput)
+	if !ok {
+		t.Fatalf("llm_call input = %T, want genInput", gen.Attrs[AttrInput])
+	}
+	if len(in.Messages) == 0 || in.Messages[0].Content != "the question" {
+		t.Fatalf("generation input messages = %v, want the seeded user message", in.Messages)
+	}
+	out, ok := gen.Attrs[AttrOutput].(genOutput)
+	if !ok || out.Content != "the answer" {
+		t.Fatalf("generation output = %v, want content 'the answer'", gen.Attrs[AttrOutput])
+	}
+	if u, ok := gen.Attrs[AttrUsage].(Usage); !ok || u.OutputTokens != 5 {
+		t.Fatalf("generation usage = %v, want OutputTokens=5", gen.Attrs[AttrUsage])
+	}
+}
+
 func TestStateSnapshotSanitizes(t *testing.T) {
 	s := &State{
 		Input:    "do the thing",
