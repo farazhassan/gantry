@@ -3,6 +3,7 @@ package langfuse
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"time"
 )
 
@@ -71,6 +72,41 @@ func spanCreateItem(traceID, spanID, parentID, name string, start, end time.Time
 	return ingestionItem{
 		ID:        newID(),
 		Type:      "span-create",
+		Timestamp: nowStamp(),
+		Body:      body,
+	}
+}
+
+func generationCreateItem(traceID, spanID, parentID, name string, start, end time.Time, input, output, usage json.RawMessage, attrs map[string]any, err error) ingestionItem {
+	body := map[string]any{
+		"id":        spanID,
+		"traceId":   traceID,
+		"name":      name,
+		"startTime": start.UTC().Format(timeFormat),
+		"endTime":   end.UTC().Format(timeFormat),
+	}
+	if parentID != "" {
+		body["parentObservationId"] = parentID
+	}
+	if input != nil {
+		body["input"] = input
+	}
+	if output != nil {
+		body["output"] = output
+	}
+	if usage != nil {
+		body["usage"] = usage
+	}
+	if len(attrs) > 0 {
+		body["metadata"] = attrs
+	}
+	if err != nil {
+		body["level"] = "ERROR"
+		body["statusMessage"] = err.Error()
+	}
+	return ingestionItem{
+		ID:        newID(),
+		Type:      "generation-create",
 		Timestamp: nowStamp(),
 		Body:      body,
 	}
