@@ -1,6 +1,7 @@
 package gantry
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -29,6 +30,49 @@ func TestCloneMessagesIsIndependent(t *testing.T) {
 	}
 	if cloneMessages(nil) != nil {
 		t.Fatal("cloneMessages(nil) must be nil")
+	}
+}
+
+// stubLLM returns a fixed response with no tool calls so the run finishes in
+// one iteration.
+type stubLLM struct{ resp LLMResponse }
+
+func (s stubLLM) Generate(ctx context.Context, req LLMRequest) (LLMResponse, error) {
+	return s.resp, nil
+}
+
+// findSpanEnd returns the KindSpanEnd event for the named span.
+func findSpanEnd(t *testing.T, tr *Trace, name string) TraceEvent {
+	t.Helper()
+	for _, ev := range tr.Snapshot() {
+		if ev.Name == name && ev.Kind == KindSpanEnd {
+			return ev
+		}
+	}
+	t.Fatalf("no span-end event named %q", name)
+	return TraceEvent{}
+}
+
+func TestRunSpanCapturesInputOutputState(t *testing.T) {
+	llm := stubLLM{resp: LLMResponse{Content: "the answer"}}
+	a, err := NewAgent(WithLLM(llm))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	state, err := a.Run(context.Background(), "the question")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	run := findSpanEnd(t, state.Trace, "run")
+	if run.Attrs[AttrInput] != "the question" {
+		t.Fatalf("run input = %v, want 'the question'", run.Attrs[AttrInput])
+	}
+	if run.Attrs[AttrOutput] != "the answer" {
+		t.Fatalf("run output = %v, want 'the answer'", run.Attrs[AttrOutput])
+	}
+	if _, ok := run.Attrs[AttrState].(stateView); !ok {
+		t.Fatalf("run state attr = %T, want stateView", run.Attrs[AttrState])
 	}
 }
 

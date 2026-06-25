@@ -256,7 +256,12 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// that export to external systems (e.g. Langfuse) can then group an entire
 	// run as one trace. The span ends with the run's terminal error.
 	ctx, runSpan := tracer.StartSpan(ctx, "run")
-	defer func() { runSpan.End(retErr) }()
+	runSpan.SetAttr(AttrInput, state.Input)
+	defer func() {
+		runSpan.SetAttr(AttrOutput, state.FinalOutput)
+		runSpan.SetAttr(AttrState, stateSnapshot(state))
+		runSpan.End(retErr)
+	}()
 
 	// Tool advertisements are per-run scratch that PhaseStart middleware rebuilds
 	// (e.g. components/tool register_defs and the client-tools advertise both
