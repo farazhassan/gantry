@@ -35,6 +35,7 @@ type Client struct {
 	httpc     *http.Client
 	batchSize int
 	interval  time.Duration
+	redactor  Redactor
 
 	items   chan ingestionItem
 	flushCh chan chan error
@@ -148,6 +149,21 @@ func WithFlushInterval(d time.Duration) Option {
 	return func(c *Client) {
 		if d > 0 {
 			c.interval = d
+		}
+	}
+}
+
+// Redactor inspects a reserved content attr (input/output/state/usage) before
+// export. Return keep=false to drop the key entirely, or a replacement value to
+// rewrite it (e.g. mask message content, truncate a large blob). A nil Redactor
+// exports values unchanged.
+type Redactor func(key string, value any) (newValue any, keep bool)
+
+// WithRedactor installs a Redactor. A nil function is ignored.
+func WithRedactor(r Redactor) Option {
+	return func(c *Client) {
+		if r != nil {
+			c.redactor = r
 		}
 	}
 }
@@ -282,4 +298,23 @@ func (c *Client) send(items []ingestionItem) {
 		log.Printf("langfuse: ingestion returned status %d", resp.StatusCode)
 		c.sendErrs.Add(1)
 	}
+}
+
+// redact applies the configured redactor (if any) to a reserved content value,
+// then JSON-marshals the result. It returns keep=false when the redactor drops
+// the key or marshaling fails. Marshaling happens here — on the caller's
+// goroutine in span.End — so the async flush worker never reads mutating state.
+func (c *Client) redact(key string, v any) (json.RawMessage, bool) {
+	if c.redactor != nil {
+		nv, keep := c.redactor(key, v)
+		if !keep {
+			return nil, false
+		}
+		v = nv
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
 }
