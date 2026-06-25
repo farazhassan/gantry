@@ -86,8 +86,10 @@ type TaskRef struct {
 }
 
 // SessionMeta is the session-side link to its tasks: an ordered, append-only
-// history of refs plus the id of the single active task ("" when none).
+// history of refs, the id of the single active task ("" when none), and the
+// FIFO ids of tasks waiting to run.
 type SessionMeta struct {
-	TaskRefs     []TaskRef
-	ActiveTaskID string
+	TaskRefs     []TaskRef // append-only history (all tasks ever created)
+	ActiveTaskID string    // the running/suspended task; "" when none
+	Queue        []string  // pending task ids, FIFO; head runs next
 }
