@@ -247,3 +247,68 @@ func TestDispatcherErrorHandlerFiresAndLoopContinues(t *testing.T) {
 		return err == nil && tk.Status == task.TaskDone
 	})
 }
+
+// blockingRunner signals when it has entered Resume, then blocks until the
+// context is cancelled, returning the context error.
+type blockingRunner struct {
+	entered chan struct{}
+}
+
+func (r *blockingRunner) Resume(ctx context.Context, _ *gantry.State) (*gantry.State, error) {
+	close(r.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDispatcherStopCancelsInFlightDrive(t *testing.T) {
+	r := &blockingRunner{entered: make(chan struct{})}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "blocks forever")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(ctx)
+
+	// Wait until the drive is actually running and blocked.
+	select {
+	case <-r.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drive never started")
+	}
+
+	// Stop must cancel the blocked drive and return.
+	stopped := make(chan struct{})
+	go func() { d.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return; in-flight drive was not cancelled")
+	}
+}
+
+func TestDispatcherCtxCancelStopsLoop(t *testing.T) {
+	r := &blockingRunner{entered: make(chan struct{})}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "blocks forever")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(ctx)
+
+	select {
+	case <-r.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drive never started")
+	}
+
+	cancel() // cancelling the Start ctx must unwind the loop
+
+	// Stop should now return promptly (loop already exiting/exited).
+	stopped := make(chan struct{})
+	go func() { d.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after ctx cancellation")
+	}
+}
