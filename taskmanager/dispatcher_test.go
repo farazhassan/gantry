@@ -349,3 +349,45 @@ func TestDispatcherSkipsUndrivableSessionAndContinues(t *testing.T) {
 		t.Errorf("errHandler fired %d times for an undrivable session, want 0 (Decision H is not an error)", errCount)
 	}
 }
+
+func TestDispatcherDoubleStartPanics(t *testing.T) {
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(context.Background())
+	defer d.Stop()
+
+	defer func() {
+		if recover() == nil {
+			t.Errorf("second Start did not panic")
+		}
+	}()
+	d.Start(context.Background())
+}
+
+func TestDispatcherStopIsIdempotent(t *testing.T) {
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(context.Background())
+	d.Stop()
+	// Second Stop must not panic or block.
+	done := make(chan struct{})
+	go func() { d.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Stop blocked")
+	}
+}
+
+func TestDispatcherStopBeforeStartIsNoOp(t *testing.T) {
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	// Stop without Start must return immediately without panicking.
+	done := make(chan struct{})
+	go func() { d.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop before Start blocked")
+	}
+}
