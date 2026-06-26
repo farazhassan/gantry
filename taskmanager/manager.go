@@ -200,6 +200,46 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 	return m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 }
 
+// RunNextReady dequeues one ready session (spawned cross-session work) and drives
+// its active task to suspension or terminal via the existing drive engine. It
+// returns (task, true, nil) for a driven session; (nil, false, nil) when the
+// ready queue is empty; (nil, true, nil) when the dequeued session has nothing
+// drivable (empty ActiveTaskID or an already-terminal active task — Decision H).
+//
+// The caller composes this: loop for a sequential drain, or call from N
+// goroutines for parallel drive (each dequeue yields a distinct session id ->
+// distinct per-session lock, so goroutines never contend).
+func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error) {
+	sid, ok, err := m.ready.Dequeue(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil // empty queue
+	}
+
+	lk := m.lockFor(sid)
+	lk.Lock()
+	defer lk.Unlock()
+
+	sm, err := m.loadOrFreshMeta(ctx, sid)
+	if err != nil {
+		return nil, true, err // session was real; couldn't load its meta
+	}
+	if sm.ActiveTaskID == "" {
+		return nil, true, nil // Decision H: nothing to do
+	}
+	t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		return nil, true, err
+	}
+	if t.Status.IsTerminal() {
+		return nil, true, nil // Decision H: already finished
+	}
+	driven, err := m.drive(ctx, sid, sm, t, t.Goal)
+	return driven, true, err
+}
+
 // drive advances the active task and, when it terminates, drains the pending
 // FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
 // own goal. It returns when a task suspends (awaiting_input) or the queue is

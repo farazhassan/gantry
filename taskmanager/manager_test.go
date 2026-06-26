@@ -702,3 +702,210 @@ func TestSpawnSessionEnqueuesButDoesNotDrive(t *testing.T) {
 		t.Errorf("task status = %v, want TaskPending (not yet driven)", st.Status)
 	}
 }
+
+func TestRunNextReadyDrivesSpawnedSession(t *testing.T) {
+	// Parent spawns a session and completes; RunNextReady then drives it to done.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "spawned work"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),  // task-1: spawns session, completes
+			complete("spawned done"), // task-2: the spawned session's task
+		},
+	}
+	tm, tasks, meta, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent goal"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if !ok {
+		t.Fatalf("RunNextReady ok = false, want true (a session was ready)")
+	}
+	if driven == nil || driven.Status != task.TaskDone {
+		t.Fatalf("driven = %+v, want a TaskDone task", driven)
+	}
+	if driven.Goal != "spawned work" {
+		t.Errorf("driven goal = %q, want spawned work", driven.Goal)
+	}
+	sm, _ := meta.LoadMeta(ctx, "sess-1")
+	if sm.ActiveTaskID != "" || len(sm.Queue) != 0 {
+		t.Errorf("spawned session not drained: active=%q queue=%v", sm.ActiveTaskID, sm.Queue)
+	}
+	st, _ := tasks.LoadTask(ctx, "task-2")
+	if st.Status != task.TaskDone {
+		t.Errorf("spawned task status = %v, want TaskDone", st.Status)
+	}
+}
+
+func TestRunNextReadyEmptyQueue(t *testing.T) {
+	r := &spawningRunner{tool: NewCreateTaskTool(), sessionTool: NewSpawnSessionTool(),
+		steps: []func(*gantry.State) *gantry.State{complete("done")}}
+	tm, _, _, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if ok || driven != nil {
+		t.Errorf("empty queue = (%+v, %v), want (nil, false)", driven, ok)
+	}
+}
+
+func TestRunNextReadyFIFOTwoSessions(t *testing.T) {
+	// Parent spawns two sessions; two RunNextReady calls drive them FIFO; a third
+	// returns (nil, false, nil).
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "first"}, {goal: "second"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"), // task-1
+			complete("first done"),  // task-2 (sess-1)
+			complete("second done"), // task-3 (sess-2)
+		},
+	}
+	tm, _, _, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	d1, ok1, _ := tm.RunNextReady(ctx)
+	d2, ok2, _ := tm.RunNextReady(ctx)
+	if !ok1 || !ok2 {
+		t.Fatalf("ok1=%v ok2=%v, want both true", ok1, ok2)
+	}
+	if d1.Goal != "first" || d2.Goal != "second" {
+		t.Errorf("drive order = (%q,%q), want (first, second) FIFO", d1.Goal, d2.Goal)
+	}
+	if d3, ok3, _ := tm.RunNextReady(ctx); ok3 || d3 != nil {
+		t.Errorf("third RunNextReady = (%+v, %v), want (nil, false)", d3, ok3)
+	}
+}
+
+func TestRunNextReadySkipsUndrivableSession(t *testing.T) {
+	// Manually enqueue a session whose meta has an empty ActiveTaskID:
+	// RunNextReady must skip-and-continue, returning (nil, true, nil).
+	r := &spawningRunner{tool: NewCreateTaskTool(), sessionTool: NewSpawnSessionTool(),
+		steps: []func(*gantry.State) *gantry.State{complete("done")}}
+	tm, _, meta, ready := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if err := meta.SaveMeta(ctx, "ghost", &task.SessionMeta{}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, "ghost"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if !ok {
+		t.Errorf("ok = false, want true (a session was dequeued)")
+	}
+	if driven != nil {
+		t.Errorf("driven = %+v, want nil (nothing to do)", driven)
+	}
+}
+
+func TestMixedSpawnsIndependent(t *testing.T) {
+	// Parent calls BOTH create_task (same session) and spawn_session (new session).
+	// The same-session child drains inline; the new-session child runs only via
+	// RunNextReady.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		spawnReqs:   []spawnReq{{goal: "same-child"}},
+		sessionReqs: []spawnReq{{goal: "new-child"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),     // task-1: spawns both
+			complete("same-child done"), // task-2: same-session child (drains inline)
+			complete("new-child done"),  // task-3: new-session child (via RunNextReady)
+		},
+	}
+	tm, tasks, meta, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	same, _ := tasks.LoadTask(ctx, "task-2")
+	if same.Goal != "same-child" || same.Status != task.TaskDone {
+		t.Errorf("same-session child = (%q,%v), want (same-child, TaskDone)", same.Goal, same.Status)
+	}
+	pm, _ := meta.LoadMeta(ctx, "s1")
+	if pm.ActiveTaskID != "" || len(pm.Queue) != 0 {
+		t.Errorf("parent session not drained: active=%q queue=%v", pm.ActiveTaskID, pm.Queue)
+	}
+	driven, ok, _ := tm.RunNextReady(ctx)
+	if !ok || driven == nil || driven.Goal != "new-child" || driven.Status != task.TaskDone {
+		t.Errorf("RunNextReady = (%+v, %v), want new-child TaskDone", driven, ok)
+	}
+}
+
+func TestSpawnedSessionSpawnsAgain(t *testing.T) {
+	// A ready-driven session that itself calls spawn_session enqueues a further
+	// new session, drivable by another RunNextReady.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "child"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),     // task-1: spawns child session
+			complete("child done"),      // task-2 (sess-1): spawns grandchild then done
+			complete("grandchild done"), // task-3 (sess-2)
+		},
+	}
+	tm, _, _, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	// Arrange the child's run to spawn a grandchild.
+	r.sessionReqs = []spawnReq{{goal: "grandchild"}}
+
+	c, ok, _ := tm.RunNextReady(ctx) // drives sess-1 (child), which spawns sess-2
+	if !ok || c.Goal != "child" || c.Status != task.TaskDone {
+		t.Fatalf("child drive = (%+v, %v), want child TaskDone", c, ok)
+	}
+	g, ok, _ := tm.RunNextReady(ctx) // drives sess-2 (grandchild)
+	if !ok || g.Goal != "grandchild" || g.Status != task.TaskDone {
+		t.Errorf("grandchild drive = (%+v, %v), want grandchild TaskDone", g, ok)
+	}
+}
+
+func TestErroredParentDiscardsSessionSpawns(t *testing.T) {
+	// A TaskFailed (non-error) parent still flushes its buffered spawns, because
+	// spawns drain BEFORE the terminal branch and the runner's fail() sets
+	// DoneError (mapped to TaskFailed) rather than returning a Go error. This
+	// documents the achievable behavior; true Advance-error discard (Decision G)
+	// is the shared `if err != nil { return t, err }` guard in drive, already
+	// exercised by 4a/4b (drive returns before enqueueSpawns).
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "should-still-flush"}},
+		steps:       []func(*gantry.State) *gantry.State{fail()},
+	}
+	tm, _, _, ready := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, ok, _ := ready.Dequeue(ctx); !ok {
+		t.Errorf("ready queue empty; a TaskFailed (non-error) parent still flushes spawns")
+	}
+}
