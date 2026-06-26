@@ -312,3 +312,40 @@ func TestDispatcherCtxCancelStopsLoop(t *testing.T) {
 		t.Fatal("Stop did not return after ctx cancellation")
 	}
 }
+
+func TestDispatcherSkipsUndrivableSessionAndContinues(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+
+	var errCount int
+	var mu sync.Mutex
+
+	// First enqueue an undrivable session: meta with empty ActiveTaskID.
+	if err := meta.SaveMeta(ctx, "empty", &task.SessionMeta{}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, "empty"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// Then a real drivable session behind it.
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "real work")
+
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithErrorHandler(func(error) { mu.Lock(); errCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// The drivable session still completes (loop continued past the empty one).
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-1")
+		return err == nil && tk.Status == task.TaskDone
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if errCount != 0 {
+		t.Errorf("errHandler fired %d times for an undrivable session, want 0 (Decision H is not an error)", errCount)
+	}
+}
