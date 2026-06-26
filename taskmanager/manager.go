@@ -21,10 +21,12 @@ var ErrNoTaskAwaitingInput = errors.New("taskmanager: no task awaiting input")
 // through the task.Driver. Operations on the same session id are serialized;
 // different session ids proceed concurrently.
 type TaskManager struct {
-	driver *task.Driver
-	tasks  task.TaskStore
-	meta   MetaStore
-	newID  func() string
+	driver       *task.Driver
+	tasks        task.TaskStore
+	meta         MetaStore
+	ready        ReadyQueue
+	newID        func() string
+	newSessionID func() string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -38,18 +40,27 @@ func WithIDFunc(f func() string) Option {
 	return func(m *TaskManager) { m.newID = f }
 }
 
+// WithSessionIDFunc overrides the session-id minter used when spawning new
+// sessions (tests use a deterministic one).
+func WithSessionIDFunc(f func() string) Option {
+	return func(m *TaskManager) { m.newSessionID = f }
+}
+
 // NewTaskManager builds a TaskManager over a Driver, the same TaskStore the
-// Driver persists through, and a MetaStore. It panics if any is nil.
-func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, opts ...Option) *TaskManager {
-	if driver == nil || tasks == nil || meta == nil {
-		panic("taskmanager: NewTaskManager requires non-nil driver, tasks, and meta")
+// Driver persists through, a MetaStore, and a ReadyQueue for cross-session
+// spawned work. It panics if any is nil.
+func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, ready ReadyQueue, opts ...Option) *TaskManager {
+	if driver == nil || tasks == nil || meta == nil || ready == nil {
+		panic("taskmanager: NewTaskManager requires non-nil driver, tasks, meta, and ready")
 	}
 	m := &TaskManager{
-		driver: driver,
-		tasks:  tasks,
-		meta:   meta,
-		newID:  newTaskID,
-		locks:  make(map[string]*sync.Mutex),
+		driver:       driver,
+		tasks:        tasks,
+		meta:         meta,
+		ready:        ready,
+		newID:        newTaskID,
+		newSessionID: newSessionID,
+		locks:        make(map[string]*sync.Mutex),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -65,6 +76,16 @@ func newTaskID() string {
 		return fmt.Sprintf("task-%d", time.Now().UnixNano())
 	}
 	return "task-" + hex.EncodeToString(b[:])
+}
+
+// newSessionID mints a random session id for a spawned new session. Falls back
+// to a timestamp if the entropy source fails (never expected in practice).
+func newSessionID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("sess-%d", time.Now().UnixNano())
+	}
+	return "sess-" + hex.EncodeToString(b[:])
 }
 
 // lockFor returns a stable per-session mutex, created on first use. Different

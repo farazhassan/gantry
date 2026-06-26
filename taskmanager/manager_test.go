@@ -62,7 +62,7 @@ func newManager(r *scriptedRunner) (*TaskManager, task.TaskStore, MetaStore) {
 	driver := task.NewDriver(r, tasks)
 	meta := NewInMemoryMetaStore()
 	n := 0
-	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
 		n++
 		return "task-" + string(rune('0'+n))
 	}))
@@ -318,7 +318,7 @@ func TestDifferentSessionsProceedConcurrently(t *testing.T) {
 	meta := NewInMemoryMetaStore()
 	var idMu sync.Mutex
 	idN := 0
-	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
 		idMu.Lock()
 		defer idMu.Unlock()
 		idN++
@@ -371,7 +371,7 @@ func TestSameSessionStartsSerialize(t *testing.T) {
 	meta := NewInMemoryMetaStore()
 	var idMu sync.Mutex
 	idN := 0
-	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
 		idMu.Lock()
 		defer idMu.Unlock()
 		idN++
@@ -457,7 +457,7 @@ func newSpawningManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaSt
 	driver := task.NewDriver(r, tasks)
 	meta := NewInMemoryMetaStore()
 	n := 0
-	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
 		n++
 		return "task-" + string(rune('0'+n))
 	}))
