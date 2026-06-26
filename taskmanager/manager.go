@@ -138,26 +138,79 @@ func (m *TaskManager) StartTask(ctx context.Context, sessionID, goal string) (*t
 	return t, nil
 }
 
-// drive advances the active task to a terminal or suspended state. (Queue
-// draining is added in Task 4.) sm is the already-loaded SessionMeta.
-func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
-	t, err := m.driver.Advance(ctx, t, input)
+// ResumeTask supplies input to the session's active awaiting_input task, drives
+// it onward, and drains the queue if it completes. Returns ErrNoTaskAwaitingInput
+// if there is no active task or it is not awaiting input.
+func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (*task.Task, error) {
+	lk := m.lockFor(sessionID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
-		return t, err
+		return nil, err
 	}
-	syncRef(sm, t)
-	if t.Status == task.TaskAwaitingInput {
-		if err := m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+	if sm.ActiveTaskID == "" {
+		return nil, ErrNoTaskAwaitingInput
+	}
+	t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != task.TaskAwaitingInput {
+		return nil, ErrNoTaskAwaitingInput
+	}
+	return m.drive(ctx, sessionID, sm, t, input)
+}
+
+// drive advances the active task and, when it terminates, drains the pending
+// FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
+// own goal. It returns when a task suspends (awaiting_input) or the queue is
+// empty. A queued task that fails is recorded and the drain continues to the
+// next (Decision D). sm is the already-loaded SessionMeta.
+//
+// input is the goal seed only for the first Advance of a freshly-activated task;
+// on resume it is the user's answer. Driver.Advance distinguishes these.
+func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
+	var err error
+	for {
+		t, err = m.driver.Advance(ctx, t, input)
+		if err != nil {
 			return t, err
 		}
-		return t, nil
+		syncRef(sm, t)
+
+		if t.Status == task.TaskAwaitingInput {
+			if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+				return t, err
+			}
+			return t, nil // suspended — caller resumes later
+		}
+
+		// terminal: done/failed/cancelled
+		sm.ActiveTaskID = ""
+		if len(sm.Queue) == 0 {
+			if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+				return t, err
+			}
+			return t, nil
+		}
+
+		next := sm.Queue[0]
+		sm.Queue = sm.Queue[1:]
+		sm.ActiveTaskID = next
+		if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+			return t, err
+		}
+
+		var nt *task.Task
+		nt, err = m.tasks.LoadTask(ctx, next)
+		if err != nil {
+			return t, err
+		}
+		t = nt
+		input = nt.Goal // queued task runs from its own goal
 	}
-	// terminal: done/failed/cancelled
-	sm.ActiveTaskID = ""
-	if err := m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
-		return t, err
-	}
-	return t, nil
 }
 
 // syncRef updates the matching TaskRef.Status in sm.TaskRefs so the history

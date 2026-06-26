@@ -2,6 +2,7 @@ package taskmanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -118,5 +119,127 @@ func TestStartTaskWhileActiveEnqueuesPending(t *testing.T) {
 	}
 	if len(m.Queue) != 1 || m.Queue[0] != second.ID {
 		t.Errorf("Queue = %v, want [%q]", m.Queue, second.ID)
+	}
+}
+
+func TestResumeTaskFinishesActiveThenDrainsQueue(t *testing.T) {
+	// t1: suspend on first run, complete on resume. t2: complete on its run.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 run 1 -> awaiting_input
+		complete("t1 done"), // t1 resume -> done
+		complete("t2 done"), // t2 run -> done
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	first, _ := tm.StartTask(ctx, "s1", "first")
+	second, _ := tm.StartTask(ctx, "s1", "second")
+	if first.Status != task.TaskAwaitingInput || second.Status != task.TaskPending {
+		t.Fatalf("setup: first=%v second=%v", first.Status, second.Status)
+	}
+
+	resumed, err := tm.ResumeTask(ctx, "s1", "here is my answer")
+	if err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	// ResumeTask returns the last task driven by the drain: the second task.
+	if resumed.ID != second.ID || resumed.Status != task.TaskDone {
+		t.Errorf("resumed = (%q,%v), want (%q,TaskDone)", resumed.ID, resumed.Status, second.ID)
+	}
+	// Both tasks ended done.
+	t1, _ := tasks.LoadTask(ctx, first.ID)
+	if t1.Status != task.TaskDone {
+		t.Errorf("t1 status = %v, want TaskDone", t1.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestResumeTaskNothingAwaiting(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{complete("done")}}
+	tm, _, _ := newManager(r)
+	ctx := context.Background()
+
+	// No task at all.
+	if _, err := tm.ResumeTask(ctx, "s1", "x"); !errors.Is(err, ErrNoTaskAwaitingInput) {
+		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (no task)", err)
+	}
+	// Active task that completed (not awaiting).
+	tm.StartTask(ctx, "s1", "goal")
+	if _, err := tm.ResumeTask(ctx, "s1", "x"); !errors.Is(err, ErrNoTaskAwaitingInput) {
+		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (completed)", err)
+	}
+}
+
+func TestFIFODrainOrder(t *testing.T) {
+	// t1 suspends, then on resume completes; t2 and t3 each complete in turn.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 run -> awaiting
+		complete("t1 done"), // t1 resume -> done
+		complete("t2 done"), // t2 -> done
+		complete("t3 done"), // t3 -> done
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	t1, _ := tm.StartTask(ctx, "s1", "g1")
+	t2, _ := tm.StartTask(ctx, "s1", "g2")
+	t3, _ := tm.StartTask(ctx, "s1", "g3")
+
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if len(m.Queue) != 2 || m.Queue[0] != t2.ID || m.Queue[1] != t3.ID {
+		t.Fatalf("queue = %v, want [%q %q]", m.Queue, t2.ID, t3.ID)
+	}
+
+	if _, err := tm.ResumeTask(ctx, "s1", "answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	for _, id := range []string{t1.ID, t2.ID, t3.ID} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskDone {
+			t.Errorf("task %q status = %v, want TaskDone", id, tk.Status)
+		}
+	}
+	m, _ = meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not fully drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+// t1 suspends so t2,t3 queue; on resume t1 completes and the drain pops t2,
+// which suspends -> the drain halts with t3 still queued.
+func TestDrainHaltsWhenQueuedTaskSuspends(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 run -> awaiting (so t2,t3 queue)
+		complete("t1 done"), // t1 resume -> done; drain pops t2
+		suspend(),           // t2 run -> awaiting; drain halts, t3 still queued
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	t1, _ := tm.StartTask(ctx, "s1", "g1")
+	t2, _ := tm.StartTask(ctx, "s1", "g2")
+	t3, _ := tm.StartTask(ctx, "s1", "g3")
+	_ = t1
+
+	resumed, err := tm.ResumeTask(ctx, "s1", "answer")
+	if err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	if resumed.ID != t2.ID || resumed.Status != task.TaskAwaitingInput {
+		t.Errorf("resumed = (%q,%v), want (%q,TaskAwaitingInput)", resumed.ID, resumed.Status, t2.ID)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != t2.ID {
+		t.Errorf("ActiveTaskID = %q, want t2 %q", m.ActiveTaskID, t2.ID)
+	}
+	if len(m.Queue) != 1 || m.Queue[0] != t3.ID {
+		t.Errorf("Queue = %v, want [%q] (t3 still waiting)", m.Queue, t3.ID)
+	}
+	tk3, _ := tasks.LoadTask(ctx, t3.ID)
+	if tk3.Status != task.TaskPending {
+		t.Errorf("t3 status = %v, want TaskPending", tk3.Status)
 	}
 }
