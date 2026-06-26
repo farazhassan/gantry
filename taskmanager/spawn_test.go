@@ -44,3 +44,37 @@ func TestCollectorAbsentFromBareContext(t *testing.T) {
 		t.Errorf("collectorFrom(Background) = (_, true), want false")
 	}
 }
+
+func TestCollectorSessionBufferIndependent(t *testing.T) {
+	c := &spawnCollector{}
+	c.add("same-1", "")
+	c.addSession("new-1", "title-1")
+	c.addSession("new-2", "")
+
+	sess := c.drainSessions()
+	if len(sess) != 2 || sess[0].goal != "new-1" || sess[1].goal != "new-2" {
+		t.Fatalf("drainSessions = %+v, want [new-1, new-2] FIFO", sess)
+	}
+	if sess[0].title != "title-1" {
+		t.Errorf("title = %q, want title-1", sess[0].title)
+	}
+	// drainSessions cleared the session buffer but left goals intact.
+	if got := c.drainSessions(); len(got) != 0 {
+		t.Errorf("second drainSessions = %+v, want empty", got)
+	}
+	goals := c.drain()
+	if len(goals) != 1 || goals[0].goal != "same-1" {
+		t.Errorf("drain = %+v, want [same-1] (untouched by drainSessions)", goals)
+	}
+}
+
+func TestCollectorDrainDoesNotTakeSessions(t *testing.T) {
+	c := &spawnCollector{}
+	c.addSession("new-1", "")
+	if got := c.drain(); len(got) != 0 {
+		t.Errorf("drain = %+v, want empty (sessions not drained by drain)", got)
+	}
+	if got := c.drainSessions(); len(got) != 1 {
+		t.Errorf("drainSessions = %+v, want 1", got)
+	}
+}

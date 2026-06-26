@@ -11,12 +11,15 @@ type spawnReq struct {
 	title string
 }
 
-// spawnCollector buffers create_task requests during one Advance. It only
-// collects — it never mints tasks or touches any store. A fresh collector is
+// spawnCollector buffers spawn requests during one Advance. It only collects —
+// it never mints tasks/sessions or touches any store. A fresh collector is
 // created per Advance and drained by the orchestrator after the run returns.
+// Two independent buffers: goals = same-session (create_task, 4b); sessions =
+// new-session (spawn_session, 4c).
 type spawnCollector struct {
-	mu    sync.Mutex
-	goals []spawnReq
+	mu       sync.Mutex
+	goals    []spawnReq
+	sessions []spawnReq
 }
 
 // add buffers a spawn request. Safe for concurrent use (the run goroutine may
@@ -33,6 +36,23 @@ func (c *spawnCollector) drain() []spawnReq {
 	defer c.mu.Unlock()
 	out := c.goals
 	c.goals = nil
+	return out
+}
+
+// addSession buffers a new-session spawn request. Safe for concurrent use.
+func (c *spawnCollector) addSession(goal, title string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessions = append(c.sessions, spawnReq{goal: goal, title: title})
+}
+
+// drainSessions returns the buffered new-session requests in FIFO order and
+// clears that buffer (leaving goals untouched).
+func (c *spawnCollector) drainSessions() []spawnReq {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.sessions
+	c.sessions = nil
 	return out
 }
 
