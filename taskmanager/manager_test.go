@@ -358,3 +358,68 @@ func (alwaysComplete) Resume(_ context.Context, st *gantry.State) (*gantry.State
 	st.DoneReason = gantry.DoneNoToolCalls
 	return st, nil
 }
+
+// Concurrent StartTask calls on the SAME session id must serialize: exactly one
+// task ends up active (or all complete in sequence), never two active at once,
+// and the run is clean under -race. With an always-complete runner, each task
+// drives to done before the next acquires the lock, so the queue never holds
+// two at once and the final meta has no active task.
+func TestSameSessionStartsSerialize(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			got, err := tm.StartTask(context.Background(), "shared", fmt.Sprintf("goal-%d", i))
+			if err != nil {
+				errs <- err
+				return
+			}
+			// Each task completes (alwaysComplete) before the next acquires the
+			// lock, so every StartTask returns a done task — never a queued one.
+			if got.Status != task.TaskDone {
+				errs <- fmt.Errorf("status = %v, want TaskDone", got.Status)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// Serialization invariant: no active task remains, queue empty, and the
+	// history recorded exactly n tasks (all driven to done).
+	m, err := meta.LoadMeta(context.Background(), "shared")
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if m.ActiveTaskID != "" {
+		t.Errorf("ActiveTaskID = %q, want empty (no task left active)", m.ActiveTaskID)
+	}
+	if len(m.Queue) != 0 {
+		t.Errorf("Queue = %v, want empty", m.Queue)
+	}
+	if len(m.TaskRefs) != n {
+		t.Errorf("TaskRefs len = %d, want %d", len(m.TaskRefs), n)
+	}
+	for _, ref := range m.TaskRefs {
+		if ref.Status != task.TaskDone {
+			t.Errorf("ref %q status = %v, want TaskDone", ref.ID, ref.Status)
+		}
+	}
+}
