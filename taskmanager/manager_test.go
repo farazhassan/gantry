@@ -909,3 +909,72 @@ func TestErroredParentDiscardsSessionSpawns(t *testing.T) {
 		t.Errorf("ready queue empty; a TaskFailed (non-error) parent still flushes spawns")
 	}
 }
+
+// TestRunNextReadyConcurrentDrain pre-seeds N ready sessions (each with a pending
+// active task) and drains them from N goroutines. Each Dequeue yields a distinct
+// session id -> distinct per-session lock, so all drive in parallel cleanly under
+// -race. Uses alwaysComplete so every driven task finishes.
+func TestRunNextReadyConcurrentDrain(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, ready, WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+
+	ctx := context.Background()
+	const n = 16
+	for i := 0; i < n; i++ {
+		sid := fmt.Sprintf("ready-%d", i)
+		tid := fmt.Sprintf("seed-%d", i)
+		if err := tasks.SaveTask(ctx, &task.Task{
+			ID: tid, SessionID: sid, Goal: "g", Status: task.TaskPending,
+		}); err != nil {
+			t.Fatalf("SaveTask: %v", err)
+		}
+		if err := meta.SaveMeta(ctx, sid, &task.SessionMeta{
+			TaskRefs:     []task.TaskRef{{ID: tid, Status: task.TaskPending}},
+			ActiveTaskID: tid,
+		}); err != nil {
+			t.Fatalf("SaveMeta: %v", err)
+		}
+		if err := ready.Enqueue(ctx, sid); err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	var droveMu sync.Mutex
+	drove := 0
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			driven, ok, err := tm.RunNextReady(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			if ok && driven != nil && driven.Status == task.TaskDone {
+				droveMu.Lock()
+				drove++
+				droveMu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if drove != n {
+		t.Errorf("drove %d sessions to done, want %d", drove, n)
+	}
+}
