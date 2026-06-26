@@ -165,3 +165,30 @@ func TestDispatcherIdlesOnEmptyQueueAndStopsPromptly(t *testing.T) {
 		t.Errorf("errHandler fired %d times on empty queue, want 0", errCount)
 	}
 }
+
+func TestDispatcherDrivesSessionsFIFO(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+
+	// Enqueue three sessions in order.
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "first")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "second")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-3", "s3", "third")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(ctx)
+	defer d.Stop()
+
+	// All three drained to done.
+	for _, id := range []string{"task-1", "task-2", "task-3"} {
+		id := id
+		waitFor(t, func() bool {
+			tk, err := tasks.LoadTask(ctx, id)
+			return err == nil && tk.Status == task.TaskDone
+		})
+	}
+	// Queue fully drained.
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("ready queue not empty after draining all sessions")
+	}
+}
