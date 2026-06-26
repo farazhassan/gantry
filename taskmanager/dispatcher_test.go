@@ -1,8 +1,13 @@
 package taskmanager
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/task"
 )
 
 func TestNewDispatcherDefaults(t *testing.T) {
@@ -58,4 +63,105 @@ func TestNewDispatcherNonPositiveIntervalPanics(t *testing.T) {
 		}
 	}()
 	NewDispatcher(&TaskManager{}, WithPollInterval(0))
+}
+
+// --- shared helpers/fakes for dispatcher tests (introduced in Task 2) ---
+
+// waitFor polls cond until it returns true or the deadline elapses.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("condition not met within deadline")
+}
+
+// newDispatcherManager wires a runner into a real Driver + in-memory stores and
+// returns the manager and the ready queue so tests can seed cross-session work.
+func newDispatcherManager(r task.Runner) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready)
+	return tm, tasks, meta, ready
+}
+
+// seedReadySession creates a pending task as the active task of sid and enqueues
+// sid onto the ready queue, mimicking what a cross-session spawn leaves behind.
+func seedReadySession(t *testing.T, ctx context.Context, tasks task.TaskStore, meta MetaStore, ready *InMemoryReadyQueue, taskID, sid, goal string) {
+	t.Helper()
+	tk := &task.Task{ID: taskID, SessionID: sid, Goal: goal, Status: task.TaskPending, CreatedAt: time.Now().UTC()}
+	if err := tasks.SaveTask(ctx, tk); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	sm := &task.SessionMeta{ActiveTaskID: taskID, TaskRefs: []task.TaskRef{{ID: taskID, Status: task.TaskPending, CreatedAt: tk.CreatedAt}}}
+	if err := meta.SaveMeta(ctx, sid, sm); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, sid); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+}
+
+// completeOnceRunner completes whatever task it is given (no tool calls -> done).
+type completeOnceRunner struct{}
+
+func (completeOnceRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestDispatcherDrainsEnqueuedSession(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "the work")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(ctx)
+	defer d.Stop()
+
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-1")
+		return err == nil && tk.Status == task.TaskDone
+	})
+
+	sm, _ := meta.LoadMeta(ctx, "s1")
+	if sm.ActiveTaskID != "" || len(sm.Queue) != 0 {
+		t.Errorf("session not drained: active=%q queue=%v", sm.ActiveTaskID, sm.Queue)
+	}
+}
+
+func TestDispatcherIdlesOnEmptyQueueAndStopsPromptly(t *testing.T) {
+	var errCount int
+	var mu sync.Mutex
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithErrorHandler(func(error) { mu.Lock(); errCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	time.Sleep(20 * time.Millisecond) // let it idle through several poll cycles
+
+	stopped := make(chan struct{})
+	go func() { d.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return promptly")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if errCount != 0 {
+		t.Errorf("errHandler fired %d times on empty queue, want 0", errCount)
+	}
 }

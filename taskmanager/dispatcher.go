@@ -57,3 +57,68 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 	}
 	return d
 }
+
+// Start launches the dispatch loop on a new goroutine and returns immediately.
+// Cancelling ctx is equivalent to calling Stop. Calling Start more than once
+// panics.
+func (d *Dispatcher) Start(ctx context.Context) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.started {
+		panic("taskmanager: Dispatcher.Start called more than once")
+	}
+	d.started = true
+	runCtx, cancel := context.WithCancel(ctx)
+	d.cancel = cancel
+	d.done = make(chan struct{})
+	go d.loop(runCtx)
+}
+
+// Stop cancels any in-flight drive and blocks until the loop goroutine exits.
+// It is idempotent and safe to call after the Start ctx has been cancelled. A
+// Stop before Start is a no-op.
+func (d *Dispatcher) Stop() {
+	d.mu.Lock()
+	if !d.started || d.stopped {
+		d.mu.Unlock()
+		return
+	}
+	d.stopped = true
+	cancel := d.cancel
+	done := d.done
+	d.mu.Unlock()
+
+	cancel()
+	<-done
+}
+
+// loop is the single-worker dispatch loop. It drains the ready queue while work
+// is available and waits one interval when the queue is empty (or a dequeue
+// errored), exiting when ctx is cancelled.
+func (d *Dispatcher) loop(ctx context.Context) {
+	defer close(d.done)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		_, ok, err := d.tm.RunNextReady(ctx)
+		if err != nil {
+			d.errHandler(err)
+		}
+		if ok {
+			// Consumed a queue item (driven, undrivable, or drive-errored);
+			// try the next one immediately.
+			continue
+		}
+
+		// Empty queue (or dequeue error): wait one interval or stop.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(d.interval):
+		}
+	}
+}
