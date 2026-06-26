@@ -2,6 +2,7 @@ package taskmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -421,5 +422,190 @@ func TestSameSessionStartsSerialize(t *testing.T) {
 		if ref.Status != task.TaskDone {
 			t.Errorf("ref %q status = %v, want TaskDone", ref.ID, ref.Status)
 		}
+	}
+}
+
+// spawningRunner is a fake task.Runner whose Resume calls the REAL CreateTaskTool
+// before applying a terminal/suspend step. This exercises the true
+// ctx -> collector -> tool -> drain path rather than mocking the seam.
+type spawningRunner struct {
+	tool      *CreateTaskTool
+	spawnReqs []spawnReq // goals to emit on the NEXT Resume call
+	steps     []func(*gantry.State) *gantry.State
+	calls     int
+}
+
+func (r *spawningRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	// Only the first run of a task spawns; clear after emitting so a resume of
+	// the same task does not re-spawn.
+	for _, req := range r.spawnReqs {
+		in, _ := json.Marshal(map[string]string{"goal": req.goal, "title": req.title})
+		if _, err := r.tool.Invoke(ctx, in); err != nil {
+			return nil, err
+		}
+	}
+	r.spawnReqs = nil
+	step := r.steps[r.calls]
+	r.calls++
+	return step(st), nil
+}
+
+// newSpawningManager wires a spawningRunner into a real Driver + in-memory
+// stores with a deterministic id minter, like newManager.
+func newSpawningManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaStore) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	n := 0
+	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+		n++
+		return "task-" + string(rune('0'+n))
+	}))
+	return tm, tasks, meta
+}
+
+func TestSpawnThenCompleteDrainsInOrder(t *testing.T) {
+	// t1 spawns two children then completes; the drain runs both children.
+	r := &spawningRunner{
+		tool:      NewCreateTaskTool(),
+		spawnReqs: []spawnReq{{goal: "child-a"}, {goal: "child-b"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("t1 done"),      // task-1 run: spawns a,b then completes
+			complete("child-a done"), // task-2 (child-a)
+			complete("child-b done"), // task-3 (child-b)
+		},
+	}
+	tm, tasks, meta := newSpawningManager(r)
+	ctx := context.Background()
+
+	first, err := tm.StartTask(ctx, "s1", "parent goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	_ = first
+	for _, id := range []string{"task-1", "task-2", "task-3"} {
+		tk, err := tasks.LoadTask(ctx, id)
+		if err != nil {
+			t.Fatalf("LoadTask %q: %v", id, err)
+		}
+		if tk.Status != task.TaskDone {
+			t.Errorf("task %q status = %v, want TaskDone", id, tk.Status)
+		}
+	}
+	c1, _ := tasks.LoadTask(ctx, "task-2")
+	c2, _ := tasks.LoadTask(ctx, "task-3")
+	if c1.Goal != "child-a" || c2.Goal != "child-b" {
+		t.Errorf("child goals = (%q,%q), want (child-a, child-b)", c1.Goal, c2.Goal)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+	if len(m.TaskRefs) != 3 {
+		t.Errorf("TaskRefs len = %d, want 3", len(m.TaskRefs))
+	}
+}
+
+func TestSpawnOrderingAfterPreExistingQueue(t *testing.T) {
+	// t1 (active, suspended), t2 (queued). On resume t1 completes AND spawns a
+	// child; the pre-existing t2 must run before the newly-spawned child.
+	r := &spawningRunner{
+		tool: NewCreateTaskTool(),
+		steps: []func(*gantry.State) *gantry.State{
+			suspend(),              // task-1 run -> awaiting (t2 queues behind it)
+			complete("t1 done"),    // task-1 resume -> done (spawns child here)
+			complete("t2 done"),    // task-2 -> done
+			complete("child done"), // task-3 (child) -> done
+		},
+	}
+	tm, tasks, meta := newSpawningManager(r)
+	ctx := context.Background()
+
+	t1, _ := tm.StartTask(ctx, "s1", "g1")
+	t2, _ := tm.StartTask(ctx, "s1", "g2")
+	if t1.Status != task.TaskAwaitingInput || t2.Status != task.TaskPending {
+		t.Fatalf("setup: t1=%v t2=%v", t1.Status, t2.Status)
+	}
+	// Arrange the spawn to happen on the resume run of t1.
+	r.spawnReqs = []spawnReq{{goal: "child"}}
+
+	if _, err := tm.ResumeTask(ctx, "s1", "answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	child, _ := tasks.LoadTask(ctx, "task-3")
+	if child.Goal != "child" || child.Status != task.TaskDone {
+		t.Errorf("child = (%q,%v), want (child, TaskDone)", child.Goal, child.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestSpawnWhileSuspendedQueuesButDoesNotDrive(t *testing.T) {
+	// t1 spawns a child then SUSPENDS. The child must be queued but NOT driven
+	// until t1 resumes and completes.
+	r := &spawningRunner{
+		tool:      NewCreateTaskTool(),
+		spawnReqs: []spawnReq{{goal: "child"}},
+		steps: []func(*gantry.State) *gantry.State{
+			suspend(),              // task-1 run: spawns child, then suspends
+			complete("t1 done"),    // task-1 resume -> done
+			complete("child done"), // task-2 (child) -> done
+		},
+	}
+	tm, tasks, meta := newSpawningManager(r)
+	ctx := context.Background()
+
+	first, err := tm.StartTask(ctx, "s1", "parent")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if first.Status != task.TaskAwaitingInput {
+		t.Fatalf("first status = %v, want TaskAwaitingInput", first.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if len(m.Queue) != 1 || m.Queue[0] != "task-2" {
+		t.Fatalf("Queue = %v, want [task-2] (child queued)", m.Queue)
+	}
+	child, _ := tasks.LoadTask(ctx, "task-2")
+	if child.Status != task.TaskPending {
+		t.Errorf("child status = %v, want TaskPending (not yet driven)", child.Status)
+	}
+	if _, err := tm.ResumeTask(ctx, "s1", "answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	child, _ = tasks.LoadTask(ctx, "task-2")
+	if child.Status != task.TaskDone {
+		t.Errorf("child status after resume = %v, want TaskDone", child.Status)
+	}
+	m, _ = meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestNoSpawnsLeavesQueueUntouched(t *testing.T) {
+	// A plain completing run (no spawns) must not mutate the queue.
+	r := &spawningRunner{
+		tool:  NewCreateTaskTool(),
+		steps: []func(*gantry.State) *gantry.State{complete("done")},
+	}
+	tm, _, meta := newSpawningManager(r)
+	ctx := context.Background()
+
+	got, err := tm.StartTask(ctx, "s1", "goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if got.Status != task.TaskDone {
+		t.Errorf("status = %v, want TaskDone", got.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if len(m.Queue) != 0 {
+		t.Errorf("Queue = %v, want empty (no spawns)", m.Queue)
+	}
+	if len(m.TaskRefs) != 1 {
+		t.Errorf("TaskRefs len = %d, want 1 (only the parent)", len(m.TaskRefs))
 	}
 }

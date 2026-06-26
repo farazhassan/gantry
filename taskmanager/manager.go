@@ -190,10 +190,20 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
 	var err error
 	for {
-		t, err = m.driver.Advance(ctx, t, input)
+		coll := &spawnCollector{}
+		runCtx := withCollector(ctx, coll)
+
+		t, err = m.driver.Advance(runCtx, t, input)
 		if err != nil {
+			return t, err // errored run: spawns discarded
+		}
+
+		// Drain spawns BEFORE branching, so suspended AND terminal tasks queue
+		// their follow-on work.
+		if err = m.enqueueSpawns(ctx, sessionID, sm, coll); err != nil {
 			return t, err
 		}
+
 		syncRef(sm, t)
 
 		if t.Status == task.TaskAwaitingInput {
@@ -227,6 +237,34 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 		t = nt
 		input = nt.Goal // queued task runs from its own goal
 	}
+}
+
+// enqueueSpawns mints and persists each task buffered by the just-finished run,
+// appending it to the session's pending queue. It runs under the session lock,
+// on the orchestrator goroutine, after Advance returned — never re-entering the
+// driver. A no-op when the collector is empty.
+func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, coll *spawnCollector) error {
+	for _, req := range coll.drain() {
+		nt := &task.Task{
+			ID:        m.newID(),
+			SessionID: sessionID,
+			Title:     req.title,
+			Goal:      req.goal,
+			Status:    task.TaskPending,
+			CreatedAt: time.Now().UTC(),
+		}
+		if err := m.tasks.SaveTask(ctx, nt); err != nil {
+			return err
+		}
+		sm.TaskRefs = append(sm.TaskRefs, task.TaskRef{
+			ID:        nt.ID,
+			Title:     nt.Title,
+			Status:    nt.Status,
+			CreatedAt: nt.CreatedAt,
+		})
+		sm.Queue = append(sm.Queue, nt.ID)
+	}
+	return nil
 }
 
 // syncRef updates the matching TaskRef.Status in sm.TaskRefs so the history
