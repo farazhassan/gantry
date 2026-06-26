@@ -244,6 +244,48 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	return driven, true, err
 }
 
+// StartDetachedSession mints a new session, creates a pending task in it,
+// persists both (the task, then the session meta with that task active plus a
+// TaskRef), and enqueues the session on the ReadyQueue — WITHOUT driving it. The
+// drive is left to the Dispatcher (or a manual RunNextReady caller). It runs no
+// goroutine, so the TaskManager stays synchronous. Returns the new session id.
+//
+// This is the single source of truth for the persist-before-enqueue +
+// new-session invariant: a successfully-enqueued id always points at a real,
+// drivable session. Both enqueueSpawns (spawn_session tool) and the Scheduler
+// call it.
+func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title string) (string, error) {
+	newSID := m.newSessionID()
+	nt := &task.Task{
+		ID:        m.newID(),
+		SessionID: newSID,
+		Title:     title,
+		Goal:      goal,
+		Status:    task.TaskPending,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := m.tasks.SaveTask(ctx, nt); err != nil {
+		return "", err
+	}
+	newMeta := &task.SessionMeta{
+		TaskRefs: []task.TaskRef{{
+			ID:        nt.ID,
+			Title:     nt.Title,
+			Status:    nt.Status,
+			CreatedAt: nt.CreatedAt,
+		}},
+		ActiveTaskID: nt.ID,
+	}
+	// Persist task + meta BEFORE the ready enqueue.
+	if err := m.meta.SaveMeta(ctx, newSID, newMeta); err != nil {
+		return "", err
+	}
+	if err := m.ready.Enqueue(ctx, newSID); err != nil {
+		return "", err
+	}
+	return newSID, nil
+}
+
 // drive advances the active task and, when it terminates, drains the pending
 // FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
 // own goal. It returns when a task suspends (awaiting_input) or the queue is
@@ -335,33 +377,7 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		sm.Queue = append(sm.Queue, nt.ID)
 	}
 	for _, req := range coll.drainSessions() {
-		newSID := m.newSessionID()
-		nt := &task.Task{
-			ID:        m.newID(),
-			SessionID: newSID,
-			Title:     req.title,
-			Goal:      req.goal,
-			Status:    task.TaskPending,
-			CreatedAt: time.Now().UTC(),
-		}
-		if err := m.tasks.SaveTask(ctx, nt); err != nil {
-			return err
-		}
-		newMeta := &task.SessionMeta{
-			TaskRefs: []task.TaskRef{{
-				ID:        nt.ID,
-				Title:     nt.Title,
-				Status:    nt.Status,
-				CreatedAt: nt.CreatedAt,
-			}},
-			ActiveTaskID: nt.ID,
-		}
-		// Persist task + meta BEFORE the ready enqueue: a successfully-enqueued id
-		// always points at a real, drivable session.
-		if err := m.meta.SaveMeta(ctx, newSID, newMeta); err != nil {
-			return err
-		}
-		if err := m.ready.Enqueue(ctx, newSID); err != nil {
+		if _, err := m.StartDetachedSession(ctx, req.goal, req.title); err != nil {
 			return err
 		}
 	}

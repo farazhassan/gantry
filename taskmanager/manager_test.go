@@ -978,3 +978,47 @@ func TestRunNextReadyConcurrentDrain(t *testing.T) {
 		t.Errorf("drove %d sessions to done, want %d", drove, n)
 	}
 }
+
+func TestStartDetachedSessionPersistsAndEnqueues(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { return "task-x" }),
+		WithSessionIDFunc(func() string { return "sess-x" }),
+	)
+	ctx := context.Background()
+
+	sid, err := tm.StartDetachedSession(ctx, "the goal", "the title")
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if sid != "sess-x" {
+		t.Errorf("sid = %q, want sess-x", sid)
+	}
+
+	tk, err := tasks.LoadTask(ctx, "task-x")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if tk.SessionID != "sess-x" || tk.Goal != "the goal" || tk.Title != "the title" || tk.Status != task.TaskPending {
+		t.Errorf("task = %+v, want session sess-x goal/title set, pending", tk)
+	}
+
+	sm, err := meta.LoadMeta(ctx, "sess-x")
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if sm.ActiveTaskID != "task-x" {
+		t.Errorf("ActiveTaskID = %q, want task-x", sm.ActiveTaskID)
+	}
+	if len(sm.TaskRefs) != 1 || sm.TaskRefs[0].ID != "task-x" {
+		t.Errorf("TaskRefs = %+v, want one ref to task-x", sm.TaskRefs)
+	}
+
+	got, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok || got != "sess-x" {
+		t.Errorf("Dequeue = (%q, %v, %v), want (sess-x, true, nil)", got, ok, err)
+	}
+}
