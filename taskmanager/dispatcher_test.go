@@ -192,3 +192,58 @@ func TestDispatcherDrivesSessionsFIFO(t *testing.T) {
 		t.Errorf("ready queue not empty after draining all sessions")
 	}
 }
+
+// errThenCompleteRunner returns a Go error on its first Resume call, then
+// completes every subsequent task. This makes the first RunNextReady drive
+// return an error (the session id is already consumed) while later sessions
+// still drive cleanly.
+type errThenCompleteRunner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *errThenCompleteRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.mu.Lock()
+	r.calls++
+	first := r.calls == 1
+	r.mu.Unlock()
+	if first {
+		return nil, errSentinel{}
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestDispatcherErrorHandlerFiresAndLoopContinues(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(&errThenCompleteRunner{})
+	ctx := context.Background()
+
+	errs := make(chan error, 8)
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "will error")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "will complete")
+
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithErrorHandler(func(err error) { errs <- err }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// The first drive errors -> handler fires at least once.
+	select {
+	case err := <-errs:
+		if err == nil {
+			t.Errorf("error handler received nil error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("error handler never fired")
+	}
+
+	// The loop kept going: the second session drained to done.
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-2")
+		return err == nil && tk.Status == task.TaskDone
+	})
+}
