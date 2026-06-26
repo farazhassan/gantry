@@ -163,6 +163,22 @@ func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (
 	return m.drive(ctx, sessionID, sm, t, input)
 }
 
+// ActiveTask returns the session's current active task, or (nil, nil) if none.
+func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.Task, error) {
+	lk := m.lockFor(sessionID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if sm.ActiveTaskID == "" {
+		return nil, nil
+	}
+	return m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+}
+
 // drive advances the active task and, when it terminates, drains the pending
 // FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
 // own goal. It returns when a task suspends (awaiting_input) or the queue is

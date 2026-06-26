@@ -3,6 +3,8 @@ package taskmanager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -242,4 +244,117 @@ func TestDrainHaltsWhenQueuedTaskSuspends(t *testing.T) {
 	if tk3.Status != task.TaskPending {
 		t.Errorf("t3 status = %v, want TaskPending", tk3.Status)
 	}
+}
+
+func TestActiveTask(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(), // t1 suspends so it stays active
+	}}
+	tm, _, _ := newManager(r)
+	ctx := context.Background()
+
+	// No active task yet.
+	got, err := tm.ActiveTask(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ActiveTask (none): %v", err)
+	}
+	if got != nil {
+		t.Errorf("ActiveTask = %+v, want nil when none", got)
+	}
+
+	first, _ := tm.StartTask(ctx, "s1", "goal")
+	got, err = tm.ActiveTask(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ActiveTask: %v", err)
+	}
+	if got == nil || got.ID != first.ID {
+		t.Errorf("ActiveTask = %+v, want task %q", got, first.ID)
+	}
+}
+
+func TestFailureDuringDrainContinues(t *testing.T) {
+	// t1 suspends; on resume completes; drain pops t2 which FAILS; drain
+	// continues to t3 which completes. (Decision D.)
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 run -> awaiting
+		complete("t1 done"), // t1 resume -> done
+		fail(),              // t2 -> failed (drain must continue)
+		complete("t3 done"), // t3 -> done
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	t1, _ := tm.StartTask(ctx, "s1", "g1")
+	t2, _ := tm.StartTask(ctx, "s1", "g2")
+	t3, _ := tm.StartTask(ctx, "s1", "g3")
+	_ = t1
+
+	if _, err := tm.ResumeTask(ctx, "s1", "answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	tk2, _ := tasks.LoadTask(ctx, t2.ID)
+	if tk2.Status != task.TaskFailed {
+		t.Errorf("t2 status = %v, want TaskFailed", tk2.Status)
+	}
+	tk3, _ := tasks.LoadTask(ctx, t3.ID)
+	if tk3.Status != task.TaskDone {
+		t.Errorf("t3 status = %v, want TaskDone (drain continued past failure)", tk3.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not fully drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+// One shared TaskManager, N goroutines each starting a task on a DISTINCT
+// session id. Exercises lockFor and the stores under -race. The deterministic
+// WithIDFunc from newManager is not goroutine-safe, so this builds its own
+// manager with a mutex-guarded id minter and a goroutine-safe runner.
+func TestDifferentSessionsProceedConcurrently(t *testing.T) {
+	tasks := task.NewInMemory()
+	r := &alwaysComplete{}
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sid := fmt.Sprintf("s%d", i)
+			got, err := tm.StartTask(context.Background(), sid, "goal")
+			if err != nil {
+				errs <- err
+				return
+			}
+			if got.Status != task.TaskDone {
+				errs <- fmt.Errorf("session %s: status %v, want TaskDone", sid, got.Status)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// alwaysComplete is a goroutine-safe Runner that completes every run.
+type alwaysComplete struct{}
+
+func (alwaysComplete) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
 }
