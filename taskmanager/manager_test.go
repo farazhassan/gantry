@@ -426,13 +426,15 @@ func TestSameSessionStartsSerialize(t *testing.T) {
 }
 
 // spawningRunner is a fake task.Runner whose Resume calls the REAL CreateTaskTool
-// before applying a terminal/suspend step. This exercises the true
-// ctx -> collector -> tool -> drain path rather than mocking the seam.
+// and/or SpawnSessionTool before applying a terminal/suspend step. This exercises
+// the true ctx -> collector -> tool -> drain path rather than mocking the seam.
 type spawningRunner struct {
-	tool      *CreateTaskTool
-	spawnReqs []spawnReq // goals to emit on the NEXT Resume call
-	steps     []func(*gantry.State) *gantry.State
-	calls     int
+	tool        *CreateTaskTool
+	sessionTool *SpawnSessionTool
+	spawnReqs   []spawnReq // same-session goals to emit on the NEXT Resume call
+	sessionReqs []spawnReq // new-session goals to emit on the NEXT Resume call
+	steps       []func(*gantry.State) *gantry.State
+	calls       int
 }
 
 func (r *spawningRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
@@ -444,7 +446,14 @@ func (r *spawningRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.
 			return nil, err
 		}
 	}
+	for _, req := range r.sessionReqs {
+		in, _ := json.Marshal(map[string]string{"goal": req.goal, "title": req.title})
+		if _, err := r.sessionTool.Invoke(ctx, in); err != nil {
+			return nil, err
+		}
+	}
 	r.spawnReqs = nil
+	r.sessionReqs = nil
 	step := r.steps[r.calls]
 	r.calls++
 	return step(st), nil
@@ -462,6 +471,29 @@ func newSpawningManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaSt
 		return "task-" + string(rune('0'+n))
 	}))
 	return tm, tasks, meta
+}
+
+// newSessionSpawnManager wires a spawningRunner into a real Driver + in-memory
+// stores with deterministic task and session id minters, and returns the ready
+// queue so tests can inspect/drive cross-session spawned work.
+func newSessionSpawnManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n := 0
+	sn := 0
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string {
+			n++
+			return "task-" + string(rune('0'+n))
+		}),
+		WithSessionIDFunc(func() string {
+			sn++
+			return "sess-" + string(rune('0'+sn))
+		}),
+	)
+	return tm, tasks, meta, ready
 }
 
 func TestSpawnThenCompleteDrainsInOrder(t *testing.T) {
@@ -607,5 +639,66 @@ func TestNoSpawnsLeavesQueueUntouched(t *testing.T) {
 	}
 	if len(m.TaskRefs) != 1 {
 		t.Errorf("TaskRefs len = %d, want 1 (only the parent)", len(m.TaskRefs))
+	}
+}
+
+func TestSpawnSessionEnqueuesButDoesNotDrive(t *testing.T) {
+	// Parent spawns ONE new session then completes. The new session id must be on
+	// the ready queue; its task must exist pending under a distinct session id
+	// with the right goal; the parent's own queue must be untouched.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "spawned work", title: "S"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"), // task-1 run: spawns a session, then completes
+		},
+	}
+	tm, tasks, meta, ready := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	parent, err := tm.StartTask(ctx, "s1", "parent goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if parent.Status != task.TaskDone {
+		t.Fatalf("parent status = %v, want TaskDone", parent.Status)
+	}
+
+	pm, _ := meta.LoadMeta(ctx, "s1")
+	if pm.ActiveTaskID != "" || len(pm.Queue) != 0 {
+		t.Errorf("parent meta not clean: active=%q queue=%v", pm.ActiveTaskID, pm.Queue)
+	}
+	if len(pm.TaskRefs) != 1 {
+		t.Errorf("parent TaskRefs = %d, want 1 (only the parent)", len(pm.TaskRefs))
+	}
+
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ready.Dequeue = (%q, %v, %v), want a session", sid, ok, err)
+	}
+	if sid != "sess-1" {
+		t.Errorf("ready session id = %q, want sess-1", sid)
+	}
+
+	sm, err := meta.LoadMeta(ctx, sid)
+	if err != nil {
+		t.Fatalf("LoadMeta(%q): %v", sid, err)
+	}
+	if sm.ActiveTaskID == "" {
+		t.Fatalf("spawned session ActiveTaskID empty, want set")
+	}
+	st, err := tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if st.SessionID != sid {
+		t.Errorf("task SessionID = %q, want %q", st.SessionID, sid)
+	}
+	if st.Goal != "spawned work" || st.Title != "S" {
+		t.Errorf("task = (%q,%q), want (spawned work, S)", st.Goal, st.Title)
+	}
+	if st.Status != task.TaskPending {
+		t.Errorf("task status = %v, want TaskPending (not yet driven)", st.Status)
 	}
 }

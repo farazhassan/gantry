@@ -260,10 +260,15 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 	}
 }
 
-// enqueueSpawns mints and persists each task buffered by the just-finished run,
-// appending it to the session's pending queue. It runs under the session lock,
-// on the orchestrator goroutine, after Advance returned — never re-entering the
-// driver. A no-op when the collector is empty.
+// enqueueSpawns drains two buffers from the just-finished run:
+//   - same-session requests (create_task): minted tasks are appended to sm.Queue
+//     so they run in the current session's FIFO after the active task terminates.
+//   - new-session requests (spawn_session): each gets a fresh session id and task,
+//     both persisted before the session id is enqueued onto the ReadyQueue. The
+//     parent's sm.Queue is NOT touched by new-session spawns.
+//
+// Runs under the session lock, on the orchestrator goroutine, after Advance
+// returned — never re-entering the driver. A no-op when both collectors are empty.
 func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, coll *spawnCollector) error {
 	for _, req := range coll.drain() {
 		nt := &task.Task{
@@ -284,6 +289,37 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 			CreatedAt: nt.CreatedAt,
 		})
 		sm.Queue = append(sm.Queue, nt.ID)
+	}
+	for _, req := range coll.drainSessions() {
+		newSID := m.newSessionID()
+		nt := &task.Task{
+			ID:        m.newID(),
+			SessionID: newSID,
+			Title:     req.title,
+			Goal:      req.goal,
+			Status:    task.TaskPending,
+			CreatedAt: time.Now().UTC(),
+		}
+		if err := m.tasks.SaveTask(ctx, nt); err != nil {
+			return err
+		}
+		newMeta := &task.SessionMeta{
+			TaskRefs: []task.TaskRef{{
+				ID:        nt.ID,
+				Title:     nt.Title,
+				Status:    nt.Status,
+				CreatedAt: nt.CreatedAt,
+			}},
+			ActiveTaskID: nt.ID,
+		}
+		// Persist task + meta BEFORE the ready enqueue: a successfully-enqueued id
+		// always points at a real, drivable session.
+		if err := m.meta.SaveMeta(ctx, newSID, newMeta); err != nil {
+			return err
+		}
+		if err := m.ready.Enqueue(ctx, newSID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
