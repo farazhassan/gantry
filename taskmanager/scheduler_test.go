@@ -2,8 +2,13 @@ package taskmanager
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/farazhassan/gantry/task"
 )
 
 func TestInMemoryScheduleStoreAddDueRemove(t *testing.T) {
@@ -179,5 +184,259 @@ func TestSchedulerStopBeforeStartIsNoOp(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stop before Start blocked")
+	}
+}
+
+// fakeClock is a manually-advanced clock for deterministic scheduler tests.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock(t time.Time) *fakeClock { return &fakeClock{t: t} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// drainReady dequeues every session id currently on the ready queue.
+func drainReady(t *testing.T, ctx context.Context, ready *InMemoryReadyQueue) []string {
+	t.Helper()
+	var out []string
+	for {
+		sid, ok, err := ready.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("Dequeue: %v", err)
+		}
+		if !ok {
+			return out
+		}
+		out = append(out, sid)
+	}
+}
+
+func TestSchedulerFiresDueSchedule(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	base := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	clk := newFakeClock(base)
+
+	s := NewScheduler(tm, NewInMemoryScheduleStore(),
+		WithSchedulePollInterval(time.Millisecond),
+		WithScheduleClock(clk.Now),
+	)
+	if _, err := s.Schedule(ctx, "the goal", "the title", base.Add(time.Minute)); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	s.Start(ctx)
+	defer s.Stop()
+
+	// Not yet due: clock still at base. Give the loop a few ticks; nothing fires.
+	time.Sleep(20 * time.Millisecond)
+	if got := drainReady(t, ctx, ready); len(got) != 0 {
+		t.Fatalf("fired early: ready had %v", got)
+	}
+
+	// Advance past FireAt; the schedule fires on the next tick.
+	clk.Advance(2 * time.Minute)
+
+	var sid string
+	waitFor(t, func() bool {
+		got := drainReady(t, ctx, ready)
+		if len(got) == 1 {
+			sid = got[0]
+			return true
+		}
+		return false
+	})
+
+	sm, err := meta.LoadMeta(ctx, sid)
+	if err != nil {
+		t.Fatalf("LoadMeta(%q): %v", sid, err)
+	}
+	tk, err := tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if tk.Goal != "the goal" || tk.Title != "the title" {
+		t.Errorf("fired task = {goal:%q title:%q}, want {the goal, the title}", tk.Goal, tk.Title)
+	}
+}
+
+func TestSchedulerFiresAtMostOnce(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	var sessions int32
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithSessionIDFunc(func() string {
+			return fmt.Sprintf("s%d", atomic.AddInt32(&sessions, 1))
+		}),
+	)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	clk := newFakeClock(base.Add(time.Hour)) // already past FireAt
+
+	s := NewScheduler(tm, NewInMemoryScheduleStore(),
+		WithSchedulePollInterval(time.Millisecond),
+		WithScheduleClock(clk.Now),
+	)
+	if _, err := s.Schedule(ctx, "g", "", base); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	s.Start(ctx)
+	defer s.Stop()
+
+	waitFor(t, func() bool { return atomic.LoadInt32(&sessions) >= 1 })
+	time.Sleep(30 * time.Millisecond)
+	if n := atomic.LoadInt32(&sessions); n != 1 {
+		t.Errorf("fired %d times, want exactly 1 (at-most-once)", n)
+	}
+}
+
+func TestSchedulerFiresFIFOByFireAt(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	clk := newFakeClock(base.Add(time.Hour)) // all three already due
+
+	s := NewScheduler(tm, NewInMemoryScheduleStore(),
+		WithSchedulePollInterval(time.Millisecond),
+		WithScheduleClock(clk.Now),
+	)
+	if _, err := s.Schedule(ctx, "second", "", base.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Schedule(ctx, "first", "", base.Add(1*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Schedule(ctx, "third", "", base.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx)
+	defer s.Stop()
+
+	var sids []string
+	waitFor(t, func() bool {
+		sids = append(sids, drainReady(t, ctx, ready)...)
+		return len(sids) == 3
+	})
+
+	var goals []string
+	for _, sid := range sids {
+		sm, _ := meta.LoadMeta(ctx, sid)
+		tk, _ := tasks.LoadTask(ctx, sm.ActiveTaskID)
+		goals = append(goals, tk.Goal)
+	}
+	want := []string{"first", "second", "third"}
+	for i := range want {
+		if goals[i] != want[i] {
+			t.Fatalf("firing order = %v, want %v", goals, want)
+		}
+	}
+}
+
+// flakyDueStore wraps InMemoryScheduleStore and forces the first N Due calls to
+// error, to exercise the scheduler's log-and-continue path.
+type flakyDueStore struct {
+	*InMemoryScheduleStore
+	mu      sync.Mutex
+	dueErrs int
+}
+
+func (f *flakyDueStore) Due(ctx context.Context, now time.Time) ([]Schedule, error) {
+	f.mu.Lock()
+	if f.dueErrs > 0 {
+		f.dueErrs--
+		f.mu.Unlock()
+		return nil, errSentinel{}
+	}
+	f.mu.Unlock()
+	return f.InMemoryScheduleStore.Due(ctx, now)
+}
+
+func TestSchedulerErrorHandlerFiresAndLoopContinues(t *testing.T) {
+	tm, _, _, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	base := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	clk := newFakeClock(base.Add(time.Hour))
+
+	store := &flakyDueStore{InMemoryScheduleStore: NewInMemoryScheduleStore(), dueErrs: 1}
+	errs := make(chan error, 8)
+	s := NewScheduler(tm, store,
+		WithSchedulePollInterval(time.Millisecond),
+		WithScheduleClock(clk.Now),
+		WithScheduleErrorHandler(func(err error) { errs <- err }),
+	)
+	if _, err := s.Schedule(ctx, "g", "", base); err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx)
+	defer s.Stop()
+
+	select {
+	case err := <-errs:
+		if err == nil {
+			t.Errorf("error handler received nil error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("error handler never fired")
+	}
+	waitFor(t, func() bool { return len(drainReady(t, ctx, ready)) == 1 })
+}
+
+func TestSchedulerIdlesOnEmptyStoreAndStopsPromptly(t *testing.T) {
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	var errCount int
+	var mu sync.Mutex
+
+	s := NewScheduler(tm, NewInMemoryScheduleStore(),
+		WithSchedulePollInterval(time.Millisecond),
+		WithScheduleErrorHandler(func(error) { mu.Lock(); errCount++; mu.Unlock() }),
+	)
+	s.Start(ctx)
+	time.Sleep(20 * time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() { s.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return promptly")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if errCount != 0 {
+		t.Errorf("errHandler fired %d times on empty store, want 0", errCount)
+	}
+}
+
+func TestSchedulerCtxCancelStopsLoop(t *testing.T) {
+	tm, _, _, _ := newDispatcherManager(completeOnceRunner{})
+	ctx, cancel := context.WithCancel(context.Background())
+	s := NewScheduler(tm, NewInMemoryScheduleStore(), WithSchedulePollInterval(time.Millisecond))
+	s.Start(ctx)
+	cancel()
+
+	stopped := make(chan struct{})
+	go func() { s.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after ctx cancellation")
 	}
 }

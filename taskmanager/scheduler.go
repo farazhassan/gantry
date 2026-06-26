@@ -197,15 +197,52 @@ func (s *Scheduler) Stop() {
 	<-done
 }
 
-// loop is the scheduler's single worker goroutine. (Firing logic added in the
-// next task.)
+// loop is the scheduler's single worker goroutine: each tick it fires every due
+// schedule (remove-then-fire, at-most-once), then waits one interval. It exits
+// promptly on ctx cancellation (Stop or caller-ctx cancel).
 func (s *Scheduler) loop(ctx context.Context) {
 	defer close(s.done)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+
+		s.fireDue(ctx)
+
+		select {
+		case <-ctx.Done():
+			return
 		case <-time.After(s.interval):
+		}
+	}
+}
+
+// fireDue fires each due schedule once, in FireAt order: it removes the schedule
+// from the store FIRST, then creates a detached session via the TaskManager. On
+// any error (Due, Remove, or StartDetachedSession) it invokes errHandler and
+// moves on — the entry is already consumed, so it is NOT retried (mirrors the
+// Dispatcher's no-claim/ack consequence). Each schedule fires at most once.
+func (s *Scheduler) fireDue(ctx context.Context) {
+	due, err := s.store.Due(ctx, s.clock())
+	if err != nil {
+		s.errHandler(err)
+		return
+	}
+	for _, sc := range due {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if err := s.store.Remove(ctx, sc.ID); err != nil {
+			s.errHandler(err)
+			continue
+		}
+		if _, err := s.tm.StartDetachedSession(ctx, sc.Goal, sc.Title); err != nil {
+			s.errHandler(err)
+			continue
 		}
 	}
 }
