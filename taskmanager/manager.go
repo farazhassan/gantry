@@ -209,6 +209,10 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 // The caller composes this: loop for a sequential drain, or call from N
 // goroutines for parallel drive (each dequeue yields a distinct session id ->
 // distinct per-session lock, so goroutines never contend).
+//
+// A returned error means the session id has already been consumed from the queue
+// (FIFO, no claim/ack — Decision E) and is not re-enqueued; the underlying task
+// stays durable, so retry is the caller's responsibility.
 func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error) {
 	sid, ok, err := m.ready.Dequeue(ctx)
 	if err != nil {
