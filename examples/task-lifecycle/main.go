@@ -230,5 +230,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	_ = res // main() printing is fleshed out in Task 3
+	fmt.Printf("draft task     : %s after %d critic rejection(s) (reject -> revise -> accept)\n",
+		res.Task1Status, res.Task1Rejections)
+	fmt.Printf("proofread task : %s (same-session FIFO follow-on)\n", res.ProofreadStatus)
+	fmt.Printf("detached task  : %s (driven headless by the Dispatcher)\n", res.DetachedStatus)
+	fmt.Printf("notifier fired : session %q asked: %q\n", res.Notified.SessionID, res.NotifiedQuestion)
 }
