@@ -457,9 +457,15 @@ func TestDispatcherNotifiesOnHeadlessPark(t *testing.T) {
 		defer mu.Unlock()
 		return len(notified) >= 1
 	})
+	// Settle through several more poll cycles: a parked task is consumed from the
+	// queue once and never re-enqueued, so it must fire exactly once.
+	time.Sleep(20 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
+	if len(notified) != 1 {
+		t.Fatalf("notifier fired %d times for a single headless park, want exactly 1", len(notified))
+	}
 	got := notified[0]
 	if got.SessionID != "s1" {
 		t.Errorf("notified task SessionID = %q, want %q", got.SessionID, "s1")
