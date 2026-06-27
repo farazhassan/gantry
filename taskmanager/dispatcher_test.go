@@ -468,3 +468,105 @@ func TestDispatcherNotifiesOnHeadlessPark(t *testing.T) {
 		t.Errorf("notified task has empty Pending, want the unfulfilled ask_user call(s)")
 	}
 }
+
+func TestDispatcherDoesNotNotifyOnTerminalCompletion(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "completes")
+
+	var mu sync.Mutex
+	var notifyCount int
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithNotifier(func(*task.Task) { mu.Lock(); notifyCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// Wait for the task to reach done.
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-1")
+		return err == nil && tk.Status == task.TaskDone
+	})
+	// Give the loop a few more poll cycles to (incorrectly) fire if it would.
+	time.Sleep(20 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if notifyCount != 0 {
+		t.Errorf("notifier fired %d times on a completed task, want 0", notifyCount)
+	}
+}
+
+func TestDispatcherDoesNotNotifyOnUndrivableSession(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+
+	// Undrivable session: meta with empty ActiveTaskID -> (nil, true, nil).
+	if err := meta.SaveMeta(ctx, "empty", &task.SessionMeta{}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, "empty"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// A drivable session behind it so we have a clear "loop made progress" signal.
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "real work")
+
+	var mu sync.Mutex
+	var notifyCount int
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithNotifier(func(*task.Task) { mu.Lock(); notifyCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// The drivable session completes (loop moved past the undrivable one).
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-1")
+		return err == nil && tk.Status == task.TaskDone
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if notifyCount != 0 {
+		t.Errorf("notifier fired %d times; want 0 (undrivable skip and completion must not notify)", notifyCount)
+	}
+}
+
+func TestDispatcherDoesNotNotifyOnErroredDrive(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(&errThenCompleteRunner{})
+	ctx := context.Background()
+
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "will error")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "will complete")
+
+	errs := make(chan error, 8)
+	var mu sync.Mutex
+	var notifyCount int
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithErrorHandler(func(err error) { errs <- err }),
+		WithNotifier(func(*task.Task) { mu.Lock(); notifyCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// First drive errors -> errHandler fires.
+	select {
+	case <-errs:
+	case <-time.After(2 * time.Second):
+		t.Fatal("error handler never fired")
+	}
+	// Second session drains to done (loop continued).
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-2")
+		return err == nil && tk.Status == task.TaskDone
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if notifyCount != 0 {
+		t.Errorf("notifier fired %d times across an errored drive + a completion, want 0", notifyCount)
+	}
+}
