@@ -416,3 +416,55 @@ func TestWithNotifierCapturesTask(t *testing.T) {
 		t.Errorf("notifier did not capture the task: got %v, want %v", got, want)
 	}
 }
+
+// parkOnceRunner parks whatever task it is given at awaiting_input by emitting an
+// unfulfilled ask_user client-tool call (the shape isAskSuspension matches).
+type parkOnceRunner struct{}
+
+func (parkOnceRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	st.Done = true
+	st.DoneReason = gantry.DoneClientToolCall
+	st.PendingToolCalls = []gantry.ToolCall{{ID: "call-1", Name: "ask_user"}}
+	return st, nil
+}
+
+func TestDispatcherNotifiesOnHeadlessPark(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(parkOnceRunner{})
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "needs input")
+
+	var mu sync.Mutex
+	var notified []*task.Task
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithNotifier(func(tk *task.Task) {
+			mu.Lock()
+			notified = append(notified, tk)
+			mu.Unlock()
+		}),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	// The task parks at awaiting_input...
+	waitFor(t, func() bool {
+		tk, err := tasks.LoadTask(ctx, "task-1")
+		return err == nil && tk.Status == task.TaskAwaitingInput
+	})
+	// ...and the notifier fires for it.
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(notified) >= 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	got := notified[0]
+	if got.SessionID != "s1" {
+		t.Errorf("notified task SessionID = %q, want %q", got.SessionID, "s1")
+	}
+	if len(got.Pending) == 0 {
+		t.Errorf("notified task has empty Pending, want the unfulfilled ask_user call(s)")
+	}
+}

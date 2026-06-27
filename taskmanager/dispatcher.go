@@ -120,9 +120,16 @@ func (d *Dispatcher) loop(ctx context.Context) {
 		default:
 		}
 
-		_, ok, err := d.tm.RunNextReady(ctx)
+		t, ok, err := d.tm.RunNextReady(ctx)
 		if err != nil {
 			d.errHandler(err)
+		} else if t != nil && t.Status == task.TaskAwaitingInput {
+			// Headless park: a task with no human attached is waiting for input.
+			// Surface it via the notifier. This fires ONLY on a clean park, not on
+			// terminal completion (t.Status != awaiting_input), the Decision-H
+			// undrivable skip (t == nil), or an errored drive (err != nil routes to
+			// errHandler and skips this branch).
+			d.notifier(t)
 		}
 		if ok {
 			// Consumed a queue item (driven, undrivable, or drive-errored);
