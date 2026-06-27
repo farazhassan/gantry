@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/farazhassan/gantry/task"
 )
 
 // Dispatcher automatically consumes a TaskManager's ReadyQueue on a background
@@ -15,6 +17,7 @@ type Dispatcher struct {
 	tm         *TaskManager
 	interval   time.Duration
 	errHandler func(error)
+	notifier   func(*task.Task)
 
 	mu      sync.Mutex
 	started bool
@@ -38,6 +41,18 @@ func WithErrorHandler(f func(error)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.errHandler = f }
 }
 
+// WithNotifier sets a callback invoked when a dispatched task parks at
+// awaiting_input with no human attached. The callback receives the parked task
+// (carrying SessionID, Goal, Title, and the unfulfilled ask_user calls in
+// Pending) so an external bridge can surface the question. Default is a no-op.
+//
+// Fire-and-forget: it returns no error and runs synchronously on the dispatch
+// loop's goroutine, so it must be quick and non-blocking (hand off to a channel
+// or a separate goroutine for slow work). This mirrors WithErrorHandler.
+func WithNotifier(f func(*task.Task)) DispatcherOption {
+	return func(dp *Dispatcher) { dp.notifier = f }
+}
+
 // NewDispatcher builds a Dispatcher over a TaskManager. It panics if tm is nil
 // or if a configured poll interval is not positive.
 func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
@@ -48,6 +63,7 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 		tm:         tm,
 		interval:   time.Second,
 		errHandler: func(error) {},
+		notifier:   func(*task.Task) {},
 	}
 	for _, opt := range opts {
 		opt(d)

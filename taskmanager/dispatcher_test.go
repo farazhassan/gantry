@@ -391,3 +391,28 @@ func TestDispatcherStopBeforeStartIsNoOp(t *testing.T) {
 		t.Fatal("Stop before Start blocked")
 	}
 }
+
+func TestNewDispatcherDefaultNotifierIsSafe(t *testing.T) {
+	tm := &TaskManager{}
+	d := NewDispatcher(tm)
+	if d.notifier == nil {
+		t.Fatalf("default notifier is nil, want non-nil no-op")
+	}
+	// no-op notifier must be safe to call with any task (including nil).
+	d.notifier(nil)
+	d.notifier(&task.Task{ID: "t1"})
+}
+
+func TestWithNotifierCapturesTask(t *testing.T) {
+	tm := &TaskManager{}
+	var got *task.Task
+	d := NewDispatcher(tm, WithNotifier(func(tk *task.Task) { got = tk }))
+	if d.notifier == nil {
+		t.Fatalf("notifier not set by WithNotifier")
+	}
+	want := &task.Task{ID: "t1", Status: task.TaskAwaitingInput}
+	d.notifier(want)
+	if got != want {
+		t.Errorf("notifier did not capture the task: got %v, want %v", got, want)
+	}
+}
