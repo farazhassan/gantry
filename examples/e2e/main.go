@@ -74,7 +74,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 
 	// Limiter — token + cost ceiling.
 	lim := limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0})
-	limiter.WithLimiter(a, lim)
+	if err := a.With(limiter.New(lim)); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Guardrail — block any output that contains "forbidden".
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))

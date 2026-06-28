@@ -73,7 +73,9 @@ func TestTerminationConvention(t *testing.T) {
 		})
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 		tool.WithTool(a, noopTool{})
-		limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1}))
+		if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1}))); err != nil {
+			t.Fatalf("install limiter: %v", err)
+		}
 
 		state, err := a.Run(context.Background(), "go")
 		if err != nil {

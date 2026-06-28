@@ -49,7 +49,9 @@ func RunBudgetStop(ctx context.Context) (*gantry.State, error) {
 
 	// Cap tokens far below what the response reports, so the post-call check
 	// terminates the run.
-	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 10}))
+	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 10}))); err != nil {
+		return nil, err
+	}
 
 	return a.Run(ctx, "answer at length")
 }

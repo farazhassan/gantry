@@ -64,7 +64,9 @@ func TestComponentsInteroperate(t *testing.T) {
 	}), 5)
 	compactor.WithCompactor(a, compactor.NewSlidingWindow(10), compactor.Budget{})
 	tool.WithTool(a, calcTool{})
-	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))
+	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
+		t.Fatalf("install limiter: %v", err)
+	}
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`forbidden`, guardrail.DirectionOutput))
 
 	state, err := a.Run(context.Background(), "what is 2 + 3?")

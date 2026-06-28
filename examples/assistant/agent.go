@@ -77,7 +77,9 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	}
 
 	// Per-turn token budget.
-	limiter.WithLimiter(agent, limiter.NewBudget(limiter.Limits{MaxTokens: cfg.MaxTokens}))
+	if err := agent.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: cfg.MaxTokens}))); err != nil {
+		return nil, err
+	}
 
 	// History compaction keeps the first HistoryHead and last HistoryTail
 	// messages, dropping the middle. NOTE: HeadTail is a simple strategy — in a

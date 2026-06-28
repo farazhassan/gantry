@@ -15,7 +15,9 @@ func TestWithLimiterStopsLoopWhenExceeded(t *testing.T) {
 		gantry.LLMResponse{Content: "second", StopReason: gantry.StopReasonEnd, Usage: gantry.Usage{InputTokens: 50}},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 100}))
+	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 100}))); err != nil {
+		t.Fatalf("install limiter: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -33,7 +35,9 @@ func TestWithLimiterAllowsRunUnderLimit(t *testing.T) {
 		Usage:      gantry.Usage{InputTokens: 10},
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))
+	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
+		t.Fatalf("install limiter: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
