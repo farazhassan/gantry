@@ -6,8 +6,11 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// WithCritic installs PhasePostLLM middleware that runs the Critic on
-// state.LastResponse:
+type component struct{ c Critic }
+
+// New returns a Component that installs PhasePostLLM middleware running the Critic
+// on state.LastResponse after DefaultPostLLMHandler. See package doc for the
+// accept / reject / rewrite semantics.
 //
 //   - Verdict.ModifyOutput != ""   → rewrites the assistant content
 //     (both in state.LastResponse and in the just-appended Messages entry)
@@ -28,19 +31,19 @@ import (
 // "Critic feedback: …" hint. Consequently, if WithMemory is registered to run
 // after the critic, the rejected assistant message may be persisted. This is
 // accepted behavior, not a bug.
-func WithCritic(a *gantry.Agent, c Critic) {
+func New(c Critic) gantry.Component { return &component{c: c} }
+
+func (comp *component) Install(a *gantry.Agent) error {
 	const name = "components/critic:critique"
-	_ = a.UseNamed(gantry.PhasePostLLM, name, func(next gantry.Handler) gantry.Handler {
+	return a.UseNamed(gantry.PhasePostLLM, name, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
-			// Let downstream (DefaultPostLLMHandler) run first so messages are
-			// populated and Done state reflects no-tool-calls.
 			if err := next(ctx, s); err != nil {
 				return err
 			}
 			if s.LastResponse == nil {
 				return nil
 			}
-			v, err := c.Critique(ctx, s)
+			v, err := comp.c.Critique(ctx, s)
 			if err != nil {
 				return err
 			}

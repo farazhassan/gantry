@@ -22,7 +22,9 @@ func TestWithCriticRejectionLoops(t *testing.T) {
 	})
 
 	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM), gantry.WithMaxIterations(5))
-	critic.WithCritic(a, critic.NewLLM(criticLLM, ""))
+	if err := a.With(critic.New(critic.NewLLM(criticLLM, ""))); err != nil {
+		t.Fatalf("install critic: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -41,7 +43,9 @@ func TestWithCriticModifyOutputRewrites(t *testing.T) {
 	criticImpl := rewriteCritic{newOutput: "polished"}
 
 	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))
-	critic.WithCritic(a, criticImpl)
+	if err := a.With(critic.New(criticImpl)); err != nil {
+		t.Fatalf("install critic: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {

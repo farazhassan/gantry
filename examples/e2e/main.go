@@ -80,7 +80,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))
 
 	// Critic — review with helperLLM.
-	critic.WithCritic(a, critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))
+	if err := a.With(critic.New(critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Planner — produce a plan up front using helperLLM.
 	if err := planner.WithPlanner(a, planner.NewLLM(helperLLM, "Break the task into numbered steps.")); err != nil {
