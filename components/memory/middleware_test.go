@@ -15,7 +15,9 @@ func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	memory.WithMemory(a, store)
+	if err := a.With(memory.New(store)); err != nil {
+		t.Fatalf("install memory: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "now"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -37,7 +39,9 @@ func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
 	store := memory.NewInMemoryStore()
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "hello", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	memory.WithMemory(a, store)
+	if err := a.With(memory.New(store)); err != nil {
+		t.Fatalf("install memory: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "hi"); err != nil {
 		t.Fatalf("Run: %v", err)

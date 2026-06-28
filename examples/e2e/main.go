@@ -54,7 +54,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Memory
-	memory.WithMemory(a, memory.NewInMemoryStore())
+	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Skill
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))

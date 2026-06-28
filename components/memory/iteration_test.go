@@ -19,7 +19,9 @@ func TestWithMemoryNoTranscriptDuplicationAcrossIterations(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
-	memory.WithMemory(a, memory.NewInMemoryStore())
+	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+		t.Fatalf("install memory: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "hello"); err != nil {
 		t.Fatalf("Run: %v", err)
