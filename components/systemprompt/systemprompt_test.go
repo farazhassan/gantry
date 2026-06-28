@@ -25,7 +25,9 @@ func newAgent(t *testing.T) (*gantry.Agent, *eval.MockLLMClient) {
 // empty System, so the middleware sets the persona and it reaches the model.
 func TestSetsSystemWhenEmpty(t *testing.T) {
 	a, mock := newAgent(t)
-	systemprompt.WithSystemPrompt(a, persona)
+	if err := a.With(systemprompt.New(persona)); err != nil {
+		t.Fatalf("install systemprompt: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -46,7 +48,9 @@ func TestSetsSystemWhenEmpty(t *testing.T) {
 // fires.
 func TestDoesNotOverwriteSystemSetByOuterMiddleware(t *testing.T) {
 	a, mock := newAgent(t)
-	systemprompt.WithSystemPrompt(a, persona)
+	if err := a.With(systemprompt.New(persona)); err != nil {
+		t.Fatalf("install systemprompt: %v", err)
+	}
 	_ = a.UseNamed(gantry.PhaseAssembleContext, "test/presetter", func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, state *gantry.State) error {
 			if state.System == "" {
@@ -72,7 +76,9 @@ func TestDoesNotOverwriteSystemSetByOuterMiddleware(t *testing.T) {
 func TestEmptyPromptRegistersNoMiddleware(t *testing.T) {
 	a, _ := newAgent(t)
 	before := a.MiddlewareCount(gantry.PhaseAssembleContext)
-	systemprompt.WithSystemPrompt(a, "")
+	if err := a.With(systemprompt.New("")); err != nil {
+		t.Fatalf("install systemprompt: %v", err)
+	}
 	if got := a.MiddlewareCount(gantry.PhaseAssembleContext); got != before {
 		t.Fatalf("empty prompt should register nothing: count %d -> %d", before, got)
 	}
@@ -83,7 +89,9 @@ func TestEmptyPromptRegistersNoMiddleware(t *testing.T) {
 func TestRegistersExactlyOneMiddleware(t *testing.T) {
 	a, _ := newAgent(t)
 	before := a.MiddlewareCount(gantry.PhaseAssembleContext)
-	systemprompt.WithSystemPrompt(a, persona)
+	if err := a.With(systemprompt.New(persona)); err != nil {
+		t.Fatalf("install systemprompt: %v", err)
+	}
 	if got := a.MiddlewareCount(gantry.PhaseAssembleContext); got != before+1 {
 		t.Fatalf("want one middleware added: count %d -> %d", before, got)
 	}

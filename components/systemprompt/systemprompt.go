@@ -9,25 +9,24 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// WithSystemPrompt installs a PhaseAssembleContext middleware that sets the
-// run's system prompt. It sets state.System only on iteration 0 (once per
-// turn, not on every tool-call loop) and only when state.System is empty, so
-// it establishes the base persona without clobbering a value another
-// middleware set earlier in the same turn (e.g. skill). A resumed turn begins
-// with an empty System, so the persona is re-applied each turn and editing the
-// prompt takes effect on the next turn. A blank prompt is a no-op (no
-// middleware is registered). Re-registering returns the gantry "already
-// registered" error, which is ignored here — consistent with the skill
-// component's pattern.
-func WithSystemPrompt(a *gantry.Agent, prompt string) {
-	if prompt == "" {
-		return
+type component struct{ prompt string }
+
+// New returns a Component that sets the agent's system prompt (persona / base
+// instructions) during context assembly. It sets state.System only on iteration 0
+// and only when state.System is empty, so it establishes the base persona without
+// clobbering a value another component set earlier in the same turn (e.g. skill).
+// A blank prompt is a no-op (no middleware is registered).
+func New(prompt string) gantry.Component { return &component{prompt: prompt} }
+
+func (c *component) Install(a *gantry.Agent) error {
+	if c.prompt == "" {
+		return nil
 	}
-	_ = a.UseNamed(gantry.PhaseAssembleContext, "components/systemprompt",
+	return a.UseNamed(gantry.PhaseAssembleContext, "components/systemprompt",
 		func(next gantry.Handler) gantry.Handler {
 			return func(ctx context.Context, state *gantry.State) error {
 				if state.Iteration == 0 && state.System == "" {
-					state.System = prompt
+					state.System = c.prompt
 				}
 				return next(ctx, state)
 			}
