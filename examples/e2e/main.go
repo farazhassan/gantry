@@ -100,7 +100,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 
 	// Checkpointer
 	cp := checkpointer.NewInMemory()
-	checkpointer.WithCheckpointer(a, cp, "example-run")
+	if err := a.With(checkpointer.New(cp, "example-run")); err != nil {
+		return nil, nil, nil, err
+	}
 
 	return a, cp, lim, nil
 }

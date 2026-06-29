@@ -34,7 +34,9 @@ func RunExample(ctx context.Context) (*Result, error) {
 	}
 
 	cp := checkpointer.NewInMemory()
-	checkpointer.WithCheckpointer(a, cp, runID)
+	if err := a.With(checkpointer.New(cp, runID)); err != nil {
+		return nil, err
+	}
 
 	live, err := a.Run(ctx, "what is the answer?")
 	if err != nil {
