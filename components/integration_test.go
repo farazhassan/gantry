@@ -66,7 +66,9 @@ func TestComponentsInteroperate(t *testing.T) {
 	}), 5)); err != nil {
 		t.Fatalf("install retriever: %v", err)
 	}
-	compactor.WithCompactor(a, compactor.NewSlidingWindow(10), compactor.Budget{})
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(10), compactor.Budget{})); err != nil {
+		t.Fatalf("install compactor: %v", err)
+	}
 	tool.WithTool(a, calcTool{})
 	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
 		t.Fatalf("install limiter: %v", err)

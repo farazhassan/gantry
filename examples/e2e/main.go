@@ -71,7 +71,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Compactor — sliding window of 20 messages.
-	compactor.WithCompactor(a, compactor.NewSlidingWindow(20), compactor.Budget{})
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(20), compactor.Budget{})); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Tool with parallel dispatch (capacity 4).
 	tool.WithTools(a, 4, calcTool{})

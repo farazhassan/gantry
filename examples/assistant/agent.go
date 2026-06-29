@@ -88,10 +88,12 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	// transcript some providers reject. The generous tail makes this unlikely in
 	// normal interactive use; a boundary-aware compactor would be the fix if it
 	// becomes a problem in practice.
-	compactor.WithCompactor(agent,
+	if err := agent.With(compactor.New(
 		compactor.NewHeadTail(cfg.HistoryHead, cfg.HistoryTail),
 		compactor.Budget{MaxTokens: cfg.MaxTokens},
-	)
+	)); err != nil {
+		return nil, err
+	}
 
 	return agent, nil
 }

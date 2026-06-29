@@ -26,7 +26,9 @@ func TestWithCompactorTrimsBeforeLLMCall(t *testing.T) {
 		}
 	})
 
-	compactor.WithCompactor(a, compactor.NewSlidingWindow(2), compactor.Budget{})
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(2), compactor.Budget{})); err != nil {
+		t.Fatalf("install compactor: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), ""); err != nil {
 		t.Fatalf("Run: %v", err)
