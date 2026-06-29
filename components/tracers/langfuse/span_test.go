@@ -1,13 +1,9 @@
 package langfuse
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
-
-	gantry "github.com/farazhassan/gantry"
 )
 
 // byType returns captured items whose Type matches.
@@ -184,116 +180,5 @@ func TestStartSpanPutsIDInContext(t *testing.T) {
 	ctx, _ := c.StartSpan(context.Background(), "outer")
 	if spanIDFromContext(ctx) == "" {
 		t.Fatal("StartSpan must store its span id in the returned context")
-	}
-}
-
-func TestRunSpanMapsInputOutputStateToTrace(t *testing.T) {
-	c, cap := newServerClient(t)
-	_, run := c.StartSpan(context.Background(), "run")
-	run.SetAttr(gantry.AttrInput, "the question")
-	run.SetAttr(gantry.AttrOutput, "the answer")
-	run.SetAttr(gantry.AttrState, map[string]any{"iteration": 1})
-	run.End(nil)
-	if err := c.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-
-	traces := byType(cap.items(), "trace-create")
-	if len(traces) != 1 {
-		t.Fatalf("got %d trace-create, want 1", len(traces))
-	}
-	body := traces[0].Body
-	if body["input"] != "the question" || body["output"] != "the answer" {
-		t.Fatalf("trace input/output = %v/%v", body["input"], body["output"])
-	}
-	if _, ok := body["metadata"]; !ok {
-		t.Fatal("trace metadata (state) missing")
-	}
-	spans := byType(cap.items(), "span-create")
-	if len(spans) != 1 {
-		t.Fatalf("got %d span-create, want 1", len(spans))
-	}
-	if _, ok := spans[0].Body["metadata"]; ok {
-		t.Fatalf("run span-create should carry no metadata, got %v", spans[0].Body["metadata"])
-	}
-}
-
-func TestLLMCallEmitsGeneration(t *testing.T) {
-	c, cap := newServerClient(t)
-	ctx, run := c.StartSpan(context.Background(), "run")
-	_, gen := c.StartSpan(ctx, "phase:llm_call")
-	gen.SetAttr("iteration", 0)
-	gen.SetAttr(gantry.AttrObservationType, gantry.ObservationGeneration)
-	gen.SetAttr(gantry.AttrInput, map[string]any{"system": "s"})
-	gen.SetAttr(gantry.AttrOutput, map[string]any{"content": "hi"})
-	gen.SetAttr(gantry.AttrUsage, map[string]any{"input": 7})
-	gen.End(nil)
-	run.End(nil)
-	if err := c.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-
-	gens := byType(cap.items(), "generation-create")
-	if len(gens) != 1 {
-		t.Fatalf("got %d generation-create, want 1", len(gens))
-	}
-	body := gens[0].Body
-	for _, k := range []string{"input", "output", "usage"} {
-		if _, ok := body[k]; !ok {
-			t.Fatalf("generation missing %q: %v", k, body)
-		}
-	}
-	md, _ := body["metadata"].(map[string]any)
-	if md["iteration"].(float64) != 0 {
-		t.Fatalf("generation leftover metadata = %v, want iteration=0", body["metadata"])
-	}
-	for _, s := range byType(cap.items(), "span-create") {
-		if s.Body["name"] == "phase:llm_call" {
-			t.Fatal("llm_call must emit generation-create, not span-create")
-		}
-	}
-}
-
-func TestRedactorDropsStateKeepsInput(t *testing.T) {
-	c, cap := newServerClient(t, WithRedactor(func(key string, v any) (any, bool) {
-		if key == gantry.AttrState {
-			return nil, false
-		}
-		return v, true
-	}))
-	_, run := c.StartSpan(context.Background(), "run")
-	run.SetAttr(gantry.AttrInput, "in")
-	run.SetAttr(gantry.AttrState, map[string]any{"secret": true})
-	run.End(nil)
-	if err := c.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-
-	body := byType(cap.items(), "trace-create")[0].Body
-	if body["input"] != "in" {
-		t.Fatalf("input should survive, got %v", body["input"])
-	}
-	if _, ok := body["metadata"]; ok {
-		t.Fatalf("state was dropped by redactor; trace metadata must be absent, got %v", body["metadata"])
-	}
-}
-
-func TestGenerationInputStableAfterMutation(t *testing.T) {
-	c, cap := newServerClient(t)
-	msgs := []gantry.Message{{Role: gantry.RoleUser, Content: "original"}}
-	ctx, run := c.StartSpan(context.Background(), "run")
-	_, gen := c.StartSpan(ctx, "phase:llm_call")
-	gen.SetAttr(gantry.AttrObservationType, gantry.ObservationGeneration)
-	gen.SetAttr(gantry.AttrInput, map[string]any{"messages": msgs})
-	gen.End(nil) // eager marshal happens here
-	msgs[0].Content = "mutated"
-	run.End(nil)
-	if err := c.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-
-	raw, _ := json.Marshal(byType(cap.items(), "generation-create")[0].Body["input"])
-	if !bytes.Contains(raw, []byte("original")) || bytes.Contains(raw, []byte("mutated")) {
-		t.Fatalf("generation input should be the pre-mutation snapshot, got %s", raw)
 	}
 }

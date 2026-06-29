@@ -58,11 +58,22 @@ type Task struct {
 	Title     string
 	Goal      string
 	Status    TaskStatus
-	Plan      *gantry.Plan     // the ledger — source of truth for progress
-	Budget    TaskBudget       // cross-run budget
-	Working   []gantry.Message // task's own working context, separate from the chat transcript
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Plan      *gantry.Plan      // the ledger — source of truth for progress
+	Budget    TaskBudget        // cross-run budget
+	Working   []gantry.Message  // task's own working context, separate from the chat transcript
+	Pending   []gantry.ToolCall // unfulfilled ask_user call(s); set only while Status == TaskAwaitingInput
+	// ConsecutiveRejections counts critic rejections in the current done cycle.
+	// It is reset to 0 on any non-reject outcome and bounds how many times the
+	// driver will re-prompt after a rejection before failing the task.
+	ConsecutiveRejections int
+	// TotalRejections counts critic rejections across the task's whole life. Unlike
+	// ConsecutiveRejections it is never reset, so it catches a model that oscillates
+	// between rejected done attempts and max-iteration continuations (which would
+	// otherwise keep the consecutive streak at zero and only ever be stopped by the
+	// budget). It bounds total rejections at a higher cap than the consecutive one.
+	TotalRejections int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // TaskRef is the lightweight reference a Session keeps for each task it owns;
@@ -75,8 +86,10 @@ type TaskRef struct {
 }
 
 // SessionMeta is the session-side link to its tasks: an ordered, append-only
-// history of refs plus the id of the single active task ("" when none).
+// history of refs, the id of the single active task ("" when none), and the
+// FIFO ids of tasks waiting to run.
 type SessionMeta struct {
-	TaskRefs     []TaskRef
-	ActiveTaskID string
+	TaskRefs     []TaskRef // append-only history (all tasks ever created)
+	ActiveTaskID string    // the running/suspended task; "" when none
+	Queue        []string  // pending task ids, FIFO; head runs next
 }

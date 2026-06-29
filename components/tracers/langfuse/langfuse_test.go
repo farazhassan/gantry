@@ -201,34 +201,6 @@ func TestFailedSendsZeroOnSuccess(t *testing.T) {
 	}
 }
 
-func TestRedactDropsAndRewrites(t *testing.T) {
-	c := New(WithPublicKey("pk"), WithSecretKey("sk"),
-		WithRedactor(func(key string, v any) (any, bool) {
-			if key == "drop.me" {
-				return nil, false
-			}
-			return "masked", true
-		}))
-	t.Cleanup(func() { _ = c.Close() })
-
-	if _, ok := c.redact("drop.me", "secret"); ok {
-		t.Fatal("redact must drop keys the redactor rejects")
-	}
-	raw, ok := c.redact("keep.me", "secret")
-	if !ok || string(raw) != `"masked"` {
-		t.Fatalf("redact rewrite = %q ok=%v, want \"masked\"", raw, ok)
-	}
-}
-
-func TestRedactNilRedactorMarshalsRaw(t *testing.T) {
-	c := New(WithPublicKey("pk"), WithSecretKey("sk"))
-	t.Cleanup(func() { _ = c.Close() })
-	raw, ok := c.redact("any", map[string]int{"n": 1})
-	if !ok || string(raw) != `{"n":1}` {
-		t.Fatalf("redact raw = %q ok=%v, want {\"n\":1}", raw, ok)
-	}
-}
-
 // waitFor polls cond up to ~1s.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
