@@ -85,7 +85,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Guardrail — block any output that contains "forbidden".
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Critic — review with helperLLM.
 	if err := a.With(critic.New(critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))); err != nil {

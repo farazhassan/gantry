@@ -73,7 +73,9 @@ func TestComponentsInteroperate(t *testing.T) {
 	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
 		t.Fatalf("install limiter: %v", err)
 	}
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`forbidden`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`forbidden`, guardrail.DirectionOutput))); err != nil {
+		t.Fatalf("install guardrail: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "what is 2 + 3?")
 	if err != nil {

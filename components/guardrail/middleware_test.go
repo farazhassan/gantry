@@ -13,7 +13,9 @@ import (
 func TestWithGuardrailBlocksOnInputMatch(t *testing.T) {
 	mock := eval.NewMockLLMClient() // should not be called
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)password`, guardrail.DirectionInput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)password`, guardrail.DirectionInput))); err != nil {
+		t.Fatalf("install guardrail: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "what is my password")
 	if err == nil || !errors.Is(err, gantry.ErrGuardrailBlocked) {
@@ -30,7 +32,9 @@ func TestWithGuardrailBlocksOnInputMatch(t *testing.T) {
 func TestWithGuardrailBlocksOnOutputMatch(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "the secret is 42", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))); err != nil {
+		t.Fatalf("install guardrail: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "tell me")
 	if err == nil || !errors.Is(err, gantry.ErrGuardrailBlocked) {
@@ -44,7 +48,9 @@ func TestWithGuardrailBlocksOnOutputMatch(t *testing.T) {
 func TestWithGuardrailOutputBlockScrubsFinalOutput(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "the secret is 42", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)secret`, guardrail.DirectionOutput))); err != nil {
+		t.Fatalf("install guardrail: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "tell me")
 	if err == nil || !errors.Is(err, gantry.ErrGuardrailBlocked) {

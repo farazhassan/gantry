@@ -27,7 +27,9 @@ func RunBlocked(ctx context.Context) (*gantry.State, error) {
 		return nil, err
 	}
 
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))); err != nil {
+		return nil, err
+	}
 
 	return a.Run(ctx, "tell me something")
 }

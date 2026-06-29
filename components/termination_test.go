@@ -89,7 +89,9 @@ func TestTerminationConvention(t *testing.T) {
 	t.Run("guardrail_blocked_returns_sentinel", func(t *testing.T) {
 		mock := eval.NewMockLLMClient() // input check fires before any LLM call
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-		guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)blocked`, guardrail.DirectionInput))
+		if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)blocked`, guardrail.DirectionInput))); err != nil {
+			t.Fatalf("install guardrail: %v", err)
+		}
 
 		state, err := a.Run(context.Background(), "this is blocked")
 		if !errors.Is(err, gantry.ErrGuardrailBlocked) {
