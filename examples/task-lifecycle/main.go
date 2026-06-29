@@ -110,10 +110,14 @@ func RunExample(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	// Server tools execute inline and buffer spawns into the task collector.
-	tool.WithTools(agent, 1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool())
 	// ask_user MUST be a client tool: only a client-tool call suspends the task
 	// at awaiting_input (a server tool would execute inline and never park).
-	tool.WithClientTools(agent, ask.Definition())
+	if err := agent.With(
+		tool.FromTools(1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool()),
+		tool.Client(ask.Definition()),
+	); err != nil {
+		return nil, err
+	}
 
 	rubric := "You are a release-notes critic. Reply with PASS only if the " +
 		"announcement names the product version and includes a clear " +

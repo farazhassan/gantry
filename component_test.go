@@ -22,7 +22,7 @@ func (f fakeComponent) Install(a *Agent) error {
 
 func newTestAgent(t *testing.T) *Agent {
 	t.Helper()
-	a, err := NewAgent(WithLLM(stubLLM{}))
+	a, err := NewAgent(WithLLM(streamingStub{}))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestWithStopsAtFirstError(t *testing.T) {
 func TestWithComponentsOption(t *testing.T) {
 	var got []string
 	_, err := NewAgent(
-		WithLLM(stubLLM{}),
+		WithLLM(streamingStub{}),
 		WithComponents(fakeComponent{name: "a", installed: &got}),
 	)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestWithComponentsOption(t *testing.T) {
 func TestWithComponentsOptionPropagatesError(t *testing.T) {
 	sentinel := errors.New("boom")
 	_, err := NewAgent(
-		WithLLM(stubLLM{}),
+		WithLLM(streamingStub{}),
 		WithComponents(fakeComponent{failWith: sentinel}),
 	)
 	if !errors.Is(err, sentinel) {

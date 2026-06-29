@@ -52,10 +52,14 @@ func RunLiveExample(ctx context.Context, model, ollamaURL string, dispatchTimeou
 		return err
 	}
 	// Server tools execute inline and buffer spawns into the task collector.
-	tool.WithTools(agent, 1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool())
 	// ask_user MUST be a client tool: only a client-tool call parks the task at
 	// awaiting_input (a server tool would execute inline and never suspend).
-	tool.WithClientTools(agent, ask.Definition())
+	if err := agent.With(
+		tool.FromTools(1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool()),
+		tool.Client(ask.Definition()),
+	); err != nil {
+		return err
+	}
 
 	verifier := task.NewCriticVerifier(critic.NewLLM(criticLLM, rubric))
 
