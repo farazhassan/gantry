@@ -66,7 +66,9 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	}
 
 	// Base persona for the assistant, applied during context assembly.
-	systemprompt.WithSystemPrompt(agent, cfg.SystemPrompt)
+	if err := agent.With(systemprompt.New(cfg.SystemPrompt)); err != nil {
+		return nil, err
+	}
 
 	// Tools: full-parallel dispatch (parallelism 0).
 	if err := agent.With(tool.FromTools(0, cfg.Tools...)); err != nil {

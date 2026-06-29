@@ -186,7 +186,7 @@ reference once the pieces click — its full wiring is in
 | **minimal** | The smallest agent: the loop, `FinalOutput`, `DoneNoToolCalls` | `go run ./examples/minimal` |
 | **tools** | Defining and dispatching a tool (`PhaseToolExec → PhaseObserve`) | `go run ./examples/tools` |
 | **middleware** | The onion model: logging + retry middleware on `PhaseLLMCall` | `go run ./examples/middleware` |
-| **rag** | Retrieval-augmented context via `retriever.WithRetriever` | `go run ./examples/rag` |
+| **rag** | Retrieval-augmented context via `retriever.New` | `go run ./examples/rag` |
 | **guardrail** | Termination: active block (sentinel error) vs. budget stop (nil error) | `go run ./examples/guardrail` |
 | **checkpoint** | Persisting and restoring run state by id | `go run ./examples/checkpoint` |
 | **streaming** | Streaming a whole run as JSON events over SSE via `RunStream` | `go run ./examples/streaming` |

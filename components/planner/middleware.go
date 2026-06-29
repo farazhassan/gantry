@@ -17,7 +17,7 @@ func New(p Planner) gantry.Component { return &component{p: p} }
 
 func (c *component) Install(a *gantry.Agent) error {
 	if err := a.RegisterPhase(PhasePlan, gantry.PositionAfter, gantry.PhaseStart); err != nil {
-		// If already registered (e.g. by another WithPlanner call), continue.
+		// If already registered (e.g. by another planner.New call), continue.
 		if !strings.Contains(err.Error(), "already registered") {
 			return err
 		}

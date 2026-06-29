@@ -141,12 +141,12 @@ Both carry a transcript across runs, but they are used **alternatively, never
 stacked** for the same transcript:
 
 - **memory** — implicit, single, unkeyed transcript baked into one agent via
-  `memory.WithMemory`. Best for one long-lived in-process conversation.
+  `memory.New`. Best for one long-lived in-process conversation.
 - **session** — explicit, keyed, durable; the transcript lives in the per-id
   `State` carried by `RunFrom`. Best for many conversations and/or persistence.
 
-The agent attached to a `Manager` MUST NOT also carry `WithMemory` or
-`WithCheckpointer`: the `Session` owns load/save, and memory would
+The agent attached to a `Manager` MUST NOT also carry `memory.New` or
+`checkpointer.New`: the `Session` owns load/save, and memory would
 double-manage the transcript.
 
 ## Caveats

@@ -25,7 +25,9 @@ func TestEvalE2ESweepAcrossConfigs(t *testing.T) {
 				if err != nil {
 					return nil, err
 				}
-				memory.WithMemory(a, memory.NewInMemoryStore())
+				if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+					return nil, err
+				}
 				return a, nil
 			},
 		}

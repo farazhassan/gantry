@@ -57,7 +57,9 @@ func TestComponentsInteroperate(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	memory.WithMemory(a, memory.NewInMemoryStore())
+	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+		t.Fatalf("install memory: %v", err)
+	}
 	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers."))); err != nil {
 		t.Fatalf("install skill: %v", err)
 	}

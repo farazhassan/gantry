@@ -21,7 +21,7 @@ type component struct{ l Limiter }
 // before next() (pre-next), while finalize does its work after next()
 // (post-next). Pre-next work runs in reverse registration order and post-next
 // work in forward order (last-registered = outermost = runs last). Register
-// WithMemory after limiter and critic so memory:persist observes the
+// memory.New after limiter and critic so memory:persist observes the
 // finalized turn. See the memory package's "Middleware ordering" note.
 func New(l Limiter) gantry.Component { return &component{l: l} }
 

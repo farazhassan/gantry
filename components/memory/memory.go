@@ -4,7 +4,7 @@
 // Middleware ordering: components that do work after next() on PhasePostLLM
 // (memory persist, critic, limiter finalize) run that work in forward
 // registration order — the last-registered middleware is the outermost and so
-// runs last. Register WithMemory last so memory:persist observes the finalized
+// runs last. Register memory.New last so memory:persist observes the finalized
 // turn: after the critic has rewritten (Verdict.ModifyOutput) or rejected
 // (Verdict.Accept == false) the assistant message.
 package memory

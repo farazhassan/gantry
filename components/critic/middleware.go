@@ -28,7 +28,7 @@ type component struct{ c Critic }
 // Reject path: when Verdict.Accept == false, the rejected assistant message is
 // deliberately LEFT in state.Messages (the live transcript) so the next
 // iteration's LLM call sees its rejected attempt alongside the appended
-// "Critic feedback: …" hint. Consequently, if WithMemory is registered to run
+// "Critic feedback: …" hint. Consequently, if memory.New is registered to run
 // after the critic, the rejected assistant message may be persisted. This is
 // accepted behavior, not a bug.
 func New(c Critic) gantry.Component { return &component{c: c} }

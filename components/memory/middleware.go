@@ -16,7 +16,7 @@ type component struct{ m Memory }
 // components so persist captures the finalized assistant message (see package doc).
 //
 // Middleware ordering: register memory LAST among the PhasePostLLM components
-// (after WithCritic and WithLimiter). PhasePostLLM components that act after
+// (after critic.New and limiter.New). PhasePostLLM components that act after
 // next() run that work in forward registration order (last-registered = outermost
 // = runs last), so registering memory last makes memory:persist capture the
 // assistant message after the critic has finalized it (Verdict.ModifyOutput) or
