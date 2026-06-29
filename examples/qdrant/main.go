@@ -98,7 +98,9 @@ func runQuery(ctx context.Context, store *qdrant.Store, emb *embopenai.Client) e
 	if err != nil {
 		return err
 	}
-	retriever.WithRetriever(a, qdrant.NewRetriever(store, emb), topK)
+	if err := a.With(retriever.New(qdrant.NewRetriever(store, emb), topK)); err != nil {
+		return err
+	}
 
 	state, err := a.Run(ctx, "How does Gantry talk to LLM providers?")
 	if err != nil {

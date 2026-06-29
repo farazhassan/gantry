@@ -59,9 +59,11 @@ func TestComponentsInteroperate(t *testing.T) {
 
 	memory.WithMemory(a, memory.NewInMemoryStore())
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
-	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
+	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
 		{ID: "doc1", Content: "context: arithmetic is good"},
-	}), 5)
+	}), 5)); err != nil {
+		t.Fatalf("install retriever: %v", err)
+	}
 	compactor.WithCompactor(a, compactor.NewSlidingWindow(10), compactor.Budget{})
 	tool.WithTool(a, calcTool{})
 	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {

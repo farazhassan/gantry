@@ -1,5 +1,5 @@
 // Package retriever defines the Retriever interface and a static reference
-// implementation. WithRetriever installs PhaseAssembleContext middleware.
+// implementation. New returns a Component that installs PhaseAssembleContext middleware.
 package retriever
 
 import (

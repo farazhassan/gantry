@@ -62,9 +62,11 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))
 
 	// Retriever (RAG)
-	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
+	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
 		{ID: "doc-arith", Content: "Arithmetic is performed by the calc tool."},
-	}), 3)
+	}), 3)); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Compactor — sliding window of 20 messages.
 	compactor.WithCompactor(a, compactor.NewSlidingWindow(20), compactor.Budget{})
