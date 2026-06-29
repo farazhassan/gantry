@@ -91,7 +91,7 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Planner — produce a plan up front using helperLLM.
-	if err := planner.WithPlanner(a, planner.NewLLM(helperLLM, "Break the task into numbered steps.")); err != nil {
+	if err := a.With(planner.New(planner.NewLLM(helperLLM, "Break the task into numbered steps."))); err != nil {
 		return nil, nil, nil, err
 	}
 

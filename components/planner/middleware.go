@@ -8,11 +8,14 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// WithPlanner registers PhasePlan after PhaseStart, then installs middleware
-// that calls Planner.Plan(state.Input) and stashes the result on state.Plan.
-// A second middleware (PhaseAssembleContext) injects the plan steps into
-// state.System.
-func WithPlanner(a *gantry.Agent, p Planner) error {
+type component struct{ p Planner }
+
+// New returns a Component that registers a PhasePlan after PhaseStart and installs
+// middleware that calls Planner.Plan and injects the resulting plan into
+// state.System during context assembly.
+func New(p Planner) gantry.Component { return &component{p: p} }
+
+func (c *component) Install(a *gantry.Agent) error {
 	if err := a.RegisterPhase(PhasePlan, gantry.PositionAfter, gantry.PhaseStart); err != nil {
 		// If already registered (e.g. by another WithPlanner call), continue.
 		if !strings.Contains(err.Error(), "already registered") {
@@ -21,7 +24,7 @@ func WithPlanner(a *gantry.Agent, p Planner) error {
 	}
 
 	const planName = "components/planner:plan"
-	_ = a.UseNamed(PhasePlan, planName, func(next gantry.Handler) gantry.Handler {
+	if err := a.UseNamed(PhasePlan, planName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			if s.Iteration > 0 || s.Plan != nil {
 				return next(ctx, s)
@@ -30,7 +33,7 @@ func WithPlanner(a *gantry.Agent, p Planner) error {
 			if task == "" {
 				task = s.Input
 			}
-			plan, err := p.Plan(ctx, task)
+			plan, err := c.p.Plan(ctx, task)
 			if err != nil {
 				return err
 			}
@@ -38,10 +41,12 @@ func WithPlanner(a *gantry.Agent, p Planner) error {
 			s.Task = task
 			return next(ctx, s)
 		}
-	})
+	}); err != nil {
+		return err
+	}
 
 	const injectName = "components/planner:inject"
-	_ = a.UseNamed(gantry.PhaseAssembleContext, injectName, func(next gantry.Handler) gantry.Handler {
+	return a.UseNamed(gantry.PhaseAssembleContext, injectName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			// Inject the plan only on the first iteration. PhaseAssembleContext
 			// re-runs every iteration and s.System persists, so appending every
@@ -57,5 +62,4 @@ func WithPlanner(a *gantry.Agent, p Planner) error {
 			return next(ctx, s)
 		}
 	})
-	return nil
 }

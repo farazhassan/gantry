@@ -15,8 +15,8 @@ func TestWithPlannerSetsStatePlanAndInjectsIntoSystem(t *testing.T) {
 	mainLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 
 	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))
-	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
-		t.Fatalf("WithPlanner: %v", err)
+	if err := a.With(planner.New(planner.NewLLM(plannerLLM, ""))); err != nil {
+		t.Fatalf("install planner: %v", err)
 	}
 
 	state, err := a.Run(context.Background(), "do it")
