@@ -58,7 +58,9 @@ func TestComponentsInteroperate(t *testing.T) {
 	}
 
 	memory.WithMemory(a, memory.NewInMemoryStore())
-	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
+	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers."))); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
 	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
 		{ID: "doc1", Content: "context: arithmetic is good"},
 	}), 5)); err != nil {

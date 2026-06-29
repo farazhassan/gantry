@@ -59,7 +59,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Skill
-	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))
+	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Retriever (RAG)
 	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
