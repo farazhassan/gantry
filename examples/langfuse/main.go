@@ -29,22 +29,6 @@ func RunExample(ctx context.Context, tracer gantry.Tracer) (*gantry.State, error
 	return a.Run(ctx, "introduce yourself")
 }
 
-// redactSensitive is an illustrative Redactor: it drops the full state snapshot
-// and masks the captured input/output so no message content reaches Langfuse —
-// the shape you would use to keep sensitive data (e.g. PHI) out of traces.
-// Structural attrs (iteration, done, done_reason) are unaffected and still flow
-// to metadata.
-func redactSensitive(key string, value any) (any, bool) {
-	switch key {
-	case gantry.AttrState:
-		return nil, false // drop entirely
-	case gantry.AttrInput, gantry.AttrOutput:
-		return "[redacted]", true // mask, but keep the field present
-	default:
-		return value, true
-	}
-}
-
 func main() {
 	if os.Getenv("LANGFUSE_PUBLIC_KEY") == "" || os.Getenv("LANGFUSE_SECRET_KEY") == "" {
 		log.Fatal("set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to run the smoke test " +
@@ -53,17 +37,7 @@ func main() {
 
 	// Build the real Langfuse client from the environment. New panics on missing
 	// credentials, but the precheck above turns that into a friendly message.
-	//
-	// Content capture is on by default: the "run" trace carries the run
-	// input/output and a sanitized state snapshot, and the llm_call span ships as
-	// a Langfuse "generation" with the assembled prompt and the model reply. Set
-	// LANGFUSE_REDACT=1 to exercise the other path — a redactor that masks message
-	// content and drops the state snapshot before anything leaves the process.
-	opts := []langfuse.Option{}
-	if os.Getenv("LANGFUSE_REDACT") != "" {
-		opts = append(opts, langfuse.WithRedactor(redactSensitive))
-	}
-	lf := langfuse.New(opts...)
+	lf := langfuse.New()
 
 	state, err := RunExample(context.Background(), lf)
 	if err != nil {
@@ -95,9 +69,4 @@ func main() {
 		log.Fatalf("buffer dropped %d events before flush — increase batch/flush settings", lf.Dropped())
 	}
 	fmt.Printf("flushed cleanly — open %s and look for the most recent \"run\" trace\n", lf.Host())
-	if os.Getenv("LANGFUSE_REDACT") != "" {
-		fmt.Println("redaction on: the trace input/output show \"[redacted]\" and the state snapshot is absent")
-	} else {
-		fmt.Println("the run trace shows input/output, a state snapshot, and a nested \"generation\" with the prompt and reply")
-	}
 }

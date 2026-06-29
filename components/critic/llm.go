@@ -26,10 +26,14 @@ func (c *LLMCritic) Critique(ctx context.Context, state *gantry.State) (Verdict,
 	if state.LastResponse == nil {
 		return Verdict{Accept: true}, nil
 	}
+	userContent := state.LastResponse.Content
+	if criteria := renderCriteria(state.Plan); criteria != "" {
+		userContent = "Acceptance criteria:\n" + criteria + "\n\nWork under review:\n" + state.LastResponse.Content
+	}
 	req := gantry.LLMRequest{
 		System: c.rubric,
 		Messages: []gantry.Message{
-			{Role: gantry.RoleUser, Content: state.LastResponse.Content},
+			{Role: gantry.RoleUser, Content: userContent},
 		},
 	}
 	resp, err := c.client.Generate(ctx, req)
@@ -41,4 +45,22 @@ func (c *LLMCritic) Critique(ctx context.Context, state *gantry.State) (Verdict,
 		verdict.Accept = true
 	}
 	return verdict, nil
+}
+
+// renderCriteria returns a bulleted list of every plan step's non-empty
+// AcceptanceCriteria, or "" if the plan is nil or no step declares criteria.
+func renderCriteria(plan *gantry.Plan) string {
+	if plan == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, s := range plan.Steps {
+		if s.AcceptanceCriteria == "" {
+			continue
+		}
+		b.WriteString("- ")
+		b.WriteString(s.AcceptanceCriteria)
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }

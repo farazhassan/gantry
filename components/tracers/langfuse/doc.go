@@ -17,11 +17,4 @@
 //	if err != nil {
 //		// handle error
 //	}
-//
-// Content capture: when used with the gantry agent, the run span carries the
-// run input/output and a sanitized state snapshot, and the llm_call span is
-// exported as a Langfuse "generation" with the assembled prompt as input and
-// the model reply as output. Use WithRedactor to drop or rewrite any of these
-// reserved values before they leave the process (e.g. to mask sensitive
-// content); a nil redactor exports them unchanged.
 package langfuse

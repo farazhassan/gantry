@@ -2,7 +2,6 @@ package planner
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/farazhassan/gantry"
@@ -51,13 +50,8 @@ func (c *component) Install(a *gantry.Agent) error {
 			// Inject the plan only on the first iteration. PhaseAssembleContext
 			// re-runs every iteration and s.System persists, so appending every
 			// iteration would stack duplicate "Plan:" blocks.
-			if s.Iteration == 0 && s.Plan != nil && len(s.Plan.Steps) > 0 {
-				var b strings.Builder
-				b.WriteString("\n\nPlan:\n")
-				for i, step := range s.Plan.Steps {
-					fmt.Fprintf(&b, "%d. %s\n", i+1, step.Description)
-				}
-				s.System += b.String()
+			if s.Iteration == 0 {
+				s.System += renderPlan(s.Plan)
 			}
 			return next(ctx, s)
 		}
