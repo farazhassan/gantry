@@ -33,14 +33,8 @@ Environment variables:
 | `LANGFUSE_PUBLIC_KEY` | yes      | —                              |
 | `LANGFUSE_SECRET_KEY` | yes      | —                              |
 | `LANGFUSE_HOST`       | no       | `https://cloud.langfuse.com`   |
-| `LANGFUSE_REDACT`     | no       | unset (content sent in full)   |
 
 Set `LANGFUSE_HOST` if you run a self-hosted Langfuse.
-
-Set `LANGFUSE_REDACT=1` to wire a `WithRedactor` that masks message content and
-drops the state snapshot before anything leaves the process — the shape you'd
-use to keep sensitive data (e.g. PHI) out of traces. With it set, the trace
-input/output read `[redacted]` and the state snapshot is absent.
 
 ## Reading the result
 
@@ -53,13 +47,6 @@ input/output read `[redacted]` and the state snapshot is absent.
 On success, open your Langfuse project and find the most recent trace named
 **`run`**. It should contain a nested span per agent phase (the gantry wraps
 each run in a single run-level span, so one agent run = one Langfuse trace).
-
-The trace also carries content: its **input**/**output** panes show the run
-input and final output, the **metadata** holds a sanitized state snapshot, and
-the `llm_call` phase appears as a nested **generation** observation whose input
-is the assembled prompt and whose output is the model reply. Run with
-`LANGFUSE_REDACT=1` to see the same trace with content masked and the state
-snapshot dropped.
 
 Because a custom tracer does not populate `state.Trace`, this program can't print
 the exact trace id — locate it by recency in the UI.
