@@ -55,7 +55,9 @@ func newAgent() (*gantry.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	tool.WithTools(a, 1, calcTool{})
+	if err := a.With(tool.FromTools(1, calcTool{})); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 

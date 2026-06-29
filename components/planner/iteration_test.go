@@ -21,8 +21,8 @@ func TestWithPlannerNoDuplicateSystemAcrossIterations(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM), gantry.WithMaxIterations(5))
-	if err := planner.WithPlanner(a, planner.NewLLM(plannerLLM, "")); err != nil {
-		t.Fatalf("WithPlanner: %v", err)
+	if err := a.With(planner.New(planner.NewLLM(plannerLLM, ""))); err != nil {
+		t.Fatalf("install planner: %v", err)
 	}
 
 	if _, err := a.Run(context.Background(), "do it"); err != nil {

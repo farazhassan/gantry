@@ -20,7 +20,9 @@ func TestWithSkillNoDuplicateSystemAcrossIterations(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
-	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
+	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers."))); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)

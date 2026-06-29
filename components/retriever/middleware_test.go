@@ -19,7 +19,9 @@ func TestWithRetrieverPopulatesStateAndPrependsContext(t *testing.T) {
 
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	retriever.WithRetriever(a, r, 5)
+	if err := a.With(retriever.New(r, 5)); err != nil {
+		t.Fatalf("install retriever: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "search query")
 	if err != nil {

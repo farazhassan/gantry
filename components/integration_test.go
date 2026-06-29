@@ -57,15 +57,29 @@ func TestComponentsInteroperate(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	memory.WithMemory(a, memory.NewInMemoryStore())
-	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers."))
-	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
+	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+		t.Fatalf("install memory: %v", err)
+	}
+	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers."))); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
+	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
 		{ID: "doc1", Content: "context: arithmetic is good"},
-	}), 5)
-	compactor.WithCompactor(a, compactor.NewSlidingWindow(10), compactor.Budget{})
-	tool.WithTool(a, calcTool{})
-	limiter.WithLimiter(a, limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`forbidden`, guardrail.DirectionOutput))
+	}), 5)); err != nil {
+		t.Fatalf("install retriever: %v", err)
+	}
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(10), compactor.Budget{})); err != nil {
+		t.Fatalf("install compactor: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, calcTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
+		t.Fatalf("install limiter: %v", err)
+	}
+	if err := a.With(guardrail.New(guardrail.NewRegex(`forbidden`, guardrail.DirectionOutput))); err != nil {
+		t.Fatalf("install guardrail: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "what is 2 + 3?")
 	if err != nil {

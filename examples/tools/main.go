@@ -59,9 +59,11 @@ func RunExample(ctx context.Context) (*gantry.State, error) {
 		return nil, err
 	}
 
-	// Register the tool. The second argument is the dispatch parallelism;
+	// Register the tool. The first argument is the dispatch parallelism;
 	// 1 runs tool calls one at a time (e2e passes 4 for concurrent calls).
-	tool.WithTools(a, 1, calcTool{})
+	if err := a.With(tool.FromTools(1, calcTool{})); err != nil {
+		return nil, err
+	}
 
 	return a.Run(ctx, "what is 2 + 3?")
 }

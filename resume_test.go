@@ -235,7 +235,9 @@ func TestClientToolSuspendResumeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	tool.WithClientTools(a, ask.Definition())
+	if err := a.With(tool.Client(ask.Definition())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 
 	// 1. Run suspends on the client tool call.
 	suspended, err := a.Run(context.Background(), "hi, I am Ada")

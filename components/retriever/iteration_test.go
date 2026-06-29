@@ -20,7 +20,9 @@ func TestWithRetrieverNoDuplicateSystemAcrossIterations(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(5))
-	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{{ID: "d1", Content: "alpha"}}), 5)
+	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{{ID: "d1", Content: "alpha"}}), 5)); err != nil {
+		t.Fatalf("install retriever: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "q"); err != nil {
 		t.Fatalf("Run: %v", err)

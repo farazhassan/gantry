@@ -54,43 +54,63 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Memory
-	memory.WithMemory(a, memory.NewInMemoryStore())
+	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Skill
-	skill.WithSkill(a, skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))
+	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers and cite the tool you used."))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Retriever (RAG)
-	retriever.WithRetriever(a, retriever.NewStatic([]gantry.Document{
+	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
 		{ID: "doc-arith", Content: "Arithmetic is performed by the calc tool."},
-	}), 3)
+	}), 3)); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Compactor — sliding window of 20 messages.
-	compactor.WithCompactor(a, compactor.NewSlidingWindow(20), compactor.Budget{})
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(20), compactor.Budget{})); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Tool with parallel dispatch (capacity 4).
-	tool.WithTools(a, 4, calcTool{})
+	if err := a.With(tool.FromTools(4, calcTool{})); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Limiter — token + cost ceiling.
 	lim := limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0})
-	limiter.WithLimiter(a, lim)
+	if err := a.With(limiter.New(lim)); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Guardrail — block any output that contains "forbidden".
-	guardrail.WithGuardrail(a, guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))
+	if err := a.With(guardrail.New(guardrail.NewRegex(`(?i)forbidden`, guardrail.DirectionOutput))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Critic — review with helperLLM.
-	critic.WithCritic(a, critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))
+	if err := a.With(critic.New(critic.NewLLM(helperLLM, "Reply PASS if the answer is correct; FAIL otherwise."))); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Planner — produce a plan up front using helperLLM.
-	if err := planner.WithPlanner(a, planner.NewLLM(helperLLM, "Break the task into numbered steps.")); err != nil {
+	if err := a.With(planner.New(planner.NewLLM(helperLLM, "Break the task into numbered steps."))); err != nil {
 		return nil, nil, nil, err
 	}
 
 	// HumanInLoop — auto-approve in the example; CLI/web adapters could deny.
-	humanloop.WithHumanInLoop(a, humanloop.NewAutoApprover())
+	if err := a.With(humanloop.New(humanloop.NewAutoApprover())); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Checkpointer
 	cp := checkpointer.NewInMemory()
-	checkpointer.WithCheckpointer(a, cp, "example-run")
+	if err := a.With(checkpointer.New(cp, "example-run")); err != nil {
+		return nil, nil, nil, err
+	}
 
 	return a, cp, lim, nil
 }

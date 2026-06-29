@@ -66,18 +66,26 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	}
 
 	// Base persona for the assistant, applied during context assembly.
-	systemprompt.WithSystemPrompt(agent, cfg.SystemPrompt)
+	if err := agent.With(systemprompt.New(cfg.SystemPrompt)); err != nil {
+		return nil, err
+	}
 
 	// Tools: full-parallel dispatch (parallelism 0).
-	tool.WithTools(agent, 0, cfg.Tools...)
+	if err := agent.With(tool.FromTools(0, cfg.Tools...)); err != nil {
+		return nil, err
+	}
 
 	// Confirm mutations before any tool executes.
 	if cfg.Confirmer != nil {
-		humanloop.WithHumanInLoop(agent, cfg.Confirmer)
+		if err := agent.With(humanloop.New(cfg.Confirmer)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Per-turn token budget.
-	limiter.WithLimiter(agent, limiter.NewBudget(limiter.Limits{MaxTokens: cfg.MaxTokens}))
+	if err := agent.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: cfg.MaxTokens}))); err != nil {
+		return nil, err
+	}
 
 	// History compaction keeps the first HistoryHead and last HistoryTail
 	// messages, dropping the middle. NOTE: HeadTail is a simple strategy — in a
@@ -86,10 +94,12 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	// transcript some providers reject. The generous tail makes this unlikely in
 	// normal interactive use; a boundary-aware compactor would be the fix if it
 	// becomes a problem in practice.
-	compactor.WithCompactor(agent,
+	if err := agent.With(compactor.New(
 		compactor.NewHeadTail(cfg.HistoryHead, cfg.HistoryTail),
 		compactor.Budget{MaxTokens: cfg.MaxTokens},
-	)
+	)); err != nil {
+		return nil, err
+	}
 
 	return agent, nil
 }

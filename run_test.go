@@ -38,7 +38,7 @@ func TestRunSingleTurnExits(t *testing.T) {
 }
 
 func TestRunMaxIterationsTerminates(t *testing.T) {
-	// LLM keeps requesting a tool that's never executed (no WithTool registered).
+	// LLM keeps requesting a tool that's never executed (no tool dispatch registered).
 	// The loop should hit MaxIterations.
 	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
 		{Response: gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "x", Name: "noop"}}, StopReason: gantry.StopReasonToolUse}},

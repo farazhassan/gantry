@@ -8,19 +8,26 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// WithRetriever installs PhaseAssembleContext middleware that, on the first
-// iteration, calls Retrieve(ctx, query, k), stores results in
-// state.Retrieved, and appends a formatted block to state.System.
+type component struct {
+	r Retriever
+	k int
+}
+
+// New returns a Component that installs PhaseAssembleContext middleware which, on
+// iteration 0, calls Retrieve(ctx, query, k), stores results in state.Retrieved,
+// and appends a formatted block to state.System. The query is state.Task if set,
+// otherwise state.Input.
 //
 // PhaseAssembleContext re-runs every iteration and state.System persists, so
 // retrieval and injection are guarded to iteration 0 to avoid stacking
 // duplicate context blocks.
 //
-// The query used is state.Task if set, otherwise state.Input. Custom routing
-// can be done by writing a higher-level component or using plain middleware.
-func WithRetriever(a *gantry.Agent, r Retriever, k int) {
+// Custom routing can be done by writing a higher-level component or using plain middleware.
+func New(r Retriever, k int) gantry.Component { return &component{r: r, k: k} }
+
+func (c *component) Install(a *gantry.Agent) error {
 	const name = "components/retriever:retrieve"
-	_ = a.UseNamed(gantry.PhaseAssembleContext, name, func(next gantry.Handler) gantry.Handler {
+	return a.UseNamed(gantry.PhaseAssembleContext, name, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, state *gantry.State) error {
 			// Retrieve and inject only on the first iteration. state.System
 			// persists across iterations, so appending every iteration would
@@ -30,7 +37,7 @@ func WithRetriever(a *gantry.Agent, r Retriever, k int) {
 				if query == "" {
 					query = state.Input
 				}
-				docs, err := r.Retrieve(ctx, query, k)
+				docs, err := c.r.Retrieve(ctx, query, c.k)
 				if err != nil {
 					return err
 				}

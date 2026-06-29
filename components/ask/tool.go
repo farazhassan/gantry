@@ -88,7 +88,7 @@ func (t *Tool) Definition() gantry.ToolDef {
 
 // Definition returns the ask_user tool as a declaration-only gantry.ToolDef,
 // with no Prompter and no server-side Invoke. Use it with
-// tool.WithClientTools to route ask_user over a client-in-the-loop transport
+// tool.Client to route ask_user over a client-in-the-loop transport
 // (e.g. AG-UI): the model's call suspends the run, the client collects the
 // answer, and a resume continues the conversation. WithName applies, mirroring
 // NewTool. The returned ToolDef is identical to NewTool(p, opts...).Definition().

@@ -8,7 +8,7 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// PhasePlan is the custom phase the WithPlanner middleware registers
+// PhasePlan is the custom phase the planner.New middleware registers
 // (PositionAfter PhaseStart). It runs only once per agent run.
 const PhasePlan gantry.Phase = "plan"
 

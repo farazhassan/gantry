@@ -32,7 +32,7 @@ const (
 	// caller appends a tool-result Message for each pending call and must first
 	// clear the terminal fields (Done = false, DoneReason = "", PendingToolCalls
 	// = nil) or rebuild a fresh non-terminal State from the transcript before
-	// resuming (see tool.WithClientTools). Distinct from DoneMaxIterations and
+	// resuming (see tool.Client). Distinct from DoneMaxIterations and
 	// the normal DoneNoToolCalls finish.
 	DoneClientToolCall DoneReason = "client_tool_call"
 )

@@ -34,7 +34,9 @@ func RunExample(ctx context.Context) (*gantry.State, error) {
 	// stores them in state.Retrieved, and appends them to state.System. Because
 	// k < len(docs) the third doc is dropped — swap in a real vector-store
 	// retriever by satisfying the Retriever interface.
-	retriever.WithRetriever(a, retriever.NewStatic(docs), 2)
+	if err := a.With(retriever.New(retriever.NewStatic(docs), 2)); err != nil {
+		return nil, err
+	}
 
 	return a.Run(ctx, "what is gantry?")
 }

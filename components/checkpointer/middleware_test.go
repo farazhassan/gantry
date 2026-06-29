@@ -11,7 +11,7 @@ import (
 )
 
 // failingCheckpointer always errors on Save, to exercise the non-fatal
-// failure path of WithCheckpointer.
+// failure path of New.
 type failingCheckpointer struct{}
 
 func (failingCheckpointer) Save(context.Context, string, *gantry.State) error {
@@ -26,7 +26,9 @@ func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
 	store := checkpointer.NewInMemory()
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	checkpointer.WithCheckpointer(a, store, "run-1")
+	if err := a.With(checkpointer.New(store, "run-1")); err != nil {
+		t.Fatalf("install checkpointer: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -43,7 +45,9 @@ func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 func TestWithCheckpointerSaveErrorIsNonFatalAndTraced(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	checkpointer.WithCheckpointer(a, failingCheckpointer{}, "run-err")
+	if err := a.With(checkpointer.New(failingCheckpointer{}, "run-err")); err != nil {
+		t.Fatalf("install checkpointer: %v", err)
+	}
 
 	// A Save failure must not abort the run.
 	state, err := a.Run(context.Background(), "go")

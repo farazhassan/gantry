@@ -52,7 +52,7 @@ observable milestones; `main` prints them.
   own `eval.NewMockLLMClientFromScript`, so their turns never interleave. The
   critic runs through the real `critic.NewLLM`, exactly as it would in
   production — both mock clients swap for live clients with no other change.
-- **`ask_user` is a client tool** (`tool.WithClientTools`). Only a client-tool
+- **`ask_user` is a client tool** (`tool.Client`). Only a client-tool
   call sets `DoneClientToolCall`, which the driver keys on to park the task at
   `awaiting_input`. Registered server-side it would execute inline and never
   suspend.

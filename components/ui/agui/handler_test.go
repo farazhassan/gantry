@@ -119,7 +119,9 @@ func suspendingAgent(t *testing.T) *gantry.Agent {
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	tool.WithClientTools(a, ask.Definition())
+	if err := a.With(tool.Client(ask.Definition())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 	return a
 }
 
