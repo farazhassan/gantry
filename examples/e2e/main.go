@@ -100,7 +100,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// HumanInLoop — auto-approve in the example; CLI/web adapters could deny.
-	humanloop.WithHumanInLoop(a, humanloop.NewAutoApprover())
+	if err := a.With(humanloop.New(humanloop.NewAutoApprover())); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Checkpointer
 	cp := checkpointer.NewInMemory()

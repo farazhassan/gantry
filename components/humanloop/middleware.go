@@ -7,15 +7,21 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// WithHumanInLoop installs PhaseToolExec middleware that calls Confirm for
-// each pending tool call. If any decision is not approved, sets state.Done
-// with DoneHumanAborted and returns ErrHumanAborted.
-func WithHumanInLoop(a *gantry.Agent, h HumanInLoop) {
+type component struct{ h HumanInLoop }
+
+// New returns a gantry.Component that installs PhaseToolExec middleware which
+// calls Confirm for each pending tool call. If any decision is not approved,
+// it sets state.Done with DoneHumanAborted and returns ErrHumanAborted.
+func New(h HumanInLoop) gantry.Component {
+	return &component{h: h}
+}
+
+func (c *component) Install(a *gantry.Agent) error {
 	const name = "components/humanloop:confirm"
-	_ = a.UseNamed(gantry.PhaseToolExec, name, func(next gantry.Handler) gantry.Handler {
+	return a.UseNamed(gantry.PhaseToolExec, name, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			for _, call := range s.PendingToolCalls {
-				d, err := h.Confirm(ctx, Action{Kind: "tool", Name: call.Name, Args: call.Input})
+				d, err := c.h.Confirm(ctx, Action{Kind: "tool", Name: call.Name, Args: call.Input})
 				if err != nil {
 					return err
 				}

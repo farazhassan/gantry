@@ -109,7 +109,9 @@ func TestTerminationConvention(t *testing.T) {
 		})
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 		tool.WithTool(a, noopTool{})
-		humanloop.WithHumanInLoop(a, humanloop.NewAutoDenier("denied for test"))
+		if err := a.With(humanloop.New(humanloop.NewAutoDenier("denied for test"))); err != nil {
+			t.Fatalf("install humanloop: %v", err)
+		}
 
 		state, err := a.Run(context.Background(), "go")
 		if !errors.Is(err, gantry.ErrHumanAborted) {

@@ -73,7 +73,9 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 
 	// Confirm mutations before any tool executes.
 	if cfg.Confirmer != nil {
-		humanloop.WithHumanInLoop(agent, cfg.Confirmer)
+		if err := agent.With(humanloop.New(cfg.Confirmer)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Per-turn token budget.
