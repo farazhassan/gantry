@@ -1,9 +1,11 @@
 // Package tool defines the Tool interface and helpers for registering tools
-// with an Agent. WithRegistry wires a caller-owned Registry into an agent;
-// WithTools and WithTool are sugar over it. The installed middleware advertises
-// tool definitions during PhaseStart and dispatches matching ToolCalls during
-// PhaseToolExec. Tool lifetime follows the caller's Registry (or the agent when
-// the Registry is not retained elsewhere) — there is no process-global state.
+// with an Agent. New wires a caller-owned Registry into an agent;
+// FromTools is sugar over it for callers that do not need to retain the Registry.
+// Client declares definition-only "client-side" tools that suspend the run when
+// called. The installed middleware advertises tool definitions during PhaseStart
+// and dispatches matching ToolCalls during PhaseToolExec. Tool lifetime follows
+// the caller's Registry (or the agent when the Registry is not retained
+// elsewhere) — there is no process-global state.
 package tool
 
 import (

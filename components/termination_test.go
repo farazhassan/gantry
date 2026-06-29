@@ -52,7 +52,9 @@ func TestTerminationConvention(t *testing.T) {
 			StopReason: gantry.StopReasonToolUse,
 		})
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
-		tool.WithTool(a, noopTool{})
+		if err := a.With(tool.FromTools(1, noopTool{})); err != nil {
+			t.Fatalf("install tool: %v", err)
+		}
 
 		state, err := a.Run(context.Background(), "go")
 		if err != nil {
@@ -72,7 +74,9 @@ func TestTerminationConvention(t *testing.T) {
 			Usage:      gantry.Usage{InputTokens: 1000, OutputTokens: 1000},
 		})
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-		tool.WithTool(a, noopTool{})
+		if err := a.With(tool.FromTools(1, noopTool{})); err != nil {
+			t.Fatalf("install tool: %v", err)
+		}
 		if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1}))); err != nil {
 			t.Fatalf("install limiter: %v", err)
 		}
@@ -108,7 +112,9 @@ func TestTerminationConvention(t *testing.T) {
 			StopReason: gantry.StopReasonToolUse,
 		})
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-		tool.WithTool(a, noopTool{})
+		if err := a.With(tool.FromTools(1, noopTool{})); err != nil {
+			t.Fatalf("install tool: %v", err)
+		}
 		if err := a.With(humanloop.New(humanloop.NewAutoDenier("denied for test"))); err != nil {
 			t.Fatalf("install humanloop: %v", err)
 		}

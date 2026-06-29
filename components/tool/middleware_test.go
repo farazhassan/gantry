@@ -29,7 +29,9 @@ func TestWithToolRegistersDefinitionAtStart(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
-	tool.WithTool(a, addOneTool{})
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -52,7 +54,9 @@ func TestWithToolDispatchesPendingCalls(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTool(a, addOneTool{})
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -90,7 +94,9 @@ func TestWithToolsParallelDispatch(t *testing.T) {
 		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTools(a, 2, addOneTool{})
+	if err := a.With(tool.FromTools(2, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -122,7 +128,9 @@ func TestWithToolUnknownToolRecordsError(t *testing.T) {
 		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTool(a, addOneTool{})
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -164,7 +172,9 @@ func TestWithRegistryHappyPath(t *testing.T) {
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
-	tool.WithRegistry(a, reg, 1)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -184,8 +194,12 @@ func TestWithRegistrySharedAcrossAgents(t *testing.T) {
 	a, _ := gantry.NewAgent(gantry.WithLLM(mockA))
 	b, _ := gantry.NewAgent(gantry.WithLLM(mockB))
 
-	tool.WithRegistry(a, reg, 1)
-	tool.WithRegistry(b, reg, 1)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tool on a: %v", err)
+	}
+	if err := b.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tool on b: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run a: %v", err)
@@ -213,7 +227,9 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 		gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithRegistry(a, reg, 1)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	if _, err := a.Run(context.Background(), "first"); err != nil {
 		t.Fatalf("Run 1: %v", err)
@@ -239,32 +255,28 @@ func TestWithRegistryRuntimeAddVisibleNextRun(t *testing.T) {
 	}
 }
 
-func TestWithRegistryDoubleInstallPanics(t *testing.T) {
+func TestToolDoubleInstallReturnsError(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
 	reg := tool.NewRegistry()
 	reg.Add(addOneTool{})
-	tool.WithRegistry(a, reg, 1)
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("expected panic on second WithRegistry, got none")
-		}
-	}()
-	tool.WithRegistry(a, reg, 1) // second install on same agent must panic
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if err := a.With(tool.New(reg, 1)); err == nil {
+		t.Fatal("second install: want error, got nil")
+	}
 }
 
-func TestWithToolDoubleInstallPanics(t *testing.T) {
+func TestFromToolsDoubleInstallReturnsError(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 
-	tool.WithTool(a, addOneTool{})
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("expected panic on second WithTool, got none")
-		}
-	}()
-	tool.WithTool(a, addOneTool{}) // sugar must propagate the panic
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, addOneTool{})); err == nil {
+		t.Fatal("second install: want error, got nil")
+	}
 }

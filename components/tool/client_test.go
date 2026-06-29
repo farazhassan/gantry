@@ -22,7 +22,9 @@ func TestClientOnlyTurnSuspends(t *testing.T) {
 		},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithClientTools(a, askDef())
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -51,8 +53,12 @@ func TestMixedTurnRunsServerToolsAndSuspends(t *testing.T) {
 		},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTool(a, addOneTool{}) // executable, registered (from middleware_test.go)
-	tool.WithClientTools(a, askDef())
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -87,7 +93,9 @@ func TestNoClientToolsLeavesLoopUnchanged(t *testing.T) {
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTool(a, addOneTool{})
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -109,7 +117,9 @@ func TestResumeDoesNotDuplicateAdvertisedTools(t *testing.T) {
 		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithClientTools(a, askDef())
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 
 	suspended, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -147,8 +157,12 @@ func TestClientToolNameCollisionPanics(t *testing.T) {
 		},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	tool.WithTool(a, addOneTool{})
-	tool.WithClientTools(a, gantry.ToolDef{Name: "add_one", Description: "collide", Schema: json.RawMessage(`{}`)})
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	if err := a.With(tool.Client(gantry.ToolDef{Name: "add_one", Description: "collide", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -156,4 +170,36 @@ func TestClientToolNameCollisionPanics(t *testing.T) {
 		}
 	}()
 	_, _ = a.Run(context.Background(), "go")
+}
+
+func TestClientDoubleInstallReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if err := a.With(tool.Client(askDef())); err == nil {
+		t.Fatal("second install: want error, got nil")
+	}
+}
+
+func TestClientEmptyNameReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	emptyDef := gantry.ToolDef{Name: "", Description: "bad", Schema: json.RawMessage(`{}`)}
+	if err := a.With(tool.Client(emptyDef)); err == nil {
+		t.Fatal("empty tool name: want error, got nil")
+	}
+}
+
+func TestClientDuplicateNameReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	dupDef := gantry.ToolDef{Name: "same", Description: "dup", Schema: json.RawMessage(`{}`)}
+	if err := a.With(tool.Client(dupDef, dupDef)); err == nil {
+		t.Fatal("duplicate tool name: want error, got nil")
+	}
 }

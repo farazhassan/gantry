@@ -76,7 +76,9 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Tool with parallel dispatch (capacity 4).
-	tool.WithTools(a, 4, calcTool{})
+	if err := a.With(tool.FromTools(4, calcTool{})); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Limiter — token + cost ceiling.
 	lim := limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0})

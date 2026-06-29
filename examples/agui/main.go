@@ -35,7 +35,9 @@ func newHandler(llm gantry.LLMClient) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	tool.WithClientTools(agent, ask.Definition())
+	if err := agent.With(tool.Client(ask.Definition())); err != nil {
+		return nil, err
+	}
 	return agui.Handler(agent), nil
 }
 

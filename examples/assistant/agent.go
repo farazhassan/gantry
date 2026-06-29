@@ -69,7 +69,9 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	systemprompt.WithSystemPrompt(agent, cfg.SystemPrompt)
 
 	// Tools: full-parallel dispatch (parallelism 0).
-	tool.WithTools(agent, 0, cfg.Tools...)
+	if err := agent.With(tool.FromTools(0, cfg.Tools...)); err != nil {
+		return nil, err
+	}
 
 	// Confirm mutations before any tool executes.
 	if cfg.Confirmer != nil {

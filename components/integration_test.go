@@ -69,7 +69,9 @@ func TestComponentsInteroperate(t *testing.T) {
 	if err := a.With(compactor.New(compactor.NewSlidingWindow(10), compactor.Budget{})); err != nil {
 		t.Fatalf("install compactor: %v", err)
 	}
-	tool.WithTool(a, calcTool{})
+	if err := a.With(tool.FromTools(1, calcTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
 	if err := a.With(limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 1000}))); err != nil {
 		t.Fatalf("install limiter: %v", err)
 	}
