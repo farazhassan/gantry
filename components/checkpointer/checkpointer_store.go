@@ -28,7 +28,7 @@ func FromStore(store Store, opts ...Option) (*StoreCheckpointer, error) {
 		o(&c)
 	}
 	if c.projOpts > 1 {
-		return nil, errors.New("checkpointer: StoreOnly and Omit are mutually exclusive")
+		return nil, errors.New("checkpointer: conflicting projection options (use at most one of StoreOnly/Omit)")
 	}
 	return &StoreCheckpointer{store: store, proj: c.proj}, nil
 }

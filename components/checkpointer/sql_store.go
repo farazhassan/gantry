@@ -10,15 +10,14 @@ import (
 // Dialect describes a SQL flavour for SQLStore: positional placeholder rendering.
 // Both shipped dialects use ON CONFLICT upsert (SQLite >= 3.24, Postgres >= 9.5).
 type Dialect struct {
-	name        string
 	placeholder func(n int) string // 1-based
 }
 
 var (
 	// SQLite uses ? placeholders.
-	SQLite = Dialect{name: "sqlite", placeholder: func(int) string { return "?" }}
+	SQLite = Dialect{placeholder: func(int) string { return "?" }}
 	// Postgres uses $N placeholders.
-	Postgres = Dialect{name: "postgres", placeholder: func(n int) string { return fmt.Sprintf("$%d", n) }}
+	Postgres = Dialect{placeholder: func(n int) string { return fmt.Sprintf("$%d", n) }}
 )
 
 // SQLStore persists blobs in a single SQL table (id PRIMARY KEY, <column>). It
@@ -34,10 +33,13 @@ type SQLStore struct {
 // SQLStoreOption configures a SQLStore.
 type SQLStoreOption func(*SQLStore)
 
-// WithTable sets the table name (default "checkpoints").
+// WithTable sets the table name (default "checkpoints"). The name is interpolated
+// directly into SQL (identifiers cannot be parameterized), so it must come from
+// trusted code, never from user input.
 func WithTable(name string) SQLStoreOption { return func(s *SQLStore) { s.table = name } }
 
-// WithColumn sets the blob column name (default "state").
+// WithColumn sets the blob column name (default "state"). Like WithTable, the name
+// is interpolated directly into SQL and must come from trusted code, not user input.
 func WithColumn(name string) SQLStoreOption { return func(s *SQLStore) { s.column = name } }
 
 // WithDialect sets the SQL dialect (default SQLite).
