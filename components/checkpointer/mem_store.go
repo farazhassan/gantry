@@ -34,3 +34,10 @@ func (s *MemStore) Get(_ context.Context, id string) ([]byte, bool, error) {
 }
 
 var _ Store = (*MemStore)(nil)
+
+// NewInMemory returns a Checkpointer backed by an in-memory Store, persisting full
+// State. Preserved for API compatibility (was *InMemoryCheckpointer).
+func NewInMemory() *StoreCheckpointer {
+	c, _ := FromStore(NewMemStore()) // cannot fail: non-nil store, no options
+	return c
+}

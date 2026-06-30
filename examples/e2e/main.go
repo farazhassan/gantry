@@ -44,7 +44,7 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 // BuildAgent constructs an Agent with every first-class component attached.
 // scriptedLLM is the user-facing LLM; helperLLM is used by Planner and Critic
 // (in a real system these could be the same or different models).
-func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkpointer.InMemoryCheckpointer, *limiter.BudgetLimiter, error) {
+func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkpointer.StoreCheckpointer, *limiter.BudgetLimiter, error) {
 	a, err := gantry.NewAgent(
 		gantry.WithLLM(scriptedLLM),
 		gantry.WithMaxIterations(8),

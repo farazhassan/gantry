@@ -80,3 +80,13 @@ func (s *FileStore) Get(_ context.Context, id string) ([]byte, bool, error) {
 }
 
 var _ Store = (*FileStore)(nil)
+
+// NewFile returns a Checkpointer backed by a FileStore at dir, persisting full
+// State. Preserved for API compatibility (was *FileCheckpointer).
+func NewFile(dir string) (*StoreCheckpointer, error) {
+	st, err := NewFileStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	return FromStore(st)
+}
