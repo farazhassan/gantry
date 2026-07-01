@@ -30,6 +30,9 @@ type TaskManager struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+
+	cancelMu sync.Mutex
+	cancels  map[string]context.CancelFunc // sessionID -> in-flight drive's cancel
 }
 
 // Option configures a TaskManager.
@@ -61,6 +64,7 @@ func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, r
 		newID:        newTaskID,
 		newSessionID: newSessionID,
 		locks:        make(map[string]*sync.Mutex),
+		cancels:      make(map[string]context.CancelFunc),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -99,6 +103,24 @@ func (m *TaskManager) lockFor(sessionID string) *sync.Mutex {
 		m.locks[sessionID] = lk
 	}
 	return lk
+}
+
+// registerCancel records the in-flight drive's cancel func for a session. The
+// per-session lock guarantees at most one drive per session, so this never
+// overwrites a live entry.
+func (m *TaskManager) registerCancel(sessionID string, cancel context.CancelFunc) {
+	m.cancelMu.Lock()
+	m.cancels[sessionID] = cancel
+	m.cancelMu.Unlock()
+}
+
+// deregisterCancel removes the session's cancel func and cancels the context to
+// free its resources. Safe to call once per drive (via defer).
+func (m *TaskManager) deregisterCancel(sessionID string, cancel context.CancelFunc) {
+	m.cancelMu.Lock()
+	delete(m.cancels, sessionID)
+	m.cancelMu.Unlock()
+	cancel()
 }
 
 // loadOrFreshMeta loads the session's meta, returning a fresh empty one when
@@ -200,6 +222,61 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 	return m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 }
 
+// CancelSession stops all work for a session: it interrupts the in-flight run (if
+// any) and marks the active task plus every queued task TaskCancelled, then clears
+// the session's active/queue state. It is idempotent — cancelling an idle or
+// already-finished session is a no-op. It errors only on a store/meta failure.
+func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error {
+	// (1) Interrupt any in-flight run WITHOUT taking the per-session lock (the
+	// in-flight drive holds it). Cancelling the drive's context unblocks Advance,
+	// which the Driver maps to TaskCancelled.
+	m.cancelMu.Lock()
+	if cancel, ok := m.cancels[sessionID]; ok {
+		cancel()
+	}
+	m.cancelMu.Unlock()
+
+	// (2) Finalize under the per-session lock. This blocks until the interrupted
+	// drive releases the lock, so we observe the cancelled active task and a
+	// stable queue.
+	lk := m.lockFor(sessionID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]string, 0, len(sm.Queue)+1)
+	if sm.ActiveTaskID != "" {
+		ids = append(ids, sm.ActiveTaskID)
+	}
+	ids = append(ids, sm.Queue...)
+
+	for _, id := range ids {
+		t, err := m.tasks.LoadTask(ctx, id)
+		if errors.Is(err, task.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if t.Status.IsTerminal() {
+			continue // already done/failed/cancelled
+		}
+		t.Status = task.TaskCancelled
+		t.UpdatedAt = time.Now().UTC()
+		if err := m.tasks.SaveTask(ctx, t); err != nil {
+			return err
+		}
+		syncRef(sm, t)
+	}
+	sm.ActiveTaskID = ""
+	sm.Queue = nil
+	return m.meta.SaveMeta(ctx, sessionID, sm)
+}
+
 // RunNextReady dequeues one ready session (spawned cross-session work) and drives
 // its active task to suspension or terminal via the existing drive engine. It
 // returns (task, true, nil) for a driven session; (nil, false, nil) when the
@@ -295,14 +372,23 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 // input is the goal seed only for the first Advance of a freshly-activated task;
 // on resume it is the user's answer. Driver.Advance distinguishes these.
 func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
+	driveCtx, cancelFn := context.WithCancel(ctx)
+	m.registerCancel(sessionID, cancelFn)
+	defer m.deregisterCancel(sessionID, cancelFn)
+
 	var err error
 	for {
 		coll := &spawnCollector{}
-		runCtx := withCollector(ctx, coll)
+		runCtx := withCollector(driveCtx, coll)
 
 		t, err = m.driver.Advance(runCtx, t, input)
 		if err != nil {
 			return t, err // errored run: spawns discarded
+		}
+		if t.Status == task.TaskCancelled {
+			// Cancelled: discard this run's spawns and do NOT drain the queue.
+			// CancelSession owns clearing the queue + meta under the lock.
+			return t, nil
 		}
 
 		// Drain spawns BEFORE branching, so suspended AND terminal tasks queue
