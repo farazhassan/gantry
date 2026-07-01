@@ -396,3 +396,43 @@ func TestAdvancePlanlessTaskCompletes(t *testing.T) {
 		t.Errorf("planless task must have no plan, got %+v", got.Plan)
 	}
 }
+
+func TestAdvanceContextCanceledCancels(t *testing.T) {
+	// A run interrupted by context cancellation is a clean TaskCancelled terminal,
+	// not a Go error and not TaskFailed.
+	runner := &scriptedRunner{
+		steps: []func(*gantry.State) *gantry.State{done(gantry.DoneNoToolCalls, nil)},
+		err:   context.Canceled,
+		errOn: 0,
+	}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("canceled run must not be a Go error: %v", err)
+	}
+	if got.Status != TaskCancelled {
+		t.Errorf("status = %q, want cancelled", got.Status)
+	}
+}
+
+func TestAdvanceDeadlineExceededFails(t *testing.T) {
+	// A timeout is a failure, not a user cancel: only context.Canceled maps to
+	// TaskCancelled. This guards against broadening the check to ctx.Err() != nil.
+	runner := &scriptedRunner{
+		steps: []func(*gantry.State) *gantry.State{done(gantry.DoneNoToolCalls, nil)},
+		err:   context.DeadlineExceeded,
+		errOn: 0,
+	}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err == nil {
+		t.Fatalf("deadline-exceeded run must return a Go error")
+	}
+	if got.Status != TaskFailed {
+		t.Errorf("status = %q, want failed", got.Status)
+	}
+}
