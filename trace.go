@@ -69,3 +69,17 @@ type Span interface {
 	RecordEvent(name string, attrs map[string]any)
 	End(err error)
 }
+
+// tracerKey is the context key under which the active Tracer is stored so
+// built-in handlers (e.g. DefaultLLMCallHandler) can open nested spans without
+// threading the Tracer through every signature. Mirrors sinkKey in stream.go.
+type tracerKey struct{}
+
+func withTracer(ctx context.Context, t Tracer) context.Context {
+	return context.WithValue(ctx, tracerKey{}, t)
+}
+
+func tracerFrom(ctx context.Context) Tracer {
+	t, _ := ctx.Value(tracerKey{}).(Tracer)
+	return t
+}

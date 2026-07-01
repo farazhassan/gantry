@@ -18,11 +18,16 @@ type LLMRequest struct {
 }
 
 // LLMResponse carries the LLM's reply.
+//
+// Construct it with keyed fields (LLMResponse{Content: ...}); the field set
+// grows over time, so unkeyed composite literals are not source-compatible
+// across versions.
 type LLMResponse struct {
 	Content    string
 	ToolCalls  []ToolCall
 	StopReason StopReason
 	Usage      Usage
+	Model      string // model that produced the reply; adapters set it (optional)
 }
 
 // StopReason describes why the LLM stopped generating.

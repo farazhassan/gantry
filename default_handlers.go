@@ -31,28 +31,9 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			Messages: state.Messages,
 			Tools:    state.Tools,
 		}
-		if sink := sinkFrom(ctx); sink != nil {
-			if sc, ok := client.(StreamingLLMClient); ok {
-				resp, err := sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
-					if ch.TextDelta == "" {
-						return nil
-					}
-					return sink(Event{
-						Type:      EventTextDelta,
-						Iteration: state.Iteration,
-						Phase:     PhaseLLMCall,
-						TextDelta: ch.TextDelta,
-					})
-				})
-				if err != nil {
-					return err
-				}
-				state.LastResponse = &resp
-				state.Usage = state.Usage.Add(resp.Usage)
-				return nil
-			}
-		}
-		resp, err := client.Generate(ctx, req)
+		genCtx, gen := startGeneration(ctx, req)
+		resp, err := invokeLLM(genCtx, client, state, req)
+		gen.end(resp, err)
 		if err != nil {
 			return err
 		}
@@ -60,6 +41,29 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 		state.Usage = state.Usage.Add(resp.Usage)
 		return nil
 	}
+}
+
+// invokeLLM streams when a sink is active and the client implements
+// StreamingLLMClient, otherwise falls back to Generate. It returns the
+// fully-aggregated response in both cases and does not mutate state, so the LLM
+// call can be wrapped in a generation span by the caller.
+func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest) (LLMResponse, error) {
+	if sink := sinkFrom(ctx); sink != nil {
+		if sc, ok := client.(StreamingLLMClient); ok {
+			return sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
+				if ch.TextDelta == "" {
+					return nil
+				}
+				return sink(Event{
+					Type:      EventTextDelta,
+					Iteration: state.Iteration,
+					Phase:     PhaseLLMCall,
+					TextDelta: ch.TextDelta,
+				})
+			})
+		}
+	}
+	return client.Generate(ctx, req)
 }
 
 // DefaultPostLLMHandler examines state.LastResponse. If the response has

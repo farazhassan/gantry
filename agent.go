@@ -244,6 +244,10 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 		tracer = NewDefaultTracer(state.Trace)
 	}
 
+	// Make the tracer reachable from built-in handlers (e.g. the generation
+	// span in DefaultLLMCallHandler) without threading it through signatures.
+	ctx = withTracer(ctx, tracer)
+
 	wrap := func(err error) error {
 		return wrapError(err, state.Trace)
 	}
