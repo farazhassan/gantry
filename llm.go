@@ -18,6 +18,10 @@ type LLMRequest struct {
 }
 
 // LLMResponse carries the LLM's reply.
+//
+// Construct it with keyed fields (LLMResponse{Content: ...}); the field set
+// grows over time, so unkeyed composite literals are not source-compatible
+// across versions.
 type LLMResponse struct {
 	Content    string
 	ToolCalls  []ToolCall

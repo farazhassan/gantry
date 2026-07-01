@@ -82,6 +82,12 @@ func startGeneration(ctx context.Context, req LLMRequest) (context.Context, gene
 // end records the completion, token usage, and model on the generation span,
 // then ends it. A non-nil error is passed through to Span.End so the tracer can
 // mark the observation failed; output/usage are only recorded on success.
+//
+// Attribute keys here (observation.type, input, output, usage_in, usage_out,
+// model) are deliberately exporter-neutral: gantry does not bind to any vendor's
+// semantic conventions. Each tracer/exporter maps them to its own model — e.g.
+// an OTLP/Langfuse exporter maps model -> gen_ai.request.model and usage_in/out
+// -> gen_ai.usage.{input,output}_tokens.
 func (g generation) end(resp LLMResponse, err error) {
 	if g.span == nil {
 		return
