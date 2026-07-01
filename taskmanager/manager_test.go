@@ -990,12 +990,12 @@ func TestStartDetachedSessionPersistsAndEnqueues(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	sid, err := tm.StartDetachedSession(ctx, "the goal", "the title")
+	nt, err := tm.StartDetachedSession(ctx, "the goal", "the title")
 	if err != nil {
 		t.Fatalf("StartDetachedSession: %v", err)
 	}
-	if sid != "sess-x" {
-		t.Errorf("sid = %q, want sess-x", sid)
+	if nt.ID != "task-x" || nt.SessionID != "sess-x" || nt.Goal != "the goal" || nt.Title != "the title" || nt.Status != task.TaskPending {
+		t.Errorf("returned task = %+v, want (task-x, sess-x, the goal, the title, pending)", nt)
 	}
 
 	tk, err := tasks.LoadTask(ctx, "task-x")
