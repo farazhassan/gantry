@@ -23,6 +23,7 @@ type LLMResponse struct {
 	ToolCalls  []ToolCall
 	StopReason StopReason
 	Usage      Usage
+	Model      string // model that produced the reply; adapters set it (optional)
 }
 
 // StopReason describes why the LLM stopped generating.
