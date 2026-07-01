@@ -2,15 +2,20 @@ package task
 
 import "github.com/farazhassan/gantry"
 
-// Result returns the content of the task's final assistant message — its answer —
-// or "" if the task has produced none yet. It scans Working backward for the last
-// message with Role RoleAssistant; critic feedback (RoleSystem) is naturally
-// excluded. Result is status-independent: callers check t.Status /
-// t.Status.IsTerminal() separately to decide whether the answer is final.
+// Result returns the task's final answer: the content of the last assistant
+// message in Working that is not a tool-call request, or "" if there is none
+// yet. Assistant tool-call turns (e.g. a parked ask_user) and critic feedback
+// (a RoleSystem message) are skipped, so an in-flight tool call is never
+// mistaken for the answer. Result is status-independent — the caller decides
+// from the task's status whether the answer is final — and is safe on a nil task.
 func Result(t *Task) string {
+	if t == nil {
+		return ""
+	}
 	for i := len(t.Working) - 1; i >= 0; i-- {
-		if t.Working[i].Role == gantry.RoleAssistant {
-			return t.Working[i].Content
+		m := t.Working[i]
+		if m.Role == gantry.RoleAssistant && len(m.ToolCalls) == 0 {
+			return m.Content
 		}
 	}
 	return ""
