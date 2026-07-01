@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -108,6 +109,13 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 
 		state, err := d.agent.Resume(ctx, state)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Cancellation is a clean terminal, not a failure — mirrors how a
+				// consumer's turn executor treats a cancelled run.
+				t.Status = TaskCancelled
+				_ = d.save(ctx, t)
+				return t, nil
+			}
 			t.Status = TaskFailed
 			_ = d.save(ctx, t) // best effort; the runner error is the primary failure
 			return t, fmt.Errorf("task: run failed: %w", err)

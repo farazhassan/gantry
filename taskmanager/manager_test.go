@@ -1022,3 +1022,126 @@ func TestStartDetachedSessionPersistsAndEnqueues(t *testing.T) {
 		t.Errorf("Dequeue = (%q, %v, %v), want (sess-x, true, nil)", got, ok, err)
 	}
 }
+
+// cancelBlockingRunner signals when Resume starts, then blocks until the context
+// is cancelled and returns ctx.Err(). Used to hold a drive in-flight while another
+// goroutine cancels the session. Resume is called exactly once per task run in
+// these tests (the cancel ends the task), so the single-use started channel is safe.
+type cancelBlockingRunner struct{ started chan struct{} }
+
+func (r *cancelBlockingRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	close(r.started)
+	<-ctx.Done()
+	return st, ctx.Err()
+}
+
+func TestCancelSessionInterruptsActiveRun(t *testing.T) {
+	tasks := task.NewInMemory()
+	r := &cancelBlockingRunner{started: make(chan struct{})}
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(),
+		WithIDFunc(func() string { return "task-1" }))
+	ctx := context.Background()
+
+	type res struct {
+		tk  *task.Task
+		err error
+	}
+	doneCh := make(chan res, 1)
+	go func() {
+		tk, err := tm.StartTask(ctx, "s1", "goal")
+		doneCh <- res{tk, err}
+	}()
+	<-r.started // the run is now in-flight, blocked in Resume
+
+	if err := tm.CancelSession(context.Background(), "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	got := <-doneCh
+	if got.err != nil {
+		t.Fatalf("StartTask returned error: %v", got.err)
+	}
+	if got.tk.Status != task.TaskCancelled {
+		t.Errorf("returned status = %v, want TaskCancelled", got.tk.Status)
+	}
+	tk, _ := tasks.LoadTask(ctx, "task-1")
+	if tk.Status != task.TaskCancelled {
+		t.Errorf("persisted status = %v, want TaskCancelled", tk.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta not cleared: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestCancelSessionCancelsAwaitingAndQueued(t *testing.T) {
+	// First task suspends (awaiting_input, no in-flight run); second queues.
+	// CancelSession cancels both via the finalize path and clears meta.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{suspend()}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	first, _ := tm.StartTask(ctx, "s1", "g1")
+	second, _ := tm.StartTask(ctx, "s1", "g2")
+	if first.Status != task.TaskAwaitingInput || second.Status != task.TaskPending {
+		t.Fatalf("setup: first=%v second=%v", first.Status, second.Status)
+	}
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	f, _ := tasks.LoadTask(ctx, first.ID)
+	s, _ := tasks.LoadTask(ctx, second.ID)
+	if f.Status != task.TaskCancelled {
+		t.Errorf("first = %v, want TaskCancelled", f.Status)
+	}
+	if s.Status != task.TaskCancelled {
+		t.Errorf("second = %v, want TaskCancelled", s.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta not cleared: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+	for _, ref := range m.TaskRefs {
+		if ref.Status != task.TaskCancelled {
+			t.Errorf("ref %q = %v, want TaskCancelled", ref.ID, ref.Status)
+		}
+	}
+}
+
+func TestCancelSessionIdleNoop(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{complete("done")}}
+	tm, _, meta := newManager(r)
+	ctx := context.Background()
+
+	if err := tm.CancelSession(ctx, "nope"); err != nil {
+		t.Fatalf("CancelSession on idle session: %v", err)
+	}
+	m, _ := meta.LoadMeta(ctx, "nope")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("idle meta = %+v, want empty", m)
+	}
+}
+
+func TestCancelSessionRaceWithCompletion(t *testing.T) {
+	// Cancel racing a run must never panic or corrupt meta. alwaysComplete ignores
+	// ctx, so the task may finish done or be cancelled depending on interleaving;
+	// either way, no task is left active. Run under -race.
+	for i := 0; i < 50; i++ {
+		tasks := task.NewInMemory()
+		driver := task.NewDriver(&alwaysComplete{}, tasks)
+		meta := NewInMemoryMetaStore()
+		tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(),
+			WithIDFunc(func() string { return "task-1" }))
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = tm.StartTask(context.Background(), "s1", "g") }()
+		go func() { defer wg.Done(); _ = tm.CancelSession(context.Background(), "s1") }()
+		wg.Wait()
+		m, _ := meta.LoadMeta(context.Background(), "s1")
+		if m.ActiveTaskID != "" {
+			t.Fatalf("iter %d: active not cleared: %q", i, m.ActiveTaskID)
+		}
+	}
+}
