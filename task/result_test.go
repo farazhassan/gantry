@@ -48,6 +48,14 @@ func TestResult(t *testing.T) {
 			},
 			want: "the answer",
 		},
+		{
+			name: "trailing assistant tool-call turn is skipped",
+			working: []gantry.Message{
+				{Role: gantry.RoleAssistant, Content: "the real answer"},
+				{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{{ID: "q1", Name: "ask_user"}}},
+			},
+			want: "the real answer",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,5 +64,11 @@ func TestResult(t *testing.T) {
 				t.Errorf("Result() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResultNilTask(t *testing.T) {
+	if got := Result(nil); got != "" {
+		t.Errorf("Result(nil) = %q, want \"\"", got)
 	}
 }
