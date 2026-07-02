@@ -38,6 +38,7 @@ type Driver struct {
 	agent    Runner
 	store    TaskStore
 	verifier Verifier
+	tracer   gantry.Tracer // nil ⇒ no task spans
 }
 
 // Option configures a Driver at construction.
@@ -51,6 +52,14 @@ func WithVerifier(v Verifier) Option {
 			d.verifier = v
 		}
 	}
+}
+
+// WithTracer wires a Tracer so Advance opens a "task" span per drive-cycle,
+// parenting the agent's run/model.call spans. Pass the SAME tracer used by the
+// agent (gantry.WithTracer) so the spans nest into one trace. A nil tracer
+// disables task spans (the default).
+func WithTracer(tr gantry.Tracer) Option {
+	return func(d *Driver) { d.tracer = tr }
 }
 
 // NewDriver builds a Driver over an agent (Runner) and a TaskStore. By default it
@@ -69,7 +78,7 @@ func NewDriver(agent Runner, store TaskStore, opts ...Option) *Driver {
 // returned *Task is the same pointer, mutated and persisted. The error is
 // non-nil only on infrastructural failure (a runner error or a store error); a
 // normal TaskFailed outcome is not an error — callers inspect t.Status.
-func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, error) {
+func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task, err error) {
 	if t.Status == TaskAwaitingInput {
 		// Resume: fulfill the parked ask_user call(s) with the user's answer.
 		for _, call := range t.Pending {
@@ -84,6 +93,19 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, err
 	} else {
 		// Fresh request: append it as a user message.
 		t.Working = append(t.Working, gantry.Message{Role: gantry.RoleUser, Content: input})
+	}
+
+	if d.tracer != nil {
+		var span gantry.Span
+		ctx, span = d.tracer.StartSpan(ctx, "task")
+		span.SetAttr("task.id", t.ID)
+		span.SetAttr("session.id", t.SessionID)
+		span.SetAttr("task.title", t.Title)
+		defer func() {
+			span.SetAttr("task.status", string(t.Status))
+			span.SetAttr("task.runs", t.Budget.UsedRuns)
+			span.End(err)
+		}()
 	}
 
 	for {
