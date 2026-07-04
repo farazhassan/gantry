@@ -23,6 +23,15 @@ const maxConsecutiveRejections = 3
 // rejection" cause as the consecutive cap, just over a wider window.
 const maxTotalRejections = 5
 
+// Meta keys the Driver seeds on each run's State (State.Meta) so a stateful
+// Runner — one Runner drives every task — can tell which task and session the
+// current run belongs to. The Runner interface is otherwise identity-free
+// (Resume receives only the State). Values are strings.
+const (
+	MetaTaskID    = "task.id"
+	MetaSessionID = "task.session_id"
+)
+
 // Runner is the run seam the driver depends on: run a prepared, non-terminal
 // State to termination. *gantry.Agent satisfies it via Resume. Depending on this
 // behavior (rather than the concrete *Agent) lets driver tests inject a scripted
@@ -125,7 +134,7 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 		state := &gantry.State{
 			Messages: cloneMessages(t.Working),
 			Plan:     Hydrate(t), // nil on the first run → planner builds the skeleton
-			Meta:     map[string]any{},
+			Meta:     map[string]any{MetaTaskID: t.ID, MetaSessionID: t.SessionID},
 			Trace:    gantry.NewTrace(),
 		}
 
