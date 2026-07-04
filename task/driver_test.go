@@ -436,3 +436,23 @@ func TestAdvanceDeadlineExceededFails(t *testing.T) {
 		t.Errorf("status = %q, want failed", got.Status)
 	}
 }
+
+func TestAdvanceSeedsTaskIdentityInMeta(t *testing.T) {
+	var gotMeta map[string]any
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			gotMeta = in.Meta
+			in.Done = true
+			in.DoneReason = gantry.DoneNoToolCalls
+			return in
+		},
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-9", SessionID: "sess-9", Status: TaskPending}
+	if _, err := d.Advance(context.Background(), tk, "go"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if gotMeta[MetaTaskID] != "tk-9" || gotMeta[MetaSessionID] != "sess-9" {
+		t.Fatalf("Meta = %+v, want %s=tk-9 %s=sess-9", gotMeta, MetaTaskID, MetaSessionID)
+	}
+}
