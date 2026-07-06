@@ -11,9 +11,9 @@ and shipping LLM agents in Go.
 [![Go Reference](https://pkg.go.dev/badge/github.com/farazhassan/gantry.svg)](https://pkg.go.dev/github.com/farazhassan/gantry)
 [![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.1%20beta-orange)](https://github.com/farazhassan/gantry/releases)
+[![Release](https://img.shields.io/github/v/release/farazhassan/gantry?sort=semver)](https://github.com/farazhassan/gantry/releases/latest)
 
-> **Status: v0.0.1 (Beta).** The core loop and component contracts are in place,
+> **Status: Beta.** The core loop and component contracts are in place,
 > but the public API may still change ahead of a v1.0 release.
 
 ## Why Gantry
