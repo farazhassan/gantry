@@ -137,3 +137,28 @@ func TestNewIDUnique(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestGenerationCreateItemError(t *testing.T) {
+	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Second)
+	// An errored generation records only its input at start; output, usage, and
+	// model are skipped (see generation.end), so the item must carry the error
+	// mapping and none of the success-only native fields.
+	attrs := map[string]any{
+		gantry.SpanKindKey: gantry.SpanKindGeneration,
+		gantry.AttrInput:   `[{"role":"user","content":"hi"}]`,
+	}
+	it := generationCreateItem("t1", "s1", "run1", "model.call", start, end, attrs, errors.New("boom"))
+	if it.Type != "generation-create" {
+		t.Fatalf("Type = %q, want generation-create", it.Type)
+	}
+	if it.Body["level"] != "ERROR" || it.Body["statusMessage"] != "boom" {
+		t.Errorf("error mapping = %v/%v, want ERROR/boom", it.Body["level"], it.Body["statusMessage"])
+	}
+	if _, ok := it.Body["usage"]; ok {
+		t.Error("errored generation must not emit a usage object")
+	}
+	if _, ok := it.Body["output"]; ok {
+		t.Error("errored generation must not emit output")
+	}
+}
