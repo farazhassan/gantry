@@ -52,8 +52,8 @@ func TestDefaultLLMCallHandler_EmitsGenerationSpan(t *testing.T) {
 	root.End(nil)
 
 	gen := findEndedSpan(t, trc, "model.call")
-	if gen.Attrs["observation.type"] != "generation" {
-		t.Fatalf("observation.type = %v, want generation", gen.Attrs["observation.type"])
+	if gen.Attrs[SpanKindKey] != SpanKindGeneration {
+		t.Fatalf("gantry.kind = %v, want %q", gen.Attrs[SpanKindKey], SpanKindGeneration)
 	}
 	if gen.Attrs["usage_in"] != 11 || gen.Attrs["usage_out"] != 3 {
 		t.Fatalf("usage attrs wrong: %v / %v", gen.Attrs["usage_in"], gen.Attrs["usage_out"])
@@ -93,7 +93,7 @@ func TestDefaultLLMCallHandler_StreamingStillRecordsGeneration(t *testing.T) {
 		t.Fatalf("deltas not streamed: %q", streamed)
 	}
 	gen := findEndedSpan(t, trc, "model.call")
-	if gen.Attrs["observation.type"] != "generation" || gen.Attrs["output"] == "" {
+	if gen.Attrs[SpanKindKey] != SpanKindGeneration || gen.Attrs[AttrOutput] == "" {
 		t.Fatalf("streaming generation span incomplete: %v", gen.Attrs)
 	}
 }

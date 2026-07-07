@@ -74,8 +74,8 @@ func startGeneration(ctx context.Context, req LLMRequest) (context.Context, gene
 		return ctx, generation{}
 	}
 	ctx, span := tr.StartSpan(ctx, "model.call")
-	span.SetAttr("observation.type", "generation")
-	span.SetAttr("input", marshalMessages(req.System, req.Messages))
+	span.SetAttr(SpanKindKey, SpanKindGeneration)
+	span.SetAttr(AttrInput, marshalMessages(req.System, req.Messages))
 	return ctx, generation{span: span}
 }
 
@@ -83,21 +83,22 @@ func startGeneration(ctx context.Context, req LLMRequest) (context.Context, gene
 // then ends it. A non-nil error is passed through to Span.End so the tracer can
 // mark the observation failed; output/usage are only recorded on success.
 //
-// Attribute keys here (observation.type, input, output, usage_in, usage_out,
-// model) are deliberately exporter-neutral: gantry does not bind to any vendor's
-// semantic conventions. Each tracer/exporter maps them to its own model — e.g.
-// an OTLP/Langfuse exporter maps model -> gen_ai.request.model and usage_in/out
-// -> gen_ai.usage.{input,output}_tokens.
+// Attribute keys here (SpanKindKey, AttrInput, AttrOutput, AttrUsageIn,
+// AttrUsageOut, AttrModel) are deliberately exporter-neutral: gantry does not
+// bind to any vendor's semantic conventions. The span is marked with
+// SpanKindGeneration; each tracer/exporter maps that kind and the attributes
+// onto its own model — e.g. the Langfuse exporter emits a generation with
+// native model/input/output/usage fields.
 func (g generation) end(resp LLMResponse, err error) {
 	if g.span == nil {
 		return
 	}
 	if err == nil {
-		g.span.SetAttr("output", marshalResponse(resp))
-		g.span.SetAttr("usage_in", resp.Usage.InputTokens)
-		g.span.SetAttr("usage_out", resp.Usage.OutputTokens)
+		g.span.SetAttr(AttrOutput, marshalResponse(resp))
+		g.span.SetAttr(AttrUsageIn, resp.Usage.InputTokens)
+		g.span.SetAttr(AttrUsageOut, resp.Usage.OutputTokens)
 		if resp.Model != "" {
-			g.span.SetAttr("model", resp.Model)
+			g.span.SetAttr(AttrModel, resp.Model)
 		}
 	}
 	g.span.End(err)
