@@ -89,14 +89,25 @@ func NewDriver(agent Runner, store TaskStore, opts ...Option) *Driver {
 // normal TaskFailed outcome is not an error — callers inspect t.Status.
 func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task, err error) {
 	if t.Status == TaskAwaitingInput {
-		// Resume: fulfill the parked ask_user call(s) with the user's answer.
-		for _, call := range t.Pending {
-			t.Working = append(t.Working, gantry.Message{
-				Role:       gantry.RoleTool,
-				ToolCallID: call.ID,
-				Content:    input,
-			})
+		if len(t.Pending) > 0 {
+			// Fulfill the parked ask_user call(s) with the user's answer.
+			for _, call := range t.Pending {
+				t.Working = append(t.Working, gantry.Message{
+					Role:       gantry.RoleTool,
+					ToolCallID: call.ID,
+					Content:    input,
+				})
+			}
+		} else {
+			// Suspended with nothing pending: the rejection cap parked the task
+			// for a human reply rather than a real ask_user call (see the
+			// maxConsecutiveRejections/maxTotalRejections branch below). Resume
+			// as an ordinary user turn.
+			t.Working = append(t.Working, gantry.Message{Role: gantry.RoleUser, Content: input})
 		}
+		// Clear unconditionally: fulfilled ask_user calls are consumed above, and
+		// the empty-Pending (rejection-cap) case never had any to clear. Doing it
+		// once here avoids persisting an empty-but-non-nil slice while active.
 		t.Pending = nil
 		t.Status = TaskActive
 	} else {
@@ -192,7 +203,16 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 			t.ConsecutiveRejections++
 			t.TotalRejections++
 			if t.ConsecutiveRejections >= maxConsecutiveRejections || t.TotalRejections >= maxTotalRejections {
-				t.Status = TaskFailed // stubborn rejection — fail fast instead of spinning
+				// Stubborn rejection: the model couldn't satisfy the verifier on its
+				// own, often because it needs information only a human can supply
+				// (and didn't call a client tool to ask for it). Rather than fail
+				// outright, park the task for a human reply — same status a real
+				// ask_user suspension uses, but with nothing pending to fulfill, so
+				// Advance's resume branch above appends the reply as a plain user
+				// turn instead of a tool result.
+				t.ConsecutiveRejections = 0
+				t.Status = TaskAwaitingInput
+				t.Pending = nil
 				if err := d.save(ctx, t); err != nil {
 					return t, err
 				}
