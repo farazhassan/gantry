@@ -118,6 +118,7 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 	if d.tracer != nil {
 		var span gantry.Span
 		ctx, span = d.tracer.StartSpan(ctx, "task")
+		span.SetAttr(gantry.SpanKindKey, gantry.SpanKindTask)
 		span.SetAttr("task.id", t.ID)
 		span.SetAttr("session.id", t.SessionID)
 		span.SetAttr("task.title", t.Title)
