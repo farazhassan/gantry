@@ -85,6 +85,10 @@ func (s *span) End(err error) {
 	if s.parentID == "" {
 		s.client.enqueue(traceCreateItem(s.traceID, s.name, s.start))
 	}
-	s.client.enqueue(spanCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, s.attrs, err))
+	if kind, _ := s.attrs[gantry.SpanKindKey].(string); kind == gantry.SpanKindGeneration {
+		s.client.enqueue(generationCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, s.attrs, err))
+	} else {
+		s.client.enqueue(spanCreateItem(s.traceID, s.spanID, s.parentID, s.name, s.start, end, s.attrs, err))
+	}
 	s.client.unregister(s.spanID)
 }

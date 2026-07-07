@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/farazhassan/gantry"
 )
 
 // byType returns captured items whose Type matches.
@@ -180,5 +182,55 @@ func TestStartSpanPutsIDInContext(t *testing.T) {
 	ctx, _ := c.StartSpan(context.Background(), "outer")
 	if spanIDFromContext(ctx) == "" {
 		t.Fatal("StartSpan must store its span id in the returned context")
+	}
+}
+
+func TestGenerationKindEmitsGeneration(t *testing.T) {
+	c, cap := newServerClient(t)
+	ctx, run := c.StartSpan(context.Background(), "run")
+	_, gen := c.StartSpan(ctx, "model.call")
+	gen.SetAttr(gantry.SpanKindKey, gantry.SpanKindGeneration)
+	gen.SetAttr(gantry.AttrModel, "claude-x")
+	gen.SetAttr(gantry.AttrInput, `[{"role":"user","content":"hi"}]`)
+	gen.SetAttr(gantry.AttrOutput, `{"role":"assistant","content":"yo"}`)
+	gen.SetAttr(gantry.AttrUsageIn, 10)
+	gen.SetAttr(gantry.AttrUsageOut, 3)
+	gen.End(nil)
+	run.End(nil)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	items := cap.items()
+	gens := byType(items, "generation-create")
+	if len(gens) != 1 {
+		t.Fatalf("got %d generation-create, want 1", len(gens))
+	}
+	if gens[0].Body["model"] != "claude-x" {
+		t.Errorf("model = %v, want claude-x", gens[0].Body["model"])
+	}
+	// The generation span must NOT also surface as a span-create.
+	for _, s := range byType(items, "span-create") {
+		if s.Body["name"] == "model.call" {
+			t.Error("generation span must not emit a span-create")
+		}
+	}
+}
+
+func TestNonGenerationKeepsKindInMetadata(t *testing.T) {
+	c, cap := newServerClient(t)
+	_, span := c.StartSpan(context.Background(), "run")
+	span.SetAttr(gantry.SpanKindKey, gantry.SpanKindAgent)
+	span.End(nil)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	spans := byType(cap.items(), "span-create")
+	if len(spans) != 1 {
+		t.Fatalf("got %d span-create, want 1", len(spans))
+	}
+	md, _ := spans[0].Body["metadata"].(map[string]any)
+	if md[gantry.SpanKindKey] != gantry.SpanKindAgent {
+		t.Errorf("kind not retained in span metadata: %v", md)
 	}
 }
