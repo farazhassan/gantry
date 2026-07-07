@@ -262,7 +262,7 @@ func TestAdvanceRejectInjectsCriticFeedback(t *testing.T) {
 	}
 }
 
-func TestAdvanceRepeatedRejectionCapFails(t *testing.T) {
+func TestAdvanceRepeatedRejectionCapSuspendsForInput(t *testing.T) {
 	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
 		done(gantry.DoneNoToolCalls, twoStepPlan()),
 		done(gantry.DoneNoToolCalls, nil),
@@ -277,23 +277,47 @@ func TestAdvanceRepeatedRejectionCapFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if got.Status != TaskFailed {
-		t.Errorf("status = %q, want failed after repeated rejections", got.Status)
+	if got.Status != TaskAwaitingInput {
+		t.Errorf("status = %q, want awaiting_input after repeated rejections (park for a human reply instead of failing)", got.Status)
 	}
-	if got.ConsecutiveRejections != 3 {
-		t.Errorf("ConsecutiveRejections = %d, want 3 (the cap)", got.ConsecutiveRejections)
+	if got.ConsecutiveRejections != 0 {
+		t.Errorf("ConsecutiveRejections = %d, want 0 (reset on suspend, like a real ask_user suspension)", got.ConsecutiveRejections)
+	}
+	if len(got.Pending) != 0 {
+		t.Errorf("Pending = %+v, want empty (no tool call to fulfill on resume)", got.Pending)
 	}
 	if runner.calls != 3 {
 		t.Errorf("runner called %d times, want 3 (cap stops the 4th)", runner.calls)
 	}
+
+	// Resume: the human's reply should append as a plain user turn (no
+	// ToolCallID), not a tool-result message, since nothing was pending.
+	runner.steps = append(runner.steps, done(gantry.DoneNoToolCalls, nil))
+	v.passOnCall = 0 // pass on this next call
+	got, err = d.Advance(context.Background(), got, "here are the keywords you asked for")
+	if err != nil {
+		t.Fatalf("Advance (resume): %v", err)
+	}
+	if got.Status != TaskDone {
+		t.Errorf("status after resume = %q, want done", got.Status)
+	}
+	var resumed gantry.Message
+	for _, m := range got.Working {
+		if m.Content == "here are the keywords you asked for" {
+			resumed = m
+		}
+	}
+	if resumed.Role != gantry.RoleUser {
+		t.Errorf("resumed message role = %q, want user; ToolCallID = %q", resumed.Role, resumed.ToolCallID)
+	}
 }
 
-// TestAdvanceOscillatingRejectionCapFails covers a model that alternates a
+// TestAdvanceOscillatingRejectionCapSuspends covers a model that alternates a
 // rejected done attempt with a max-iteration continuation. Each continuation
 // resets ConsecutiveRejections, so the consecutive cap never fires; the
 // TotalRejections cap is the backstop that stops the spin (instead of leaving it
-// to the budget).
-func TestAdvanceOscillatingRejectionCapFails(t *testing.T) {
+// to the budget) by suspending the task for a human reply.
+func TestAdvanceOscillatingRejectionCapSuspends(t *testing.T) {
 	// reject, continue, reject, continue, ... until the total-rejection cap fires.
 	var steps []func(*gantry.State) *gantry.State
 	for i := 0; i < maxTotalRejections; i++ {
@@ -312,14 +336,14 @@ func TestAdvanceOscillatingRejectionCapFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if got.Status != TaskFailed {
-		t.Errorf("status = %q, want failed via the total-rejection cap", got.Status)
+	if got.Status != TaskAwaitingInput {
+		t.Errorf("status = %q, want awaiting_input via the total-rejection cap", got.Status)
 	}
 	if got.TotalRejections != maxTotalRejections {
 		t.Errorf("TotalRejections = %d, want %d (the total cap)", got.TotalRejections, maxTotalRejections)
 	}
-	if got.ConsecutiveRejections >= maxConsecutiveRejections {
-		t.Errorf("ConsecutiveRejections = %d, want < %d (continuations kept resetting it)", got.ConsecutiveRejections, maxConsecutiveRejections)
+	if got.ConsecutiveRejections != 0 {
+		t.Errorf("ConsecutiveRejections = %d, want 0 (reset on suspend)", got.ConsecutiveRejections)
 	}
 	// One reject + one continuation per cycle, minus the trailing continuation that
 	// never runs because the final reject trips the cap.
