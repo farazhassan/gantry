@@ -302,10 +302,16 @@ func TestAdvanceRepeatedRejectionCapSuspendsForInput(t *testing.T) {
 		t.Errorf("status after resume = %q, want done", got.Status)
 	}
 	var resumed gantry.Message
+	found := false
 	for _, m := range got.Working {
 		if m.Content == "here are the keywords you asked for" {
 			resumed = m
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Fatalf("resume message not found in Working: %+v", got.Working)
 	}
 	if resumed.Role != gantry.RoleUser {
 		t.Errorf("resumed message role = %q, want user; ToolCallID = %q", resumed.Role, resumed.ToolCallID)

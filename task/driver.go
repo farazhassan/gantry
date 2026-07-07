@@ -98,7 +98,6 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 					Content:    input,
 				})
 			}
-			t.Pending = nil
 		} else {
 			// Suspended with nothing pending: the rejection cap parked the task
 			// for a human reply rather than a real ask_user call (see the
@@ -106,6 +105,10 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 			// as an ordinary user turn.
 			t.Working = append(t.Working, gantry.Message{Role: gantry.RoleUser, Content: input})
 		}
+		// Clear unconditionally: fulfilled ask_user calls are consumed above, and
+		// the empty-Pending (rejection-cap) case never had any to clear. Doing it
+		// once here avoids persisting an empty-but-non-nil slice while active.
+		t.Pending = nil
 		t.Status = TaskActive
 	} else {
 		// Fresh request: append it as a user message.
@@ -209,6 +212,7 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 				// turn instead of a tool result.
 				t.ConsecutiveRejections = 0
 				t.Status = TaskAwaitingInput
+				t.Pending = nil
 				if err := d.save(ctx, t); err != nil {
 					return t, err
 				}
