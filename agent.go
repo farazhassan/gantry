@@ -260,6 +260,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// that export to external systems (e.g. Langfuse) can then group an entire
 	// run as one trace. The span ends with the run's terminal error.
 	ctx, runSpan := tracer.StartSpan(ctx, "run")
+	runSpan.SetAttr(SpanKindKey, SpanKindAgent)
 	defer func() { runSpan.End(retErr) }()
 
 	// Tool advertisements are per-run scratch that PhaseStart middleware rebuilds
@@ -328,6 +329,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 // emits a phase_start before and a phase_end after the handler.
 func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state *State) error {
 	ctx, span := tracer.StartSpan(ctx, "phase:"+string(phase))
+	span.SetAttr(SpanKindKey, SpanKindPhase)
 	span.SetAttr("iteration", state.Iteration)
 
 	if err := emit(ctx, Event{Type: EventPhaseStart, Iteration: state.Iteration, Phase: phase}); err != nil {

@@ -59,6 +59,9 @@ func TestAdvanceEmitsTaskSpan(t *testing.T) {
 	if sp.attrs["task.id"] != "tk-1" || sp.attrs["session.id"] != "s1" || sp.attrs["task.title"] != "T" {
 		t.Errorf("start attrs = %+v", sp.attrs)
 	}
+	if sp.attrs[gantry.SpanKindKey] != gantry.SpanKindTask {
+		t.Errorf("task span kind = %v, want %q", sp.attrs[gantry.SpanKindKey], gantry.SpanKindTask)
+	}
 	if !sp.ended || sp.endErr != nil {
 		t.Errorf("ended=%v endErr=%v, want ended with nil", sp.ended, sp.endErr)
 	}

@@ -8,6 +8,14 @@
 // observations. Tracing is best-effort — buffer-full and network failures are
 // counted/logged, never returned to the agent.
 //
+// Observation mapping. Each span carries a gantry.SpanKindKey attribute naming
+// the primitive that opened it. Spans of kind gantry.SpanKindGeneration become
+// Langfuse generation observations, promoting the neutral model/input/output/
+// usage attributes into native generation fields (input and output are decoded
+// from JSON so chat transcripts render structured). Every other kind becomes a
+// span observation with the kind retained in metadata for filtering. The
+// parentless run span additionally opens the enclosing Langfuse trace.
+//
 // Callers must call Close (or Flush) before process exit to drain buffered
 // events:
 //
