@@ -43,7 +43,9 @@ const (
 // rest are omitted. Note on ordering: EventToolCall and EventToolResult events
 // are emitted after the phase_end event of the phase that produced them,
 // because they are derived from State and only become available once that
-// phase's handler has returned.
+// phase's handler has returned. The identity fields (RunID, SessionID, TaskID,
+// Agent) are stamped by the run loop on every emitted event and are empty when
+// unknown.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
@@ -53,6 +55,15 @@ type Event struct {
 	ToolResult  *ToolResult `json:"tool_result,omitempty"`
 	DoneReason  DoneReason  `json:"done_reason,omitempty"`
 	FinalOutput string      `json:"final_output,omitempty"`
+
+	// Identity: which run, session, task, and agent produced this event.
+	// RunID is minted per run; SessionID/TaskID come from State.Meta
+	// (MetaSessionID / MetaTaskID) when a task driver seeded them; Agent is
+	// the WithName identity. All empty when unknown.
+	RunID     string `json:"run_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	Agent     string `json:"agent,omitempty"`
 }
 
 // EventSink receives run Events. Returning an error aborts the run and the

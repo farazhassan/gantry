@@ -20,6 +20,7 @@ type Agent struct {
 	llm           LLMClient
 	tracer        Tracer
 	maxIterations int
+	name          string
 
 	chains      map[Phase][]namedMW
 	inner       map[Phase]Handler
@@ -70,6 +71,17 @@ func WithMaxIterations(n int) Option {
 			return errors.New("gantry: WithMaxIterations must be positive")
 		}
 		a.maxIterations = n
+		return nil
+	}
+}
+
+// WithName sets the agent's identity name. The run loop stamps it on every
+// emitted Event (Event.Agent) and records it as the "agent.name" attribute on
+// the run span, so multi-agent consumers can tell whose events they are
+// watching. Empty (the default) means anonymous: Event.Agent stays empty.
+func WithName(name string) Option {
+	return func(a *Agent) error {
+		a.name = name
 		return nil
 	}
 }
@@ -184,6 +196,9 @@ func (a *Agent) RegisterPhase(phase Phase, pos Position, anchor Phase) error {
 
 // MaxIterations returns the loop iteration cap.
 func (a *Agent) MaxIterations() int { return a.maxIterations }
+
+// Name returns the agent's identity name ("" unless WithName was used).
+func (a *Agent) Name() string { return a.name }
 
 // Tracer returns the configured tracer (may be nil before Run is called
 // if no custom Tracer was supplied; the default tracer is created per-run).
