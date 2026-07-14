@@ -25,11 +25,13 @@ const maxTotalRejections = 5
 
 // Meta keys the Driver seeds on each run's State (State.Meta) so a stateful
 // Runner — one Runner drives every task — can tell which task and session the
-// current run belongs to. The Runner interface is otherwise identity-free
-// (Resume receives only the State). Values are strings.
+// current run belongs to. The canonical constants live in package gantry
+// (gantry.MetaTaskID / gantry.MetaSessionID) so the core run loop can read
+// them without importing this package; these aliases keep task-layer callers
+// source-compatible. Values are strings.
 const (
-	MetaTaskID    = "task.id"
-	MetaSessionID = "task.session_id"
+	MetaTaskID    = gantry.MetaTaskID
+	MetaSessionID = gantry.MetaSessionID
 )
 
 // Runner is the run seam the driver depends on: run a prepared, non-terminal
