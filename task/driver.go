@@ -23,6 +23,13 @@ const maxConsecutiveRejections = 3
 // rejection" cause as the consecutive cap, just over a wider window.
 const maxTotalRejections = 5
 
+// NoAnswer is the tool-result content recorded for a parked ask_user call that
+// AdvanceWithAnswers received no answer for (id missing from the map, or
+// mapped to the empty string). Every pending call must receive a tool result
+// or the transcript would carry an unfulfilled call; the explicit placeholder
+// tells the model the user declined/skipped that question.
+const NoAnswer = "(no answer provided)"
+
 // Meta keys the Driver seeds on each run's State (State.Meta) so a stateful
 // Runner — one Runner drives every task — can tell which task and session the
 // current run belongs to. The Runner interface is otherwise identity-free
@@ -90,16 +97,25 @@ func NewDriver(agent Runner, store TaskStore, opts ...Option) *Driver {
 	return d
 }
 
-// Advance drives t across as many runs as needed until it reaches a terminal
-// state (done/failed), suspends (awaiting_input), or exhausts its budget. input
-// seeds the first run (the request) or supplies the answer on resume. The
-// returned *Task is the same pointer, mutated and persisted. The error is
-// non-nil only on infrastructural failure (a runner error or a store error); a
-// normal TaskFailed outcome is not an error — callers inspect t.Status.
-func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task, err error) {
+// Advance drives t across as many bounded runs as its budget allows until it
+// reaches a terminal state (done/failed), suspends (awaiting_input), or
+// exhausts its budget. input seeds the first run (the request) or supplies the
+// answer on resume. When the task is awaiting input with exactly ONE pending
+// ask_user call, Advance delegates to AdvanceWithAnswers, answering that call
+// (an empty input therefore records the NoAnswer placeholder). With multiple
+// pending calls it broadcasts input to every call — legacy behavior; prefer
+// AdvanceWithAnswers for per-call answers. The returned *Task is the same
+// pointer, mutated and persisted. The error is non-nil only on infrastructural
+// failure (a runner error or a store error); a normal TaskFailed outcome is
+// not an error — callers inspect t.Status.
+func (d *Driver) Advance(ctx context.Context, t *Task, input string) (*Task, error) {
+	if t.Status == TaskAwaitingInput && len(t.Pending) == 1 {
+		return d.AdvanceWithAnswers(ctx, t, map[string]string{t.Pending[0].ID: input})
+	}
 	if t.Status == TaskAwaitingInput {
 		if len(t.Pending) > 0 {
-			// Fulfill the parked ask_user call(s) with the user's answer.
+			// Multiple parked calls, one string: broadcast the same answer to
+			// each (legacy single-string resume).
 			for _, call := range t.Pending {
 				t.Working = append(t.Working, gantry.Message{
 					Role:       gantry.RoleTool,
@@ -109,21 +125,50 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 			}
 		} else {
 			// Suspended with nothing pending: the rejection cap parked the task
-			// for a human reply rather than a real ask_user call (see the
-			// maxConsecutiveRejections/maxTotalRejections branch below). Resume
-			// as an ordinary user turn.
+			// for a human reply rather than a real ask_user call. Resume as an
+			// ordinary user turn.
 			t.Working = append(t.Working, gantry.Message{Role: gantry.RoleUser, Content: input})
 		}
-		// Clear unconditionally: fulfilled ask_user calls are consumed above, and
-		// the empty-Pending (rejection-cap) case never had any to clear. Doing it
-		// once here avoids persisting an empty-but-non-nil slice while active.
 		t.Pending = nil
 		t.Status = TaskActive
 	} else {
 		// Fresh request: append it as a user message.
 		t.Working = append(t.Working, gantry.Message{Role: gantry.RoleUser, Content: input})
 	}
+	return d.run(ctx, t)
+}
 
+// AdvanceWithAnswers resumes an awaiting_input task, answering each parked
+// ask_user call individually. answers is keyed by pending tool-call ID
+// (Task.Pending[i].ID). A pending call whose id is missing from answers, or
+// maps to the empty string, records the NoAnswer placeholder as its result;
+// keys matching no pending call are ignored. It errors — without running —
+// when the task is not awaiting input or has no pending calls (a
+// rejection-cap park is resumed with Advance's plain user turn instead).
+func (d *Driver) AdvanceWithAnswers(ctx context.Context, t *Task, answers map[string]string) (*Task, error) {
+	if t.Status != TaskAwaitingInput || len(t.Pending) == 0 {
+		return t, fmt.Errorf("task: AdvanceWithAnswers requires an awaiting_input task with pending calls (status=%q, pending=%d)", t.Status, len(t.Pending))
+	}
+	for _, call := range t.Pending {
+		content := answers[call.ID]
+		if content == "" {
+			content = NoAnswer
+		}
+		t.Working = append(t.Working, gantry.Message{
+			Role:       gantry.RoleTool,
+			ToolCallID: call.ID,
+			Content:    content,
+		})
+	}
+	t.Pending = nil
+	t.Status = TaskActive
+	return d.run(ctx, t)
+}
+
+// run executes the multi-run drive loop for a task whose Working transcript
+// has already been seeded by Advance or AdvanceWithAnswers. It owns the task
+// span, the budget gate, the hydrate/flush boundary, and the decide switch.
+func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 	if d.tracer != nil {
 		var span gantry.Span
 		ctx, span = d.tracer.StartSpan(ctx, "task")
@@ -149,9 +194,10 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 
 		// ---- seed a fresh, non-terminal run ----
 		// Working is authoritative: the request/answer was already appended to it
-		// above, so Input is left empty. DefaultStartHandler no-ops on a non-empty
-		// transcript, so seeding Input here would be dead weight (and misleading on
-		// resume, where input is the answer, not a fresh request).
+		// by Advance/AdvanceWithAnswers, so Input is left empty. DefaultStartHandler
+		// no-ops on a non-empty transcript, so seeding Input here would be dead
+		// weight (and misleading on resume, where input is the answer, not a fresh
+		// request).
 		state := &gantry.State{
 			Messages: cloneMessages(t.Working),
 			Plan:     HydrateBounded(t, d.hydrateRunes), // nil on the first run → planner builds the skeleton
@@ -226,8 +272,8 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 				// (and didn't call a client tool to ask for it). Rather than fail
 				// outright, park the task for a human reply — same status a real
 				// ask_user suspension uses, but with nothing pending to fulfill, so
-				// Advance's resume branch above appends the reply as a plain user
-				// turn instead of a tool result.
+				// Advance's resume branch appends the reply as a plain user turn
+				// instead of a tool result.
 				t.ConsecutiveRejections = 0
 				t.Status = TaskAwaitingInput
 				t.Pending = nil
