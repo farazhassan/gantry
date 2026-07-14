@@ -57,6 +57,7 @@ type Driver struct {
 	store        TaskStore
 	verifier     Verifier
 	tracer       gantry.Tracer // nil ⇒ no task spans
+	replanner    Replanner     // nil ⇒ no replanning (rejection critique-hints only)
 	hydrateRunes int           // per-step Output budget for the hydrated projection
 }
 
