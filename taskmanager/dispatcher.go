@@ -16,11 +16,12 @@ import (
 // TaskManager it wraps stays synchronous and goroutine-free. The caller-driven
 // RunNextReady primitive remains usable directly for manual or test control.
 type Dispatcher struct {
-	tm         *TaskManager
-	interval   time.Duration
-	errHandler func(error)
-	notifier   func(*task.Task)
-	workers    int
+	tm                 *TaskManager
+	interval           time.Duration
+	errHandler         func(error)
+	notifier           func(*task.Task)
+	completionNotifier func(*task.Task)
+	workers            int
 
 	mu      sync.Mutex
 	started bool
@@ -63,6 +64,22 @@ func WithNotifier(f func(*task.Task)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.notifier = f }
 }
 
+// WithCompletionNotifier sets a callback invoked when a dispatched task reaches
+// a terminal status (done, failed, or cancelled) on a clean drive. The callback
+// receives the finished task (carrying SessionID, ParentSessionID, Title,
+// Status, and Working — task.Result summarizes the answer) so an external
+// bridge can record the outcome; see NotifyBridge. Default is a no-op.
+//
+// Fire-and-forget: it returns no error and runs synchronously on a worker
+// loop's goroutine, so it must be quick and non-blocking (hand off to a channel
+// or a separate goroutine for slow work). Concurrency: with WithWorkers(n > 1)
+// the callback may fire concurrently from multiple worker goroutines, so it
+// must be safe for concurrent use. It mirrors WithNotifier, which fires on a
+// headless park instead — the two never fire for the same drive.
+func WithCompletionNotifier(f func(*task.Task)) DispatcherOption {
+	return func(dp *Dispatcher) { dp.completionNotifier = f }
+}
+
 // WithWorkers sets how many dispatch loop goroutines Start launches. Each
 // worker independently calls RunNextReady, so up to n dequeued sessions drive
 // in parallel (each dequeue yields a distinct session id and therefore a
@@ -80,11 +97,12 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 		panic("taskmanager: NewDispatcher requires a non-nil TaskManager")
 	}
 	d := &Dispatcher{
-		tm:         tm,
-		interval:   time.Second,
-		errHandler: func(error) {},
-		notifier:   func(*task.Task) {},
-		workers:    1,
+		tm:                 tm,
+		interval:           time.Second,
+		errHandler:         func(error) {},
+		notifier:           func(*task.Task) {},
+		completionNotifier: func(*task.Task) {},
+		workers:            1,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -156,6 +174,11 @@ func (d *Dispatcher) loop(ctx context.Context) {
 			// undrivable skip (t == nil), or an errored drive (err != nil routes to
 			// errHandler and skips this branch).
 			d.notifier(t)
+		} else if t != nil && t.Status.IsTerminal() {
+			// Clean terminal drive (done/failed/cancelled): surface the outcome via
+			// the completion notifier. Same exclusions as above: errored drives go
+			// to errHandler only, undrivable skips (t == nil) fire nothing.
+			d.completionNotifier(t)
 		}
 		if ok {
 			// Consumed a queue item (driven, undrivable, or drive-errored);

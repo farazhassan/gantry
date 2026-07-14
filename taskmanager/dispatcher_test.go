@@ -770,3 +770,138 @@ func TestDispatcherMultiWorkerDrainsAllSessions(t *testing.T) {
 		t.Errorf("ready queue not empty after multi-worker drain")
 	}
 }
+
+func TestNewDispatcherDefaultCompletionNotifierIsSafe(t *testing.T) {
+	tm := &TaskManager{}
+	d := NewDispatcher(tm)
+	if d.completionNotifier == nil {
+		t.Fatalf("default completionNotifier is nil, want non-nil no-op")
+	}
+	// no-op completion notifier must be safe to call with any task (including nil).
+	d.completionNotifier(nil)
+	d.completionNotifier(&task.Task{ID: "t1"})
+}
+
+func TestWithCompletionNotifierCapturesTask(t *testing.T) {
+	tm := &TaskManager{}
+	var got *task.Task
+	d := NewDispatcher(tm, WithCompletionNotifier(func(tk *task.Task) { got = tk }))
+	if d.completionNotifier == nil {
+		t.Fatalf("completionNotifier not set by WithCompletionNotifier")
+	}
+	want := &task.Task{ID: "t1", Status: task.TaskDone}
+	d.completionNotifier(want)
+	if got != want {
+		t.Errorf("completionNotifier did not capture the task: got %v, want %v", got, want)
+	}
+}
+
+func TestDispatcherCompletionNotifierFiresOnDone(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "completes")
+
+	var mu sync.Mutex
+	var completed []*task.Task
+	var parkCount int
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithNotifier(func(*task.Task) { mu.Lock(); parkCount++; mu.Unlock() }),
+		WithCompletionNotifier(func(tk *task.Task) {
+			mu.Lock()
+			completed = append(completed, tk)
+			mu.Unlock()
+		}),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(completed) >= 1
+	})
+	// Settle through several more poll cycles: a completed session is consumed
+	// from the queue once and never re-enqueued, so it must fire exactly once.
+	time.Sleep(20 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(completed) != 1 {
+		t.Fatalf("completion notifier fired %d times for one completion, want exactly 1", len(completed))
+	}
+	got := completed[0]
+	if got.Status != task.TaskDone {
+		t.Errorf("notified status = %v, want TaskDone", got.Status)
+	}
+	if got.SessionID != "s1" {
+		t.Errorf("notified SessionID = %q, want %q", got.SessionID, "s1")
+	}
+	if parkCount != 0 {
+		t.Errorf("park notifier fired %d times on a completion, want 0", parkCount)
+	}
+}
+
+func TestDispatcherCompletionNotifierFiresOnFailed(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{fail()}}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "will fail")
+
+	var mu sync.Mutex
+	var completed []*task.Task
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithCompletionNotifier(func(tk *task.Task) {
+			mu.Lock()
+			completed = append(completed, tk)
+			mu.Unlock()
+		}),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(completed) >= 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if completed[0].Status != task.TaskFailed {
+		t.Errorf("notified status = %v, want TaskFailed", completed[0].Status)
+	}
+}
+
+func TestDispatcherCompletionNotifierNotFiredOnPark(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(parkOnceRunner{})
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "needs input")
+
+	var mu sync.Mutex
+	var parkCount, completeCount int
+	d := NewDispatcher(tm,
+		WithPollInterval(time.Millisecond),
+		WithNotifier(func(*task.Task) { mu.Lock(); parkCount++; mu.Unlock() }),
+		WithCompletionNotifier(func(*task.Task) { mu.Lock(); completeCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	defer d.Stop()
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return parkCount >= 1
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if parkCount != 1 {
+		t.Errorf("park notifier fired %d times, want exactly 1", parkCount)
+	}
+	if completeCount != 0 {
+		t.Errorf("completion notifier fired %d times on a park, want 0", completeCount)
+	}
+}
