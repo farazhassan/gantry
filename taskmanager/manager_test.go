@@ -1785,3 +1785,176 @@ func TestResumeTaskWithAnswersNothingAwaiting(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (completed)", err)
 	}
 }
+
+// toolCallingRunner invokes the REAL CreateTaskTool with a fixed raw input on
+// the invokeOn-th Resume call (1-based), then applies the scripted step for
+// each call. It exercises the true ctx -> collector -> tool -> drain path.
+type toolCallingRunner struct {
+	tool     *CreateTaskTool
+	input    json.RawMessage
+	invokeOn int
+	steps    []func(*gantry.State) *gantry.State
+	calls    int
+}
+
+func (r *toolCallingRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	r.calls++
+	if r.calls == r.invokeOn {
+		if _, err := r.tool.Invoke(ctx, r.input); err != nil {
+			return nil, err
+		}
+	}
+	step := r.steps[r.calls-1]
+	return step(st), nil
+}
+
+// newDepManager wires any runner into a real Driver + in-memory stores with a
+// deterministic id minter ("task-1", "task-2", ...; single-threaded tests
+// only). When spawnErrs is non-nil, spawn-drain errors are appended to it via
+// WithSpawnErrorHandler. Returns the ready queue for seeding/inspection.
+func newDepManager(r task.Runner, spawnErrs *[]error) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n := 0
+	opts := []Option{WithIDFunc(func() string {
+		n++
+		return fmt.Sprintf("task-%d", n)
+	})}
+	if spawnErrs != nil {
+		opts = append(opts, WithSpawnErrorHandler(func(err error) { *spawnErrs = append(*spawnErrs, err) }))
+	}
+	tm := NewTaskManager(driver, tasks, meta, ready, opts...)
+	return tm, tasks, meta, ready
+}
+
+func TestUnknownDependencyCancelsSpawnAtDrain(t *testing.T) {
+	// Decision I: a depends_on id that is not a task in this session mints the
+	// spawn CANCELLED (its eagerly-returned id stays resolvable), never queues
+	// it, and reports through WithSpawnErrorHandler.
+	r := &toolCallingRunner{
+		tool:     NewCreateTaskTool(),
+		input:    json.RawMessage(`{"goal":"child","depends_on":["task-nope"]}`),
+		invokeOn: 1,
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			complete("child done (must not run)"), // spare: keeps a wrong drain from panicking
+		},
+	}
+	var spawnErrs []error
+	tm, tasks, meta, _ := newDepManager(r, &spawnErrs)
+	ctx := context.Background()
+
+	parent, err := tm.StartTask(ctx, "s1", "parent")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if parent.Status != task.TaskDone {
+		t.Fatalf("parent status = %v, want TaskDone", parent.Status)
+	}
+	if r.calls != 1 {
+		t.Errorf("runner calls = %d, want 1 (cancelled spawn never driven)", r.calls)
+	}
+	child, err := tasks.LoadTask(ctx, "task-2")
+	if err != nil {
+		t.Fatalf("LoadTask task-2: %v", err)
+	}
+	if child.Status != task.TaskCancelled {
+		t.Errorf("child status = %v, want TaskCancelled", child.Status)
+	}
+	if len(child.DependsOn) != 1 || child.DependsOn[0] != "task-nope" {
+		t.Errorf("child DependsOn = %v, want [task-nope]", child.DependsOn)
+	}
+	if len(child.Working) == 0 || !strings.Contains(child.Working[len(child.Working)-1].Content, "task-nope") {
+		t.Errorf("child Working = %+v, want a cause note naming task-nope", child.Working)
+	}
+	if len(spawnErrs) != 1 || !strings.Contains(spawnErrs[0].Error(), "task-nope") {
+		t.Errorf("spawn errors = %v, want exactly one naming task-nope", spawnErrs)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if len(m.Queue) != 0 {
+		t.Errorf("Queue = %v, want empty (cancelled spawn not enqueued)", m.Queue)
+	}
+	if len(m.TaskRefs) != 2 || m.TaskRefs[1].Status != task.TaskCancelled {
+		t.Errorf("TaskRefs = %+v, want parent + cancelled child ref", m.TaskRefs)
+	}
+}
+
+func TestForeignSessionDependencyCancelsSpawn(t *testing.T) {
+	// A dependency must live in the SAME session: an id that exists in the
+	// TaskStore but belongs to another session is rejected exactly like an
+	// unknown id (sm.TaskRefs membership is the same-session existence check).
+	r := &toolCallingRunner{
+		tool:     NewCreateTaskTool(),
+		input:    json.RawMessage(`{"goal":"child","depends_on":["task-1"]}`), // task-1 lives in s2
+		invokeOn: 2,
+		steps: []func(*gantry.State) *gantry.State{
+			complete("s2 done"),                   // task-1 in session s2
+			complete("parent done"),               // task-2 in session s1 (spawns task-3)
+			complete("child done (must not run)"), // spare
+		},
+	}
+	var spawnErrs []error
+	tm, tasks, _, _ := newDepManager(r, &spawnErrs)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s2", "other-session work"); err != nil {
+		t.Fatalf("StartTask s2: %v", err)
+	}
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask s1: %v", err)
+	}
+	if r.calls != 2 {
+		t.Errorf("runner calls = %d, want 2 (foreign-dep spawn never driven)", r.calls)
+	}
+	child, err := tasks.LoadTask(ctx, "task-3")
+	if err != nil {
+		t.Fatalf("LoadTask task-3: %v", err)
+	}
+	if child.Status != task.TaskCancelled {
+		t.Errorf("child status = %v, want TaskCancelled (foreign-session dependency)", child.Status)
+	}
+	if len(spawnErrs) != 1 {
+		t.Errorf("spawn errors = %v, want exactly one", spawnErrs)
+	}
+}
+
+func TestValidDependsOnPersistsQueuesAndRuns(t *testing.T) {
+	// depends_on may reference the spawning (parent) task itself: task-1 is in
+	// TaskRefs from StartTask. The child queues pending with DependsOn
+	// persisted, and (the parent being done by drain time) runs to done.
+	r := &toolCallingRunner{
+		tool:     NewCreateTaskTool(),
+		input:    json.RawMessage(`{"goal":"child","depends_on":["task-1"]}`),
+		invokeOn: 1,
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			complete("child done"),
+		},
+	}
+	var spawnErrs []error
+	tm, tasks, meta, _ := newDepManager(r, &spawnErrs)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	child, err := tasks.LoadTask(ctx, "task-2")
+	if err != nil {
+		t.Fatalf("LoadTask task-2: %v", err)
+	}
+	if child.Status != task.TaskDone {
+		t.Errorf("child status = %v, want TaskDone", child.Status)
+	}
+	if len(child.DependsOn) != 1 || child.DependsOn[0] != "task-1" {
+		t.Errorf("child DependsOn = %v, want [task-1] persisted through the drain", child.DependsOn)
+	}
+	if len(spawnErrs) != 0 {
+		t.Errorf("spawn errors = %v, want none", spawnErrs)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}

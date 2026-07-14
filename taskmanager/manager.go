@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/task"
 )
 
@@ -28,6 +29,8 @@ type TaskManager struct {
 	newID        func() string
 	newSessionID func() string
 	policy       SpawnPolicy // zero value: default depth cap, inherit-limits budgets
+
+	spawnErrHandler func(error)
 
 	mu    sync.Mutex
 	locks map[string]*sessionLock
@@ -50,6 +53,21 @@ func WithSessionIDFunc(f func() string) Option {
 	return func(m *TaskManager) { m.newSessionID = f }
 }
 
+// WithSpawnErrorHandler sets a callback invoked when a drain-time spawn problem
+// is recorded — today, a create_task depends_on referencing an id that is not a
+// task in the spawning session (Decision I). The spawn is persisted cancelled
+// rather than failing the parent's drive, so this callback is the only signal.
+// Default no-op. Doubles as the observability seam (mirrors the Dispatcher's
+// WithErrorHandler and the Scheduler's WithScheduleErrorHandler). A nil f is
+// ignored (the default is kept).
+func WithSpawnErrorHandler(f func(error)) Option {
+	return func(m *TaskManager) {
+		if f != nil {
+			m.spawnErrHandler = f
+		}
+	}
+}
+
 // NewTaskManager builds a TaskManager over a Driver, the same TaskStore the
 // Driver persists through, a MetaStore, and a ReadyQueue for cross-session
 // spawned work. It panics if any is nil.
@@ -58,14 +76,15 @@ func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, r
 		panic("taskmanager: NewTaskManager requires non-nil driver, tasks, meta, and ready")
 	}
 	m := &TaskManager{
-		driver:       driver,
-		tasks:        tasks,
-		meta:         meta,
-		ready:        ready,
-		newID:        newTaskID,
-		newSessionID: newSessionID,
-		locks:        make(map[string]*sessionLock),
-		cancels:      make(map[string]context.CancelFunc),
+		driver:          driver,
+		tasks:           tasks,
+		meta:            meta,
+		ready:           ready,
+		newID:           newTaskID,
+		newSessionID:    newSessionID,
+		spawnErrHandler: func(error) {},
+		locks:           make(map[string]*sessionLock),
+		cancels:         make(map[string]context.CancelFunc),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -682,9 +701,14 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 // consuming the ids the collector minted at Invoke time (the ids the model
 // already saw) and stamping parent linkage, depth, and the policy-derived
 // budget on every child:
-//   - same-session requests (create_task): tasks are persisted under their
-//     pre-minted ids and appended to sm.Queue so they run in the current
-//     session's FIFO after the active task terminates.
+//   - same-session requests (create_task): each is persisted under its
+//     pre-minted id. depends_on ids are validated against the session's
+//     TaskRefs history (Decision I): a valid spawn is appended pending to
+//     sm.Queue; a spawn with an unknown/foreign/self/forward id is persisted
+//     TaskCancelled with a cause note, NOT enqueued, and reported via the
+//     spawn error handler — the parent's drive is unaffected. Because refs
+//     are appended as the loop goes, a spawn may depend on any earlier
+//     same-session task, including earlier spawns from this same drain.
 //   - new-session requests (spawn_session): each pre-minted session/task id
 //     pair is handed to StartDetachedSession (persist-before-enqueue), and the
 //     parent's meta records a ChildRef so cancellation can cascade. The
@@ -693,18 +717,34 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 // Runs under the session lock, on the orchestrator goroutine, after Advance
 // returned — never re-entering the driver. A no-op when both buffers are empty.
 func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, parent *task.Task, coll *spawnCollector) error {
+	known := make(map[string]bool, len(sm.TaskRefs))
+	for _, ref := range sm.TaskRefs {
+		known[ref.ID] = true
+	}
 	for _, req := range coll.drain() {
 		nt := &task.Task{
 			ID:              req.taskID,
 			SessionID:       sessionID,
 			Title:           req.title,
 			Goal:            req.goal,
+			DependsOn:       req.dependsOn,
 			Status:          task.TaskPending,
 			ParentSessionID: sessionID,
 			ParentTaskID:    parent.ID,
 			Depth:           parent.Depth + 1,
 			Budget:          m.childBudget(parent),
 			CreatedAt:       time.Now().UTC(),
+		}
+		for _, dep := range req.dependsOn {
+			if !known[dep] {
+				nt.Status = task.TaskCancelled
+				nt.Working = append(nt.Working, gantry.Message{
+					Role:    gantry.RoleSystem,
+					Content: fmt.Sprintf("Task cancelled at creation: depends_on references %q, which is not a task in this session.", dep),
+				})
+				m.spawnErrHandler(fmt.Errorf("taskmanager: spawned task %s cancelled: depends_on references %q, not a task in session %s", nt.ID, dep, sessionID))
+				break
+			}
 		}
 		if err := m.tasks.SaveTask(ctx, nt); err != nil {
 			return err
@@ -715,7 +755,10 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 			Status:    nt.Status,
 			CreatedAt: nt.CreatedAt,
 		})
-		sm.Queue = append(sm.Queue, nt.ID)
+		known[nt.ID] = true
+		if nt.Status == task.TaskPending {
+			sm.Queue = append(sm.Queue, nt.ID)
+		}
 	}
 	for _, req := range coll.drainSessions() {
 		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,
