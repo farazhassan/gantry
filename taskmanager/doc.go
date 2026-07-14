@@ -6,4 +6,10 @@
 // session id as a key. Execution is synchronous and serialized per session id —
 // parallelism is "N sessions x 1 active task," achieved by callers invoking
 // different session ids concurrently.
+//
+// Two additive escape hatches keep a busy session usable: StartTaskAsync
+// persists and enqueues a task without driving it (the Dispatcher or a
+// RunNextReady caller drives it later), and ActiveTask reads without the
+// per-session lock, so a mid-drive session stays observable at the cost of
+// eventual consistency.
 package taskmanager
