@@ -2283,10 +2283,10 @@ func TestRecoverReenqueuesOnlyDrivableSessions(t *testing.T) {
 			t.Fatalf("SaveMeta %q: %v", sid, err)
 		}
 	}
-	seed("s-active", "t-a", task.TaskActive)       // crashed mid-run -> recovered
-	seed("s-await", "t-w", task.TaskAwaitingInput) // parked for a human -> skipped
-	seed("s-done", "t-d", task.TaskDone)           // crash between task save and meta clear -> skipped
-	seed("s-pending", "t-p", task.TaskPending)     // never started -> recovered
+	seed("s-active", "t-a", task.TaskActive)                                  // crashed mid-run -> recovered
+	seed("s-await", "t-w", task.TaskAwaitingInput)                            // parked for a human -> skipped
+	seed("s-done", "t-d", task.TaskDone)                                      // crash between task save and meta clear -> skipped
+	seed("s-pending", "t-p", task.TaskPending)                                // never started -> recovered
 	if err := meta.SaveMeta(ctx, "s-idle", &task.SessionMeta{}); err != nil { // no active task -> skipped
 		t.Fatalf("SaveMeta s-idle: %v", err)
 	}
