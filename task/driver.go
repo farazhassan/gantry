@@ -44,10 +44,11 @@ type Runner interface {
 // a sibling to session.Manager: it owns the multi-run loop and the hydrate/flush
 // boundary, leaving the core agent loop and middleware untouched.
 type Driver struct {
-	agent    Runner
-	store    TaskStore
-	verifier Verifier
-	tracer   gantry.Tracer // nil ⇒ no task spans
+	agent        Runner
+	store        TaskStore
+	verifier     Verifier
+	tracer       gantry.Tracer // nil ⇒ no task spans
+	hydrateRunes int           // per-step Output budget for the hydrated projection
 }
 
 // Option configures a Driver at construction.
@@ -71,10 +72,18 @@ func WithTracer(tr gantry.Tracer) Option {
 	return func(d *Driver) { d.tracer = tr }
 }
 
+// WithHydrateOutputRunes overrides the per-step Output rune budget applied
+// when hydrating the plan-ledger into each run (default
+// DefaultOutputRuneBudget). n <= 0 disables bounding: completed steps are
+// projected with their full Output.
+func WithHydrateOutputRunes(n int) Option {
+	return func(d *Driver) { d.hydrateRunes = n }
+}
+
 // NewDriver builds a Driver over an agent (Runner) and a TaskStore. By default it
 // uses NoopVerifier, so a task's first final answer is also its completion.
 func NewDriver(agent Runner, store TaskStore, opts ...Option) *Driver {
-	d := &Driver{agent: agent, store: store, verifier: NoopVerifier{}}
+	d := &Driver{agent: agent, store: store, verifier: NoopVerifier{}, hydrateRunes: DefaultOutputRuneBudget}
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -145,7 +154,7 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 		// resume, where input is the answer, not a fresh request).
 		state := &gantry.State{
 			Messages: cloneMessages(t.Working),
-			Plan:     Hydrate(t), // nil on the first run → planner builds the skeleton
+			Plan:     HydrateBounded(t, d.hydrateRunes), // nil on the first run → planner builds the skeleton
 			Meta:     map[string]any{MetaTaskID: t.ID, MetaSessionID: t.SessionID},
 			Trace:    gantry.NewTrace(),
 		}

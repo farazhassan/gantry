@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -487,5 +488,66 @@ func TestAdvanceSeedsTaskIdentityInMeta(t *testing.T) {
 	}
 	if gotMeta[MetaTaskID] != "tk-9" || gotMeta[MetaSessionID] != "sess-9" {
 		t.Fatalf("Meta = %+v, want %s=tk-9 %s=sess-9", gotMeta, MetaTaskID, MetaSessionID)
+	}
+}
+
+func TestAdvanceHydratesBoundedOutputsAndPreservesLedger(t *testing.T) {
+	longOut := strings.Repeat("x", DefaultOutputRuneBudget+100)
+	var seen string
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			seen = in.Plan.Steps[0].Output // what the run actually receives
+			in.Done = true
+			in.DoneReason = gantry.DoneNoToolCalls
+			return in
+		},
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{
+		ID:     "tk-1",
+		Status: TaskActive,
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+			{ID: "s1", Description: "prior", Status: gantry.StepDone, Output: longOut},
+			{ID: "s2", Description: "next", Status: gantry.StepActive},
+		}},
+	}
+
+	got, err := d.Advance(context.Background(), tk, "continue")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	wantSeen := strings.Repeat("x", DefaultOutputRuneBudget) +
+		fmt.Sprintf("… (truncated, %d total)", DefaultOutputRuneBudget+100)
+	if seen != wantSeen {
+		t.Errorf("run saw output of %d runes, want the bounded projection", len([]rune(seen)))
+	}
+	if got.Plan.Steps[0].Output != longOut {
+		t.Errorf("ledger output clobbered by the bounded projection round-trip (Flush guard failed)")
+	}
+}
+
+func TestWithHydrateOutputRunesOverridesBudget(t *testing.T) {
+	var seen string
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			seen = in.Plan.Steps[0].Output
+			in.Done = true
+			in.DoneReason = gantry.DoneNoToolCalls
+			return in
+		},
+	}}
+	d := NewDriver(runner, NewInMemory(), WithHydrateOutputRunes(5))
+	tk := &Task{
+		ID:     "tk-1",
+		Status: TaskActive,
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+			{ID: "s1", Status: gantry.StepDone, Output: "abcdefghij"},
+		}},
+	}
+	if _, err := d.Advance(context.Background(), tk, "continue"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if want := "abcde… (truncated, 10 total)"; seen != want {
+		t.Errorf("seen = %q, want %q", seen, want)
 	}
 }
