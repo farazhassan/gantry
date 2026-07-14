@@ -85,9 +85,9 @@ func TestApplyOpsPerOpErrors(t *testing.T) {
 	results := applyOps(p, []planOp{
 		{Op: "set_status", StepID: "ghost", Status: "done"},  // unknown step
 		{Op: "set_status", StepID: "s1", Status: "sideways"}, // invalid status
-		{Op: "add_step"},                                     // missing description
-		{Op: "warp"},                                         // unknown op
-		{Op: "set_status", StepID: "s2", Status: "active"},   // still applies
+		{Op: "add_step"}, // missing description
+		{Op: "warp"},     // unknown op
+		{Op: "set_status", StepID: "s2", Status: "active"}, // still applies
 	})
 	for i := 0; i < 4; i++ {
 		if results[i].OK || results[i].Error == "" {
