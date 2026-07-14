@@ -58,10 +58,19 @@ type Task struct {
 	Title     string
 	Goal      string
 	Status    TaskStatus
-	Plan      *gantry.Plan      // the ledger — source of truth for progress
-	Budget    TaskBudget        // cross-run budget
-	Working   []gantry.Message  // task's own working context, separate from the chat transcript
-	Pending   []gantry.ToolCall // unfulfilled ask_user call(s); set only while Status == TaskAwaitingInput
+	// Parent linkage: set on tasks spawned by another task's run (create_task /
+	// spawn_session). All zero on root tasks started directly by a caller.
+	ParentSessionID string // session whose run spawned this task; "" for roots
+	ParentTaskID    string // task whose run spawned this task; "" for roots
+	Depth           int    // spawn-tree depth: 0 for roots, parent.Depth+1 for children
+	// AgentProfile names the runner profile that should execute this task; empty
+	// means the default runner. Defined and persisted here; resolution to a
+	// concrete Runner is the runner-resolver plan's concern (plan 07).
+	AgentProfile string
+	Plan         *gantry.Plan      // the ledger — source of truth for progress
+	Budget       TaskBudget        // cross-run budget
+	Working      []gantry.Message  // task's own working context, separate from the chat transcript
+	Pending      []gantry.ToolCall // unfulfilled ask_user call(s); set only while Status == TaskAwaitingInput
 	// ConsecutiveRejections counts critic rejections in the current done cycle.
 	// It is reset to 0 on any non-reject outcome and bounds how many times the
 	// driver will re-prompt after a rejection before failing the task.
@@ -85,11 +94,22 @@ type TaskRef struct {
 	CreatedAt time.Time
 }
 
+// ChildRef is the parent-side record of a detached child session spawned by one
+// of this session's tasks (spawn_session). Same-session children are already
+// visible via TaskRefs and Queue, so only detached spawns get a ChildRef.
+type ChildRef struct {
+	SessionID string
+	TaskID    string
+	Title     string
+}
+
 // SessionMeta is the session-side link to its tasks: an ordered, append-only
-// history of refs, the id of the single active task ("" when none), and the
-// FIFO ids of tasks waiting to run.
+// history of refs, the id of the single active task ("" when none), the FIFO
+// ids of tasks waiting to run, and refs to detached child sessions spawned by
+// this session's tasks.
 type SessionMeta struct {
-	TaskRefs     []TaskRef // append-only history (all tasks ever created)
-	ActiveTaskID string    // the running/suspended task; "" when none
-	Queue        []string  // pending task ids, FIFO; head runs next
+	TaskRefs     []TaskRef  // append-only history (all tasks ever created)
+	ActiveTaskID string     // the running/suspended task; "" when none
+	Queue        []string   // pending task ids, FIFO; head runs next
+	ChildRefs    []ChildRef // detached child sessions spawned by this session's tasks
 }

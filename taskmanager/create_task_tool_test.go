@@ -12,8 +12,8 @@ func TestCreateTaskToolDefinition(t *testing.T) {
 	if def.Name != "create_task" {
 		t.Errorf("Name = %q, want create_task", def.Name)
 	}
-	if def.Description == "" {
-		t.Errorf("Description is empty")
+	if !strings.Contains(def.Description, "provisional") {
+		t.Errorf("Description = %q, want it to state the returned id is provisional until the run commits", def.Description)
 	}
 	var schema struct {
 		Properties map[string]any `json:"properties"`
@@ -33,8 +33,8 @@ func TestCreateTaskToolDefinition(t *testing.T) {
 	}
 }
 
-func TestCreateTaskToolInvokeBuffers(t *testing.T) {
-	coll := &spawnCollector{}
+func TestCreateTaskToolInvokeReturnsMintedID(t *testing.T) {
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 
@@ -42,12 +42,33 @@ func TestCreateTaskToolInvokeBuffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if !strings.Contains(string(out), "queued") {
-		t.Errorf("output = %s, want a queued confirmation", out)
+	var res struct {
+		Queued bool   `json:"queued"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("output not valid JSON: %v (%s)", err, out)
+	}
+	if !res.Queued || res.TaskID != "task-1" {
+		t.Errorf("res = %+v, want {Queued:true TaskID:task-1}", res)
 	}
 	reqs := coll.drain()
-	if len(reqs) != 1 || reqs[0] != (spawnReq{goal: "write docs", title: "docs"}) {
-		t.Errorf("buffered = %+v, want one {write docs, docs}", reqs)
+	if len(reqs) != 1 || reqs[0] != (spawnReq{goal: "write docs", title: "docs", taskID: "task-1"}) {
+		t.Errorf("buffered = %+v, want one {write docs docs task-1}", reqs)
+	}
+}
+
+func TestCreateTaskToolDepthExceededIsToolError(t *testing.T) {
+	coll := newTestCollector()
+	coll.parentDepth = DefaultMaxSpawnDepth
+	ctx := withCollector(context.Background(), coll)
+
+	_, err := NewCreateTaskTool().Invoke(ctx, json.RawMessage(`{"goal":"x"}`))
+	if err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Errorf("err = %v, want a depth error", err)
+	}
+	if got := coll.drain(); len(got) != 0 {
+		t.Errorf("rejected spawn buffered something: %+v", got)
 	}
 }
 
@@ -60,7 +81,7 @@ func TestCreateTaskToolNoCollectorIsError(t *testing.T) {
 }
 
 func TestCreateTaskToolEmptyGoalIsError(t *testing.T) {
-	coll := &spawnCollector{}
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 
@@ -73,7 +94,7 @@ func TestCreateTaskToolEmptyGoalIsError(t *testing.T) {
 }
 
 func TestCreateTaskToolMalformedInputIsError(t *testing.T) {
-	coll := &spawnCollector{}
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 

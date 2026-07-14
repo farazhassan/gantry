@@ -17,12 +17,16 @@ func TaskStoreSuite(t *testing.T, factory func() task.TaskStore) {
 		s := factory()
 		ctx := context.Background()
 		want := &task.Task{
-			ID:        "tk-1",
-			SessionID: "sess-1",
-			Title:     "title",
-			Goal:      "goal",
-			Status:    task.TaskActive,
-			Plan:      &gantry.Plan{Steps: []gantry.PlanStep{{ID: "s1", Description: "d", Status: gantry.StepActive}}},
+			ID:              "tk-1",
+			SessionID:       "sess-1",
+			Title:           "title",
+			Goal:            "goal",
+			Status:          task.TaskActive,
+			ParentSessionID: "sess-0",
+			ParentTaskID:    "tk-0",
+			Depth:           2,
+			AgentProfile:    "researcher",
+			Plan:            &gantry.Plan{Steps: []gantry.PlanStep{{ID: "s1", Description: "d", Status: gantry.StepActive}}},
 		}
 		if err := s.SaveTask(ctx, want); err != nil {
 			t.Fatalf("SaveTask: %v", err)
@@ -38,6 +42,10 @@ func TaskStoreSuite(t *testing.T, factory func() task.TaskStore) {
 		}
 		if s0 := got.Plan.Steps[0]; s0.ID != "s1" || s0.Description != "d" || s0.Status != gantry.StepActive {
 			t.Errorf("round-trip lost step content: %+v", s0)
+		}
+		if got.ParentSessionID != "sess-0" || got.ParentTaskID != "tk-0" ||
+			got.Depth != 2 || got.AgentProfile != "researcher" {
+			t.Errorf("round-trip lost parent-linkage fields: %+v", got)
 		}
 	})
 

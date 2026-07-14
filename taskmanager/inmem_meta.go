@@ -53,5 +53,9 @@ func cloneMeta(m *task.SessionMeta) *task.SessionMeta {
 		cp.Queue = make([]string, len(m.Queue))
 		copy(cp.Queue, m.Queue)
 	}
+	if m.ChildRefs != nil {
+		cp.ChildRefs = make([]task.ChildRef, len(m.ChildRefs))
+		copy(cp.ChildRefs, m.ChildRefs)
+	}
 	return cp
 }

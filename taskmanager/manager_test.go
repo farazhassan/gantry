@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -475,15 +476,16 @@ func newSpawningManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaSt
 
 // newSessionSpawnManager wires a spawningRunner into a real Driver + in-memory
 // stores with deterministic task and session id minters, and returns the ready
-// queue so tests can inspect/drive cross-session spawned work.
-func newSessionSpawnManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
+// queue so tests can inspect/drive cross-session spawned work. Extra options
+// (e.g. WithSpawnPolicy) are appended after the deterministic minters.
+func newSessionSpawnManager(r *spawningRunner, opts ...Option) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
 	tasks := task.NewInMemory()
 	driver := task.NewDriver(r, tasks)
 	meta := NewInMemoryMetaStore()
 	ready := NewInMemoryReadyQueue()
 	n := 0
 	sn := 0
-	tm := NewTaskManager(driver, tasks, meta, ready,
+	all := append([]Option{
 		WithIDFunc(func() string {
 			n++
 			return "task-" + string(rune('0'+n))
@@ -492,7 +494,8 @@ func newSessionSpawnManager(r *spawningRunner) (*TaskManager, task.TaskStore, Me
 			sn++
 			return "sess-" + string(rune('0'+sn))
 		}),
-	)
+	}, opts...)
+	tm := NewTaskManager(driver, tasks, meta, ready, all...)
 	return tm, tasks, meta, ready
 }
 
@@ -1143,5 +1146,406 @@ func TestCancelSessionRaceWithCompletion(t *testing.T) {
 		if m.ActiveTaskID != "" {
 			t.Fatalf("iter %d: active not cleared: %q", i, m.ActiveTaskID)
 		}
+	}
+}
+
+func TestStartDetachedSessionWithPresetIDs(t *testing.T) {
+	// DetachedIDs wins over the manager's minters.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { return "task-minted" }),
+		WithSessionIDFunc(func() string { return "sess-minted" }),
+	)
+	ctx := context.Background()
+
+	nt, err := tm.StartDetachedSession(ctx, "g", "t", DetachedIDs("sess-pre", "task-pre"))
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if nt.ID != "task-pre" || nt.SessionID != "sess-pre" {
+		t.Errorf("ids = (%q,%q), want (task-pre, sess-pre)", nt.ID, nt.SessionID)
+	}
+	if _, err := tasks.LoadTask(ctx, "task-pre"); err != nil {
+		t.Errorf("LoadTask(task-pre): %v, want persisted under the preset id", err)
+	}
+	sm, err := meta.LoadMeta(ctx, "sess-pre")
+	if err != nil {
+		t.Fatalf("LoadMeta(sess-pre): %v", err)
+	}
+	if sm.ActiveTaskID != "task-pre" {
+		t.Errorf("ActiveTaskID = %q, want task-pre", sm.ActiveTaskID)
+	}
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok || sid != "sess-pre" {
+		t.Errorf("Dequeue = (%q,%v,%v), want (sess-pre, true, nil)", sid, ok, err)
+	}
+}
+
+func TestStartDetachedSessionWithParent(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	tm := NewTaskManager(driver, tasks, NewInMemoryMetaStore(), NewInMemoryReadyQueue(),
+		WithIDFunc(func() string { return "task-x" }),
+		WithSessionIDFunc(func() string { return "sess-x" }),
+	)
+	ctx := context.Background()
+
+	nt, err := tm.StartDetachedSession(ctx, "g", "t",
+		DetachedParent("sess-p", "task-p", 2, task.TaskBudget{MaxRuns: 4}))
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if nt.ParentSessionID != "sess-p" || nt.ParentTaskID != "task-p" || nt.Depth != 2 {
+		t.Errorf("linkage = (%q,%q,%d), want (sess-p, task-p, 2)", nt.ParentSessionID, nt.ParentTaskID, nt.Depth)
+	}
+	if nt.Budget.MaxRuns != 4 {
+		t.Errorf("Budget.MaxRuns = %d, want 4", nt.Budget.MaxRuns)
+	}
+	persisted, err := tasks.LoadTask(ctx, "task-x")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if persisted.ParentTaskID != "task-p" || persisted.Depth != 2 || persisted.Budget.MaxRuns != 4 {
+		t.Errorf("persisted linkage lost: %+v", persisted)
+	}
+}
+
+// idReportingRunner invokes the real spawn tools exactly once, captures the ids
+// they return, then completes every run. It proves the eagerly-minted ids the
+// model sees are the ids the manager persists under.
+type idReportingRunner struct {
+	tool        *CreateTaskTool
+	sessionTool *SpawnSessionTool
+
+	spawned        bool
+	taskID         string // from create_task output
+	spawnSessionID string // from spawn_session output
+	spawnTaskID    string // from spawn_session output
+}
+
+func (r *idReportingRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	if !r.spawned {
+		r.spawned = true
+		out, err := r.tool.Invoke(ctx, json.RawMessage(`{"goal":"same-child","title":"C"}`))
+		if err != nil {
+			return nil, err
+		}
+		var created struct {
+			Queued bool   `json:"queued"`
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(out, &created); err != nil {
+			return nil, err
+		}
+		r.taskID = created.TaskID
+
+		out, err = r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"new-child","title":"S"}`))
+		if err != nil {
+			return nil, err
+		}
+		var spawned struct {
+			Spawned   bool   `json:"spawned"`
+			SessionID string `json:"session_id"`
+			TaskID    string `json:"task_id"`
+		}
+		if err := json.Unmarshal(out, &spawned); err != nil {
+			return nil, err
+		}
+		r.spawnSessionID = spawned.SessionID
+		r.spawnTaskID = spawned.TaskID
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestEagerIDsMatchPersistedTasks(t *testing.T) {
+	r := &idReportingRunner{tool: NewCreateTaskTool(), sessionTool: NewSpawnSessionTool()}
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n, sn := 0, 0
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { n++; return fmt.Sprintf("task-%d", n) }),
+		WithSessionIDFunc(func() string { sn++; return fmt.Sprintf("sess-%d", sn) }),
+	)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if r.taskID == "" || r.spawnSessionID == "" || r.spawnTaskID == "" {
+		t.Fatalf("tools returned empty ids: %+v", r)
+	}
+	// Same-session child persisted (and drained) under the id the tool returned.
+	child, err := tasks.LoadTask(ctx, r.taskID)
+	if err != nil {
+		t.Fatalf("LoadTask(%q): %v", r.taskID, err)
+	}
+	if child.Goal != "same-child" || child.SessionID != "s1" {
+		t.Errorf("child = (%q,%q), want (same-child, s1)", child.Goal, child.SessionID)
+	}
+	// Detached spawn persisted under the returned ids; its session is on ready.
+	det, err := tasks.LoadTask(ctx, r.spawnTaskID)
+	if err != nil {
+		t.Fatalf("LoadTask(%q): %v", r.spawnTaskID, err)
+	}
+	if det.SessionID != r.spawnSessionID || det.Goal != "new-child" {
+		t.Errorf("detached = (%q,%q), want (%q, new-child)", det.SessionID, det.Goal, r.spawnSessionID)
+	}
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok || sid != r.spawnSessionID {
+		t.Errorf("ready.Dequeue = (%q,%v,%v), want (%q,true,nil)", sid, ok, err, r.spawnSessionID)
+	}
+}
+
+func TestSpawnedChildrenCarryParentLinkage(t *testing.T) {
+	// Parent (task-1, depth 0) spawns a same-session child and a detached child.
+	// Both must carry ParentSessionID/ParentTaskID/Depth; only the detached child
+	// gets a ChildRef on the parent's meta.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		spawnReqs:   []spawnReq{{goal: "same-child"}},
+		sessionReqs: []spawnReq{{goal: "new-child", title: "N"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),     // task-1: spawns both
+			complete("same-child done"), // task-2: same-session child drains inline
+		},
+	}
+	tm, tasks, meta, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	parent, _ := tasks.LoadTask(ctx, "task-1")
+	if parent.ParentSessionID != "" || parent.ParentTaskID != "" || parent.Depth != 0 {
+		t.Errorf("root task linkage = (%q,%q,%d), want all zero", parent.ParentSessionID, parent.ParentTaskID, parent.Depth)
+	}
+	same, _ := tasks.LoadTask(ctx, "task-2")
+	if same.ParentSessionID != "s1" || same.ParentTaskID != "task-1" || same.Depth != 1 {
+		t.Errorf("same-session child linkage = (%q,%q,%d), want (s1, task-1, 1)", same.ParentSessionID, same.ParentTaskID, same.Depth)
+	}
+	det, _ := tasks.LoadTask(ctx, "task-3")
+	if det.ParentSessionID != "s1" || det.ParentTaskID != "task-1" || det.Depth != 1 {
+		t.Errorf("detached child linkage = (%q,%q,%d), want (s1, task-1, 1)", det.ParentSessionID, det.ParentTaskID, det.Depth)
+	}
+	pm, _ := meta.LoadMeta(ctx, "s1")
+	if len(pm.ChildRefs) != 1 {
+		t.Fatalf("ChildRefs = %+v, want exactly one (detached spawns only)", pm.ChildRefs)
+	}
+	if pm.ChildRefs[0] != (task.ChildRef{SessionID: "sess-1", TaskID: "task-3", Title: "N"}) {
+		t.Errorf("ChildRef = %+v, want {sess-1 task-3 N}", pm.ChildRefs[0])
+	}
+}
+
+func TestSpawnPolicyBudgetAppliedToChildren(t *testing.T) {
+	r := &spawningRunner{
+		tool:      NewCreateTaskTool(),
+		spawnReqs: []spawnReq{{goal: "child"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			complete("child done"),
+		},
+	}
+	tm, tasks, _, _ := newSessionSpawnManager(r, WithSpawnPolicy(SpawnPolicy{
+		Budget: func(parent *task.Task) task.TaskBudget {
+			return task.TaskBudget{MaxRuns: 5, MaxTokens: 1234}
+		},
+	}))
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	child, _ := tasks.LoadTask(ctx, "task-2")
+	if child.Budget.MaxRuns != 5 || child.Budget.MaxTokens != 1234 {
+		t.Errorf("child budget = %+v, want MaxRuns 5 MaxTokens 1234", child.Budget)
+	}
+}
+
+// depthProbeRunner: the first Resume (the parent) spawns a detached child; the
+// second Resume (that child, driven via RunNextReady) attempts another spawn,
+// records the tool error, and completes anyway — proving the depth gate is a
+// model-visible tool error, not a run-killer.
+type depthProbeRunner struct {
+	sessionTool   *SpawnSessionTool
+	calls         int
+	childSpawnErr error
+}
+
+func (r *depthProbeRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	r.calls++
+	if r.calls == 1 {
+		if _, err := r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"child"}`)); err != nil {
+			return nil, err
+		}
+	} else {
+		_, r.childSpawnErr = r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"grandchild"}`))
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestSpawnDepthCapBlocksGrandchild(t *testing.T) {
+	r := &depthProbeRunner{sessionTool: NewSpawnSessionTool()}
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n, sn := 0, 0
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { n++; return fmt.Sprintf("task-%d", n) }),
+		WithSessionIDFunc(func() string { sn++; return fmt.Sprintf("sess-%d", sn) }),
+		WithSpawnPolicy(SpawnPolicy{MaxDepth: 1}),
+	)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	// Drive the child (depth 1); its grandchild spawn must be rejected.
+	child, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok {
+		t.Fatalf("RunNextReady = (ok=%v, err=%v), want a driven child", ok, err)
+	}
+	if child.Depth != 1 {
+		t.Errorf("child depth = %d, want 1", child.Depth)
+	}
+	if child.Status != task.TaskDone {
+		t.Errorf("child status = %v, want TaskDone (run continued past the tool error)", child.Status)
+	}
+	if r.childSpawnErr == nil || !strings.Contains(r.childSpawnErr.Error(), "depth") {
+		t.Errorf("grandchild spawn err = %v, want a depth error", r.childSpawnErr)
+	}
+	// The rejected grandchild was never enqueued.
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("ready queue not empty; grandchild should not have been enqueued")
+	}
+}
+
+// seedLinkedSession stores one pending task as sid's active task, with an
+// optional ChildRef to a child session. Used to build cancel-cascade trees
+// without driving runs.
+func seedLinkedSession(t *testing.T, ctx context.Context, tasks task.TaskStore, meta MetaStore, sid, tid, childSID, childTID string) {
+	t.Helper()
+	if err := tasks.SaveTask(ctx, &task.Task{ID: tid, SessionID: sid, Goal: "g", Status: task.TaskPending}); err != nil {
+		t.Fatalf("SaveTask(%q): %v", tid, err)
+	}
+	sm := &task.SessionMeta{
+		ActiveTaskID: tid,
+		TaskRefs:     []task.TaskRef{{ID: tid, Status: task.TaskPending}},
+	}
+	if childSID != "" {
+		sm.ChildRefs = []task.ChildRef{{SessionID: childSID, TaskID: childTID}}
+	}
+	if err := meta.SaveMeta(ctx, sid, sm); err != nil {
+		t.Fatalf("SaveMeta(%q): %v", sid, err)
+	}
+}
+
+func TestCancelSessionCascadesToChildSessions(t *testing.T) {
+	// s1 -> s2 -> s3 chain; default MaxDepth (3) covers it all.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s3", "t3")
+	seedLinkedSession(t, ctx, tasks, meta, "s3", "t3", "", "")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	for _, id := range []string{"t1", "t2", "t3"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskCancelled {
+			t.Errorf("task %q = %v, want TaskCancelled", id, tk.Status)
+		}
+	}
+	for _, sid := range []string{"s1", "s2", "s3"} {
+		m, _ := meta.LoadMeta(ctx, sid)
+		if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+			t.Errorf("session %q meta not cleared: active=%q queue=%v", sid, m.ActiveTaskID, m.Queue)
+		}
+	}
+}
+
+func TestCancelSessionCascadeBoundedByMaxDepth(t *testing.T) {
+	// MaxDepth 1: cancelling s1 reaches s2 (one level down) but NOT s3.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(),
+		WithSpawnPolicy(SpawnPolicy{MaxDepth: 1}))
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s3", "t3")
+	seedLinkedSession(t, ctx, tasks, meta, "s3", "t3", "", "")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	t1, _ := tasks.LoadTask(ctx, "t1")
+	t2, _ := tasks.LoadTask(ctx, "t2")
+	t3, _ := tasks.LoadTask(ctx, "t3")
+	if t1.Status != task.TaskCancelled || t2.Status != task.TaskCancelled {
+		t.Errorf("t1/t2 = %v/%v, want both TaskCancelled", t1.Status, t2.Status)
+	}
+	if t3.Status != task.TaskPending {
+		t.Errorf("t3 = %v, want TaskPending (beyond the depth bound)", t3.Status)
+	}
+}
+
+func TestCancelSessionCascadeSurvivesCycles(t *testing.T) {
+	// Corrupted refs: s1 -> s2 -> s1. Must terminate without deadlock, both
+	// sessions cancelled (revisits are idempotent no-ops).
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s1", "t1")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskCancelled {
+			t.Errorf("task %q = %v, want TaskCancelled", id, tk.Status)
+		}
+	}
+}
+
+func TestCancelSessionCascadeUnknownChildIsNoop(t *testing.T) {
+	// A ChildRef to a session with no meta: the cascade skips it gracefully.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "ghost", "tg")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	t1, _ := tasks.LoadTask(ctx, "t1")
+	if t1.Status != task.TaskCancelled {
+		t.Errorf("t1 = %v, want TaskCancelled", t1.Status)
 	}
 }

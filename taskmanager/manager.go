@@ -27,6 +27,7 @@ type TaskManager struct {
 	ready        ReadyQueue
 	newID        func() string
 	newSessionID func() string
+	policy       SpawnPolicy // zero value: default depth cap, inherit-limits budgets
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -222,11 +223,46 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 	return m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 }
 
-// CancelSession stops all work for a session: it interrupts the in-flight run (if
-// any) and marks the active task plus every queued task TaskCancelled, then clears
-// the session's active/queue state. It is idempotent — cancelling an idle or
-// already-finished session is a no-op. It errors only on a store/meta failure.
+// CancelSession stops all work for a session and cascades to the detached child
+// sessions its tasks spawned: it interrupts the in-flight run (if any), marks
+// the active task plus every queued task TaskCancelled, clears the session's
+// active/queue state, then recursively cancels every session in ChildRefs. The
+// recursion is bounded by the spawn policy's max depth, so a corrupted
+// ChildRefs graph cannot recurse unboundedly; revisiting an already-cancelled
+// session is an idempotent no-op. It errors only on a store/meta failure.
 func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error {
+	return m.cancelTree(ctx, sessionID, m.policy.maxDepth())
+}
+
+// cancelTree cancels one session, then recurses into its ChildRefs with one
+// less level of remaining depth. The per-session lock is NOT held across the
+// recursion (cancelOne acquires and releases it), so a self- or
+// ancestor-referencing ChildRef degrades to an idempotent no-op instead of a
+// deadlock.
+func (m *TaskManager) cancelTree(ctx context.Context, sessionID string, remaining int) error {
+	children, err := m.cancelOne(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if remaining <= 0 {
+		return nil
+	}
+	for _, cr := range children {
+		if cr.SessionID == "" || cr.SessionID == sessionID {
+			continue
+		}
+		if err := m.cancelTree(ctx, cr.SessionID, remaining-1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cancelOne is the single-session cancel: interrupt the in-flight run, mark the
+// active + queued tasks TaskCancelled under the session lock, clear
+// active/queue state, and return the session's ChildRefs (kept in meta as
+// history) for the caller to cascade into.
+func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.ChildRef, error) {
 	// (1) Interrupt any in-flight run WITHOUT taking the per-session lock (the
 	// in-flight drive holds it). Cancelling the drive's context unblocks Advance,
 	// which the Driver maps to TaskCancelled.
@@ -245,7 +281,7 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ids := make([]string, 0, len(sm.Queue)+1)
@@ -260,7 +296,7 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if t.Status.IsTerminal() {
 			continue // already done/failed/cancelled
@@ -268,13 +304,16 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 		t.Status = task.TaskCancelled
 		t.UpdatedAt = time.Now().UTC()
 		if err := m.tasks.SaveTask(ctx, t); err != nil {
-			return err
+			return nil, err
 		}
 		syncRef(sm, t)
 	}
 	sm.ActiveTaskID = ""
 	sm.Queue = nil
-	return m.meta.SaveMeta(ctx, sessionID, sm)
+	if err := m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+		return nil, err
+	}
+	return sm.ChildRefs, nil
 }
 
 // RunNextReady dequeues one ready session (spawned cross-session work) and drives
@@ -321,6 +360,42 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	return driven, true, err
 }
 
+// detachedSpec collects the optional overrides for StartDetachedSession.
+type detachedSpec struct {
+	sessionID       string
+	taskID          string
+	parentSessionID string
+	parentTaskID    string
+	depth           int
+	budget          task.TaskBudget
+	hasParent       bool
+}
+
+// DetachedOption customizes StartDetachedSession.
+type DetachedOption func(*detachedSpec)
+
+// DetachedIDs presets the spawned session and task ids instead of minting fresh
+// ones (eager minting: a spawn tool already returned these ids to the model).
+// Empty strings fall back to fresh minting for that id.
+func DetachedIDs(sessionID, taskID string) DetachedOption {
+	return func(s *detachedSpec) {
+		s.sessionID = sessionID
+		s.taskID = taskID
+	}
+}
+
+// DetachedParent records the spawning parent on the new task: parent linkage,
+// the child's spawn-tree depth, and the child's cross-run budget.
+func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task.TaskBudget) DetachedOption {
+	return func(s *detachedSpec) {
+		s.parentSessionID = parentSessionID
+		s.parentTaskID = parentTaskID
+		s.depth = depth
+		s.budget = budget
+		s.hasParent = true
+	}
+}
+
 // StartDetachedSession mints a new session, creates a pending task in it,
 // persists both (the task, then the session meta with that task active plus a
 // TaskRef), and enqueues the session on the ReadyQueue — WITHOUT driving it. The
@@ -328,19 +403,40 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 // goroutine, so the TaskManager stays synchronous. Returns the created pending
 // task, which carries its id and the new session id.
 //
+// Options: DetachedIDs consumes ids pre-minted by a spawn tool; DetachedParent
+// stamps parent linkage, depth, and budget on the child. With no options the
+// behavior is unchanged from before (fresh ids, no parent, zero budget).
+//
 // This is the single source of truth for the persist-before-enqueue +
 // new-session invariant: a successfully-enqueued id always points at a real,
 // drivable session. Both enqueueSpawns (spawn_session tool) and the Scheduler
 // call it.
-func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title string) (*task.Task, error) {
-	newSID := m.newSessionID()
+func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title string, opts ...DetachedOption) (*task.Task, error) {
+	var spec detachedSpec
+	for _, opt := range opts {
+		opt(&spec)
+	}
+	newSID := spec.sessionID
+	if newSID == "" {
+		newSID = m.newSessionID()
+	}
+	newTID := spec.taskID
+	if newTID == "" {
+		newTID = m.newID()
+	}
 	nt := &task.Task{
-		ID:        m.newID(),
+		ID:        newTID,
 		SessionID: newSID,
 		Title:     title,
 		Goal:      goal,
 		Status:    task.TaskPending,
 		CreatedAt: time.Now().UTC(),
+	}
+	if spec.hasParent {
+		nt.ParentSessionID = spec.parentSessionID
+		nt.ParentTaskID = spec.parentTaskID
+		nt.Depth = spec.depth
+		nt.Budget = spec.budget
 	}
 	if err := m.tasks.SaveTask(ctx, nt); err != nil {
 		return nil, err
@@ -379,7 +475,7 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 
 	var err error
 	for {
-		coll := &spawnCollector{}
+		coll := m.newCollector(t)
 		runCtx := withCollector(driveCtx, coll)
 
 		t, err = m.driver.Advance(runCtx, t, input)
@@ -394,7 +490,7 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 
 		// Drain spawns BEFORE branching, so suspended AND terminal tasks queue
 		// their follow-on work.
-		if err = m.enqueueSpawns(ctx, sessionID, sm, coll); err != nil {
+		if err = m.enqueueSpawns(ctx, sessionID, sm, t, coll); err != nil {
 			return t, err
 		}
 
@@ -433,24 +529,33 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 	}
 }
 
-// enqueueSpawns drains two buffers from the just-finished run:
-//   - same-session requests (create_task): minted tasks are appended to sm.Queue
-//     so they run in the current session's FIFO after the active task terminates.
-//   - new-session requests (spawn_session): each gets a fresh session id and task,
-//     both persisted before the session id is enqueued onto the ReadyQueue. The
+// enqueueSpawns drains two buffers from the just-finished run of parent,
+// consuming the ids the collector minted at Invoke time (the ids the model
+// already saw) and stamping parent linkage, depth, and the policy-derived
+// budget on every child:
+//   - same-session requests (create_task): tasks are persisted under their
+//     pre-minted ids and appended to sm.Queue so they run in the current
+//     session's FIFO after the active task terminates.
+//   - new-session requests (spawn_session): each pre-minted session/task id
+//     pair is handed to StartDetachedSession (persist-before-enqueue), and the
+//     parent's meta records a ChildRef so cancellation can cascade. The
 //     parent's sm.Queue is NOT touched by new-session spawns.
 //
 // Runs under the session lock, on the orchestrator goroutine, after Advance
-// returned — never re-entering the driver. A no-op when both collectors are empty.
-func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, coll *spawnCollector) error {
+// returned — never re-entering the driver. A no-op when both buffers are empty.
+func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, parent *task.Task, coll *spawnCollector) error {
 	for _, req := range coll.drain() {
 		nt := &task.Task{
-			ID:        m.newID(),
-			SessionID: sessionID,
-			Title:     req.title,
-			Goal:      req.goal,
-			Status:    task.TaskPending,
-			CreatedAt: time.Now().UTC(),
+			ID:              req.taskID,
+			SessionID:       sessionID,
+			Title:           req.title,
+			Goal:            req.goal,
+			Status:          task.TaskPending,
+			ParentSessionID: sessionID,
+			ParentTaskID:    parent.ID,
+			Depth:           parent.Depth + 1,
+			Budget:          m.childBudget(parent),
+			CreatedAt:       time.Now().UTC(),
 		}
 		if err := m.tasks.SaveTask(ctx, nt); err != nil {
 			return err
@@ -464,9 +569,18 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		sm.Queue = append(sm.Queue, nt.ID)
 	}
 	for _, req := range coll.drainSessions() {
-		if _, err := m.StartDetachedSession(ctx, req.goal, req.title); err != nil {
+		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,
+			DetachedIDs(req.sessionID, req.taskID),
+			DetachedParent(sessionID, parent.ID, parent.Depth+1, m.childBudget(parent)),
+		)
+		if err != nil {
 			return err
 		}
+		sm.ChildRefs = append(sm.ChildRefs, task.ChildRef{
+			SessionID: nt.SessionID,
+			TaskID:    nt.ID,
+			Title:     nt.Title,
+		})
 	}
 	return nil
 }
