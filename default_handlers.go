@@ -48,7 +48,7 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 // fully-aggregated response in both cases and does not mutate state, so the LLM
 // call can be wrapped in a generation span by the caller.
 func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest) (LLMResponse, error) {
-	if sink := sinkFrom(ctx); sink != nil {
+	if sink, ok := SinkFrom(ctx); ok {
 		if sc, ok := client.(StreamingLLMClient); ok {
 			return sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
 				if ch.TextDelta == "" {

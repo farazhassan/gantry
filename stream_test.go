@@ -98,20 +98,50 @@ func TestEventToolFieldsJSONShape(t *testing.T) {
 	}
 }
 
-func TestSinkContextRoundTrip(t *testing.T) {
+func TestWithSinkSinkFromRoundTrip(t *testing.T) {
 	var got []Event
 	sink := func(ev Event) error { got = append(got, ev); return nil }
 
-	ctx := withSink(context.Background(), sink)
-	if err := emit(ctx, Event{Type: EventDone}); err != nil {
-		t.Fatalf("emit: %v", err)
+	ctx := WithSink(context.Background(), sink)
+	s, ok := SinkFrom(ctx)
+	if !ok || s == nil {
+		t.Fatalf("SinkFrom = (%v, %v), want the installed sink", s, ok)
+	}
+	if err := s(Event{Type: EventDone}); err != nil {
+		t.Fatalf("sink: %v", err)
 	}
 	if len(got) != 1 || got[0].Type != EventDone {
 		t.Errorf("sink did not receive event; got %+v", got)
 	}
+	if _, ok := SinkFrom(context.Background()); ok {
+		t.Error("SinkFrom(Background) = (_, true), want false")
+	}
+}
 
-	// No sink in context → emit is a no-op (nil error, nothing recorded).
-	if err := emit(context.Background(), Event{Type: EventDone}); err != nil {
-		t.Errorf("emit with no sink should return nil, got %v", err)
+func TestWithoutSinkShadowsAmbientSink(t *testing.T) {
+	calls := 0
+	ctx := WithSink(context.Background(), func(Event) error { calls++; return nil })
+	shadowed := WithoutSink(ctx)
+
+	if _, ok := SinkFrom(shadowed); ok {
+		t.Error("SinkFrom after WithoutSink = (_, true), want false")
+	}
+	// emit must be a no-op under the shadow (nil error, sink never called).
+	if err := emit(shadowed, Event{Type: EventDone}); err != nil {
+		t.Fatalf("emit under WithoutSink: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("shadowed sink was called %d times, want 0", calls)
+	}
+	// Shadowing is scoped to the child ctx; the original is untouched.
+	if _, ok := SinkFrom(ctx); !ok {
+		t.Error("original ctx lost its sink after WithoutSink on a child")
+	}
+}
+
+func TestWithSinkNilSinkBehavesAsWithoutSink(t *testing.T) {
+	ctx := WithSink(context.Background(), nil)
+	if _, ok := SinkFrom(ctx); ok {
+		t.Error("SinkFrom after WithSink(ctx, nil) = (_, true), want false")
 	}
 }

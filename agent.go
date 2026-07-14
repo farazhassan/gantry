@@ -234,7 +234,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	}
 
 	if sink != nil {
-		ctx = withSink(ctx, sink)
+		ctx = WithSink(ctx, sink)
 	}
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
