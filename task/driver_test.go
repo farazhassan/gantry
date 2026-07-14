@@ -486,3 +486,67 @@ func TestAdvanceSeedsTaskIdentityInMeta(t *testing.T) {
 		t.Fatalf("Meta = %+v, want %s=tk-9 %s=sess-9", gotMeta, MetaTaskID, MetaSessionID)
 	}
 }
+
+func TestAdvanceFlushAdoptsMidRunAddedSteps(t *testing.T) {
+	// Run 1 adopts a two-step skeleton, then hits its per-run cap. Run 2 mutates
+	// the hydrated projection the way the update_plan interception does: marks
+	// s1 done with an output and appends a new step with a minted id ("s3" —
+	// len+1 over the projection, matching components/planner minting). Flush
+	// via adoptOrFlush (driver.go) must round-trip BOTH the progress update and
+	// the new step into the ledger; run 3 must see all three steps hydrated.
+	addStep := func(in *gantry.State) *gantry.State {
+		in.Plan.Steps[0].Status = gantry.StepDone
+		in.Plan.Steps[0].Output = "designed"
+		in.Plan.Steps = append(in.Plan.Steps, gantry.PlanStep{
+			ID:                 "s3",
+			Description:        "write docs",
+			Status:             gantry.StepPending,
+			AcceptanceCriteria: "README updated",
+		})
+		in.Done = true
+		in.DoneReason = gantry.DoneMaxIterations
+		in.Usage = gantry.Usage{InputTokens: 1, OutputTokens: 1}
+		return in
+	}
+	var lastHydrated *gantry.Plan
+	finish := func(in *gantry.State) *gantry.State {
+		lastHydrated = in.Plan
+		in.Done = true
+		in.DoneReason = gantry.DoneNoToolCalls
+		in.Usage = gantry.Usage{InputTokens: 1, OutputTokens: 1}
+		return in
+	}
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		done(gantry.DoneMaxIterations, twoStepPlan()), // run 1: adopt skeleton (ids s1, s2)
+		addStep, // run 2: progress + mid-run added step
+		finish,  // run 3: capture what Hydrate produced, then complete
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got.Status != TaskDone {
+		t.Fatalf("status = %q, want done", got.Status)
+	}
+	if runner.calls != 3 {
+		t.Errorf("runner called %d times, want 3", runner.calls)
+	}
+	// The ledger holds all three steps; the added one kept its minted id.
+	if len(got.Plan.Steps) != 3 {
+		t.Fatalf("ledger steps = %d, want 3 (added step adopted, not dropped)", len(got.Plan.Steps))
+	}
+	if got.Plan.Steps[0].Status != gantry.StepDone || got.Plan.Steps[0].Output != "designed" {
+		t.Errorf("run-2 progress lost: %+v", got.Plan.Steps[0])
+	}
+	added := got.Plan.Steps[2]
+	if added.ID != "s3" || added.Description != "write docs" || added.AcceptanceCriteria != "README updated" {
+		t.Errorf("adopted step = %+v, want (s3, write docs, README updated)", added)
+	}
+	// Run 3's hydration included the adopted step — the full round trip.
+	if lastHydrated == nil || len(lastHydrated.Steps) != 3 || lastHydrated.Steps[2].ID != "s3" {
+		t.Errorf("run 3 hydration missing the adopted step: %+v", lastHydrated)
+	}
+}
