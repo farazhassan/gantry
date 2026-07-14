@@ -364,6 +364,72 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 	return nt, nil
 }
 
+// StartTaskAsync creates a task for the session WITHOUT driving it: the task is
+// persisted, appended to the session's meta (active if the session has no
+// active task, queued behind it otherwise), and the session id is enqueued on
+// the ReadyQueue for the Dispatcher (or a manual RunNextReady caller) to drive.
+// The returned task is always TaskPending.
+//
+// Unlike StartTask, the per-session lock is held only for the meta
+// read-modify-write — never across a drive. If a drive is in flight for this
+// session, StartTaskAsync waits for it to release the lock (a wait bounded by
+// that drive), appends, and returns; it never joins or starts a drive itself.
+//
+// It reuses StartDetachedSession's persist-before-enqueue invariant: task and
+// meta are durable before the session id becomes visible on the ReadyQueue, so
+// a dequeued id always points at a real, loadable session. A ready entry that
+// has nothing drivable by dequeue time — the task already drained through an
+// inline drive, or the active task is parked awaiting input — is skipped by
+// RunNextReady (Decision H).
+func (m *TaskManager) StartTaskAsync(ctx context.Context, sessionID, goal string) (*task.Task, error) {
+	t := &task.Task{
+		ID:        m.newID(),
+		SessionID: sessionID,
+		Goal:      goal,
+		Status:    task.TaskPending,
+		CreatedAt: time.Now().UTC(),
+	}
+	// Persist the task BEFORE it becomes reachable via meta or the ready queue.
+	if err := m.tasks.SaveTask(ctx, t); err != nil {
+		return nil, err
+	}
+	if err := m.appendTaskToMeta(ctx, sessionID, t); err != nil {
+		return nil, err
+	}
+	// Persist-before-enqueue: task + meta are saved above, so the id on the
+	// queue always points at a real session (mirrors StartDetachedSession).
+	if err := m.ready.Enqueue(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// appendTaskToMeta records t in the session's meta — active if none, queued
+// behind the active task otherwise — under the per-session lock. The lock is
+// held only for this read-modify-write; the caller must not already hold it.
+func (m *TaskManager) appendTaskToMeta(ctx context.Context, sessionID string, t *task.Task) error {
+	lk := m.lockFor(sessionID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	sm.TaskRefs = append(sm.TaskRefs, task.TaskRef{
+		ID:        t.ID,
+		Title:     t.Title,
+		Status:    t.Status,
+		CreatedAt: t.CreatedAt,
+	})
+	if sm.ActiveTaskID == "" {
+		sm.ActiveTaskID = t.ID
+	} else {
+		sm.Queue = append(sm.Queue, t.ID)
+	}
+	return m.meta.SaveMeta(ctx, sessionID, sm)
+}
+
 // drive advances the active task and, when it terminates, drains the pending
 // FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
 // own goal. It returns when a task suspends (awaiting_input) or the queue is
