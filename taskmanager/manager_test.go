@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/task"
@@ -308,7 +310,7 @@ func TestFailureDuringDrainContinues(t *testing.T) {
 }
 
 // One shared TaskManager, N goroutines each starting a task on a DISTINCT
-// session id. Exercises lockFor and the stores under -race. The deterministic
+// session id. Exercises the per-session lock and the stores under -race. The deterministic
 // WithIDFunc from newManager is not goroutine-safe, so this builds its own
 // manager with a mutex-guarded id minter and a goroutine-safe runner.
 func TestDifferentSessionsProceedConcurrently(t *testing.T) {
@@ -1143,5 +1145,135 @@ func TestCancelSessionRaceWithCompletion(t *testing.T) {
 		if m.ActiveTaskID != "" {
 			t.Fatalf("iter %d: active not cleared: %q", i, m.ActiveTaskID)
 		}
+	}
+}
+
+// TestSessionLocksEvictedWhenIdle pins the leak fix: before eviction, every
+// session id ever touched left a mutex in the map forever.
+func TestSessionLocksEvictedWhenIdle(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+	ctx := context.Background()
+
+	for i := 0; i < 100; i++ {
+		if _, err := tm.StartTask(ctx, fmt.Sprintf("s%d", i), "goal"); err != nil {
+			t.Fatalf("StartTask: %v", err)
+		}
+	}
+	// Read-only ops must not leak either.
+	if _, err := tm.ActiveTask(ctx, "never-seen"); err != nil {
+		t.Fatalf("ActiveTask: %v", err)
+	}
+
+	tm.mu.Lock()
+	n := len(tm.locks)
+	tm.mu.Unlock()
+	if n != 0 {
+		t.Errorf("locks map holds %d entries after all operations finished, want 0", n)
+	}
+}
+
+func TestSessionLockEvictionSurvivesSuspendResume(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),
+		complete("done"),
+	}}
+	tm, _, _ := newManager(r)
+	ctx := context.Background()
+
+	first, err := tm.StartTask(ctx, "s1", "goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if first.Status != task.TaskAwaitingInput {
+		t.Fatalf("status = %v, want TaskAwaitingInput", first.Status)
+	}
+	// Suspended-idle: no operation in flight, so the entry must be gone.
+	tm.mu.Lock()
+	n := len(tm.locks)
+	tm.mu.Unlock()
+	if n != 0 {
+		t.Errorf("locks map holds %d entries while session is suspended-idle, want 0", n)
+	}
+	// Eviction must not break resume: a fresh entry is minted on demand.
+	resumed, err := tm.ResumeTask(ctx, "s1", "answer")
+	if err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	if resumed.Status != task.TaskDone {
+		t.Errorf("resumed status = %v, want TaskDone", resumed.Status)
+	}
+}
+
+// overlapRunner detects two Resume calls in flight at once. With every caller
+// on ONE session id, the per-session lock must make overlap impossible — a
+// buggy eviction (removing an entry that still has waiters) would hand two
+// goroutines different mutexes for the same session and trip this. The sleep
+// widens the race window.
+type overlapRunner struct {
+	inFlight atomic.Int32
+	overlaps atomic.Int32
+}
+
+func (r *overlapRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	if r.inFlight.Add(1) > 1 {
+		r.overlaps.Add(1)
+	}
+	time.Sleep(time.Millisecond)
+	r.inFlight.Add(-1)
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestSessionLockNoDuplicateLockUnderChurn(t *testing.T) {
+	tasks := task.NewInMemory()
+	r := &overlapRunner{}
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+
+	const n = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := tm.StartTask(context.Background(), "shared", "goal"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if got := r.overlaps.Load(); got != 0 {
+		t.Errorf("%d overlapping runs on one session id — mutual exclusion broke (duplicate lock)", got)
+	}
+	tm.mu.Lock()
+	remaining := len(tm.locks)
+	tm.mu.Unlock()
+	if remaining != 0 {
+		t.Errorf("locks map holds %d entries after churn, want 0", remaining)
 	}
 }

@@ -29,7 +29,7 @@ type TaskManager struct {
 	newSessionID func() string
 
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	locks map[string]*sessionLock
 
 	cancelMu sync.Mutex
 	cancels  map[string]context.CancelFunc // sessionID -> in-flight drive's cancel
@@ -63,7 +63,7 @@ func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, r
 		ready:        ready,
 		newID:        newTaskID,
 		newSessionID: newSessionID,
-		locks:        make(map[string]*sync.Mutex),
+		locks:        make(map[string]*sessionLock),
 		cancels:      make(map[string]context.CancelFunc),
 	}
 	for _, opt := range opts {
@@ -92,17 +92,44 @@ func newSessionID() string {
 	return "sess-" + hex.EncodeToString(b[:])
 }
 
-// lockFor returns a stable per-session mutex, created on first use. Different
-// session ids get different mutexes and never block each other.
-func (m *TaskManager) lockFor(sessionID string) *sync.Mutex {
+// sessionLock pairs the per-session mutex with a reference count guarded by
+// TaskManager.mu. The count tracks how many goroutines currently hold or are
+// waiting on the mutex; when it drops to zero the entry is evicted, so idle
+// sessions do not leak a map entry forever.
+type sessionLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquire returns the session's lock, locked. It mints the entry on first use
+// and increments the refcount under m.mu BEFORE blocking on the session mutex,
+// so a concurrent release can never evict an entry that still has a holder or
+// waiter — no lost wakeup and no duplicate lock for the same session id.
+// Different session ids get different locks and never block each other.
+func (m *TaskManager) acquire(sessionID string) *sessionLock {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	lk, ok := m.locks[sessionID]
 	if !ok {
-		lk = &sync.Mutex{}
+		lk = &sessionLock{}
 		m.locks[sessionID] = lk
 	}
+	lk.refs++
+	m.mu.Unlock()
+	lk.mu.Lock()
 	return lk
+}
+
+// release unlocks the session's lock and drops its reference; the last
+// reference evicts the map entry. Pass the exact *sessionLock returned by
+// acquire.
+func (m *TaskManager) release(sessionID string, lk *sessionLock) {
+	lk.mu.Unlock()
+	m.mu.Lock()
+	lk.refs--
+	if lk.refs == 0 {
+		delete(m.locks, sessionID)
+	}
+	m.mu.Unlock()
 }
 
 // registerCancel records the in-flight drive's cancel func for a session. The
@@ -140,9 +167,8 @@ func (m *TaskManager) loadOrFreshMeta(ctx context.Context, sessionID string) (*t
 // task (and drains the queue); otherwise it enqueues the task pending. The
 // returned task's status reflects whether it ran, suspended, or is queued.
 func (m *TaskManager) StartTask(ctx context.Context, sessionID, goal string) (*task.Task, error) {
-	lk := m.lockFor(sessionID)
-	lk.Lock()
-	defer lk.Unlock()
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
@@ -185,9 +211,8 @@ func (m *TaskManager) StartTask(ctx context.Context, sessionID, goal string) (*t
 // it onward, and drains the queue if it completes. Returns ErrNoTaskAwaitingInput
 // if there is no active task or it is not awaiting input.
 func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (*task.Task, error) {
-	lk := m.lockFor(sessionID)
-	lk.Lock()
-	defer lk.Unlock()
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
@@ -208,9 +233,8 @@ func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (
 
 // ActiveTask returns the session's current active task, or (nil, nil) if none.
 func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.Task, error) {
-	lk := m.lockFor(sessionID)
-	lk.Lock()
-	defer lk.Unlock()
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
@@ -239,9 +263,8 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 	// (2) Finalize under the per-session lock. This blocks until the interrupted
 	// drive releases the lock, so we observe the cancelled active task and a
 	// stable queue.
-	lk := m.lockFor(sessionID)
-	lk.Lock()
-	defer lk.Unlock()
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
@@ -299,9 +322,8 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 		return nil, false, nil // empty queue
 	}
 
-	lk := m.lockFor(sid)
-	lk.Lock()
-	defer lk.Unlock()
+	lk := m.acquire(sid)
+	defer m.release(sid, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sid)
 	if err != nil {
