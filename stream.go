@@ -98,11 +98,21 @@ func SinkFrom(ctx context.Context) (EventSink, bool) {
 	return s, s != nil
 }
 
-// emit sends ev to the sink in ctx, if any. With no sink it is a no-op, which
-// is what makes the shared run() loop free for plain Run.
+// emit sends ev to the sink in ctx, if any, first stamping the run's ambient
+// identity (RunID/SessionID/TaskID/Agent) onto it. The ambient identity is
+// authoritative: internal emit sites construct events with empty identity and
+// rely on this single chokepoint. With no sink emit is a no-op, which is what
+// makes the shared run() loop free for plain Run.
 func emit(ctx context.Context, ev Event) error {
-	if s, ok := SinkFrom(ctx); ok {
-		return s(ev)
+	s, ok := SinkFrom(ctx)
+	if !ok {
+		return nil
 	}
-	return nil
+	if id, ok := identityFrom(ctx); ok {
+		ev.RunID = id.runID
+		ev.SessionID = id.sessionID
+		ev.TaskID = id.taskID
+		ev.Agent = id.agent
+	}
+	return s(ev)
 }

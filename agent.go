@@ -252,6 +252,19 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 		ctx = WithSink(ctx, sink)
 	}
 
+	// Mint this run's identity and make it ambient: emit stamps it onto every
+	// Event, and the run span records it as attributes. SessionID/TaskID are
+	// read from State.Meta when a task driver seeded them (MetaSessionID /
+	// MetaTaskID); they are empty otherwise. Reading a nil Meta map is safe.
+	ident := eventIdentity{runID: newRunID(), agent: a.name}
+	if s, ok := state.Meta[MetaSessionID].(string); ok {
+		ident.sessionID = s
+	}
+	if s, ok := state.Meta[MetaTaskID].(string); ok {
+		ident.taskID = s
+	}
+	ctx = withIdentity(ctx, ident)
+
 	// Resolve tracer: prefer the configured one; otherwise build a default
 	// tracer that writes to state.Trace.
 	tracer := a.tracer
@@ -276,6 +289,16 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// run as one trace. The span ends with the run's terminal error.
 	ctx, runSpan := tracer.StartSpan(ctx, "run")
 	runSpan.SetAttr(SpanKindKey, SpanKindAgent)
+	runSpan.SetAttr("run.id", ident.runID)
+	if ident.agent != "" {
+		runSpan.SetAttr("agent.name", ident.agent)
+	}
+	if ident.sessionID != "" {
+		runSpan.SetAttr("session.id", ident.sessionID)
+	}
+	if ident.taskID != "" {
+		runSpan.SetAttr("task.id", ident.taskID)
+	}
 	defer func() { runSpan.End(retErr) }()
 
 	// Tool advertisements are per-run scratch that PhaseStart middleware rebuilds
