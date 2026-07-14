@@ -119,3 +119,16 @@ func TestCollectorAbsentFromBareContext(t *testing.T) {
 		t.Errorf("collectorFrom(Background) = (_, true), want false")
 	}
 }
+
+func TestCollectorCarriesRunIdentity(t *testing.T) {
+	c := &spawnCollector{sessionID: "s1", taskID: "t1"}
+	ctx := withCollector(context.Background(), c)
+
+	got, ok := collectorFrom(ctx)
+	if !ok {
+		t.Fatalf("collectorFrom = (_, false), want the injected collector")
+	}
+	if got.sessionID != "s1" || got.taskID != "t1" {
+		t.Errorf("identity = (%q, %q), want (s1, t1)", got.sessionID, got.taskID)
+	}
+}
