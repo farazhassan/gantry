@@ -38,7 +38,8 @@ func (t *SpawnSessionTool) Definition() gantry.ToolDef {
   "type": "object",
   "properties": {
     "goal": {"type": "string", "description": "What the spawned session's task should accomplish."},
-    "title": {"type": "string", "description": "Optional short title."}
+    "title": {"type": "string", "description": "Optional short title."},
+    "agent": {"type": "string", "description": "Optional agent profile (registry key) to run the spawned task under. Omit for the default agent."}
   },
   "required": ["goal"]
 }`),
@@ -54,6 +55,7 @@ func (t *SpawnSessionTool) Invoke(ctx context.Context, input json.RawMessage) (j
 	var in struct {
 		Goal  string `json:"goal"`
 		Title string `json:"title"`
+		Agent string `json:"agent"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("spawn_session: invalid input: %w", err)
@@ -65,7 +67,7 @@ func (t *SpawnSessionTool) Invoke(ctx context.Context, input json.RawMessage) (j
 	if !ok {
 		return nil, errors.New("spawn_session: not available outside a task-driven run")
 	}
-	sid, tid, err := coll.addSession(in.Goal, in.Title)
+	sid, tid, err := coll.addSession(in.Goal, in.Title, in.Agent)
 	if err != nil {
 		return nil, fmt.Errorf("spawn_session: %w", err)
 	}

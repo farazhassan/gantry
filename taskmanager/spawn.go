@@ -11,12 +11,15 @@ import (
 // spawnReq is a single buffered request to create a follow-on task. IDs are
 // minted eagerly at tool-Invoke time (so the tool can return them to the
 // model) and consumed verbatim by enqueueSpawns after the run returns.
-// sessionID is set only for new-session (spawn_session) requests.
+// sessionID is set only for new-session (spawn_session) requests, as is agent —
+// the registry key of the runner profile the spawned task should run under
+// ("" ⇒ default runner).
 type spawnReq struct {
 	goal      string
 	title     string
 	taskID    string
 	sessionID string
+	agent     string
 }
 
 // spawnCollector buffers spawn requests during one Advance. It carries the
@@ -73,9 +76,10 @@ func (c *spawnCollector) drain() []spawnReq {
 }
 
 // addSession mints a session id and a task id, buffers a new-session spawn
-// request, and returns both. It errors (without buffering) when the spawn would
-// exceed the max depth. Safe for concurrent use.
-func (c *spawnCollector) addSession(goal, title string) (sessionID, taskID string, err error) {
+// request, and returns both. agent is the registry key of the runner profile
+// the spawned task should run under ("" ⇒ default runner). It errors (without
+// buffering) when the spawn would exceed the max depth. Safe for concurrent use.
+func (c *spawnCollector) addSession(goal, title, agent string) (sessionID, taskID string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.depthErr(); err != nil {
@@ -83,7 +87,7 @@ func (c *spawnCollector) addSession(goal, title string) (sessionID, taskID strin
 	}
 	sessionID = c.newSessionID()
 	taskID = c.newTaskID()
-	c.sessions = append(c.sessions, spawnReq{goal: goal, title: title, taskID: taskID, sessionID: sessionID})
+	c.sessions = append(c.sessions, spawnReq{goal: goal, title: title, taskID: taskID, sessionID: sessionID, agent: agent})
 	return sessionID, taskID, nil
 }
 
