@@ -437,7 +437,7 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 
 	var err error
 	for {
-		coll := &spawnCollector{}
+		coll := m.newCollector(t)
 		runCtx := withCollector(driveCtx, coll)
 
 		t, err = m.driver.Advance(runCtx, t, input)
@@ -491,19 +491,22 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 	}
 }
 
-// enqueueSpawns drains two buffers from the just-finished run:
-//   - same-session requests (create_task): minted tasks are appended to sm.Queue
-//     so they run in the current session's FIFO after the active task terminates.
-//   - new-session requests (spawn_session): each gets a fresh session id and task,
-//     both persisted before the session id is enqueued onto the ReadyQueue. The
-//     parent's sm.Queue is NOT touched by new-session spawns.
+// enqueueSpawns drains two buffers from the just-finished run, consuming the
+// ids the collector minted at Invoke time (the ids the model already saw):
+//   - same-session requests (create_task): tasks are persisted under their
+//     pre-minted ids and appended to sm.Queue so they run in the current
+//     session's FIFO after the active task terminates.
+//   - new-session requests (spawn_session): each pre-minted session/task id
+//     pair is handed to StartDetachedSession, which persists both before the
+//     session id is enqueued onto the ReadyQueue. The parent's sm.Queue is NOT
+//     touched by new-session spawns.
 //
 // Runs under the session lock, on the orchestrator goroutine, after Advance
-// returned — never re-entering the driver. A no-op when both collectors are empty.
+// returned — never re-entering the driver. A no-op when both buffers are empty.
 func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, coll *spawnCollector) error {
 	for _, req := range coll.drain() {
 		nt := &task.Task{
-			ID:        m.newID(),
+			ID:        req.taskID,
 			SessionID: sessionID,
 			Title:     req.title,
 			Goal:      req.goal,
@@ -522,7 +525,7 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		sm.Queue = append(sm.Queue, nt.ID)
 	}
 	for _, req := range coll.drainSessions() {
-		if _, err := m.StartDetachedSession(ctx, req.goal, req.title); err != nil {
+		if _, err := m.StartDetachedSession(ctx, req.goal, req.title, DetachedIDs(req.sessionID, req.taskID)); err != nil {
 			return err
 		}
 	}

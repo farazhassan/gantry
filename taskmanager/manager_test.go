@@ -1209,3 +1209,94 @@ func TestStartDetachedSessionWithParent(t *testing.T) {
 		t.Errorf("persisted linkage lost: %+v", persisted)
 	}
 }
+
+// idReportingRunner invokes the real spawn tools exactly once, captures the ids
+// they return, then completes every run. It proves the eagerly-minted ids the
+// model sees are the ids the manager persists under.
+type idReportingRunner struct {
+	tool        *CreateTaskTool
+	sessionTool *SpawnSessionTool
+
+	spawned        bool
+	taskID         string // from create_task output
+	spawnSessionID string // from spawn_session output
+	spawnTaskID    string // from spawn_session output
+}
+
+func (r *idReportingRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	if !r.spawned {
+		r.spawned = true
+		out, err := r.tool.Invoke(ctx, json.RawMessage(`{"goal":"same-child","title":"C"}`))
+		if err != nil {
+			return nil, err
+		}
+		var created struct {
+			Queued bool   `json:"queued"`
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(out, &created); err != nil {
+			return nil, err
+		}
+		r.taskID = created.TaskID
+
+		out, err = r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"new-child","title":"S"}`))
+		if err != nil {
+			return nil, err
+		}
+		var spawned struct {
+			Spawned   bool   `json:"spawned"`
+			SessionID string `json:"session_id"`
+			TaskID    string `json:"task_id"`
+		}
+		if err := json.Unmarshal(out, &spawned); err != nil {
+			return nil, err
+		}
+		r.spawnSessionID = spawned.SessionID
+		r.spawnTaskID = spawned.TaskID
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestEagerIDsMatchPersistedTasks(t *testing.T) {
+	r := &idReportingRunner{tool: NewCreateTaskTool(), sessionTool: NewSpawnSessionTool()}
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n, sn := 0, 0
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { n++; return fmt.Sprintf("task-%d", n) }),
+		WithSessionIDFunc(func() string { sn++; return fmt.Sprintf("sess-%d", sn) }),
+	)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if r.taskID == "" || r.spawnSessionID == "" || r.spawnTaskID == "" {
+		t.Fatalf("tools returned empty ids: %+v", r)
+	}
+	// Same-session child persisted (and drained) under the id the tool returned.
+	child, err := tasks.LoadTask(ctx, r.taskID)
+	if err != nil {
+		t.Fatalf("LoadTask(%q): %v", r.taskID, err)
+	}
+	if child.Goal != "same-child" || child.SessionID != "s1" {
+		t.Errorf("child = (%q,%q), want (same-child, s1)", child.Goal, child.SessionID)
+	}
+	// Detached spawn persisted under the returned ids; its session is on ready.
+	det, err := tasks.LoadTask(ctx, r.spawnTaskID)
+	if err != nil {
+		t.Fatalf("LoadTask(%q): %v", r.spawnTaskID, err)
+	}
+	if det.SessionID != r.spawnSessionID || det.Goal != "new-child" {
+		t.Errorf("detached = (%q,%q), want (%q, new-child)", det.SessionID, det.Goal, r.spawnSessionID)
+	}
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok || sid != r.spawnSessionID {
+		t.Errorf("ready.Dequeue = (%q,%v,%v), want (%q,true,nil)", sid, ok, err, r.spawnSessionID)
+	}
+}

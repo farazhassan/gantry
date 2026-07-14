@@ -28,7 +28,9 @@ func (t *CreateTaskTool) Definition() gantry.ToolDef {
 	return gantry.ToolDef{
 		Name: "create_task",
 		Description: "Spawn a follow-on task in the current session. The task is " +
-			"queued and runs after the active task completes.",
+			"queued and runs after the active task completes. Returns the new " +
+			"task's id; the id is provisional until this run commits — if the run " +
+			"errors, the spawn is discarded.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -40,10 +42,11 @@ func (t *CreateTaskTool) Definition() gantry.ToolDef {
 	}
 }
 
-// Invoke decodes the request and buffers it into the ctx-carried collector. It
-// returns a tool error (surfaced to the model; run continues) when the input is
-// malformed, the goal is empty, or no collector is present (tool used outside a
-// task-driven run).
+// Invoke decodes the request, mints the task id via the ctx-carried collector,
+// buffers the spawn, and returns the id. It returns a tool error (surfaced to
+// the model; run continues) when the input is malformed, the goal is empty, no
+// collector is present (tool used outside a task-driven run), or the spawn
+// would exceed the policy's max depth.
 func (t *CreateTaskTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var in struct {
 		Goal  string `json:"goal"`
@@ -59,6 +62,16 @@ func (t *CreateTaskTool) Invoke(ctx context.Context, input json.RawMessage) (jso
 	if !ok {
 		return nil, errors.New("create_task: not available outside a task-driven run")
 	}
-	coll.add(in.Goal, in.Title)
-	return json.RawMessage(`{"queued": true}`), nil
+	id, err := coll.add(in.Goal, in.Title)
+	if err != nil {
+		return nil, fmt.Errorf("create_task: %w", err)
+	}
+	out, err := json.Marshal(struct {
+		Queued bool   `json:"queued"`
+		TaskID string `json:"task_id"`
+	}{Queued: true, TaskID: id})
+	if err != nil {
+		return nil, fmt.Errorf("create_task: encode result: %w", err)
+	}
+	return out, nil
 }
