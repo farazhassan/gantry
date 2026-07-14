@@ -46,15 +46,16 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 // invokeLLM streams when a sink is active and the client implements
 // StreamingLLMClient, otherwise falls back to Generate. It returns the
 // fully-aggregated response in both cases and does not mutate state, so the LLM
-// call can be wrapped in a generation span by the caller.
+// call can be wrapped in a generation span by the caller. Deltas are emitted
+// through emit so they carry the run's identity like every other event.
 func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest) (LLMResponse, error) {
-	if sink := sinkFrom(ctx); sink != nil {
+	if _, ok := SinkFrom(ctx); ok {
 		if sc, ok := client.(StreamingLLMClient); ok {
 			return sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
 				if ch.TextDelta == "" {
 					return nil
 				}
-				return sink(Event{
+				return emit(ctx, Event{
 					Type:      EventTextDelta,
 					Iteration: state.Iteration,
 					Phase:     PhaseLLMCall,

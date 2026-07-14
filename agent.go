@@ -20,6 +20,7 @@ type Agent struct {
 	llm           LLMClient
 	tracer        Tracer
 	maxIterations int
+	name          string
 
 	chains      map[Phase][]namedMW
 	inner       map[Phase]Handler
@@ -70,6 +71,17 @@ func WithMaxIterations(n int) Option {
 			return errors.New("gantry: WithMaxIterations must be positive")
 		}
 		a.maxIterations = n
+		return nil
+	}
+}
+
+// WithName sets the agent's identity name. The run loop stamps it on every
+// emitted Event (Event.Agent) and records it as the "agent.name" attribute on
+// the run span, so multi-agent consumers can tell whose events they are
+// watching. Empty (the default) means anonymous: Event.Agent stays empty.
+func WithName(name string) Option {
+	return func(a *Agent) error {
+		a.name = name
 		return nil
 	}
 }
@@ -185,6 +197,9 @@ func (a *Agent) RegisterPhase(phase Phase, pos Position, anchor Phase) error {
 // MaxIterations returns the loop iteration cap.
 func (a *Agent) MaxIterations() int { return a.maxIterations }
 
+// Name returns the agent's identity name ("" unless WithName was used).
+func (a *Agent) Name() string { return a.name }
+
 // Tracer returns the configured tracer (may be nil before Run is called
 // if no custom Tracer was supplied; the default tracer is created per-run).
 func (a *Agent) Tracer() Tracer { return a.tracer }
@@ -234,8 +249,21 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	}
 
 	if sink != nil {
-		ctx = withSink(ctx, sink)
+		ctx = WithSink(ctx, sink)
 	}
+
+	// Mint this run's identity and make it ambient: emit stamps it onto every
+	// Event, and the run span records it as attributes. SessionID/TaskID are
+	// read from State.Meta when a task driver seeded them (MetaSessionID /
+	// MetaTaskID); they are empty otherwise. Reading a nil Meta map is safe.
+	ident := eventIdentity{runID: newRunID(), agent: a.name}
+	if s, ok := state.Meta[MetaSessionID].(string); ok {
+		ident.sessionID = s
+	}
+	if s, ok := state.Meta[MetaTaskID].(string); ok {
+		ident.taskID = s
+	}
+	ctx = withIdentity(ctx, ident)
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
 	// tracer that writes to state.Trace.
@@ -261,6 +289,16 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// run as one trace. The span ends with the run's terminal error.
 	ctx, runSpan := tracer.StartSpan(ctx, "run")
 	runSpan.SetAttr(SpanKindKey, SpanKindAgent)
+	runSpan.SetAttr("run.id", ident.runID)
+	if ident.agent != "" {
+		runSpan.SetAttr("agent.name", ident.agent)
+	}
+	if ident.sessionID != "" {
+		runSpan.SetAttr("session.id", ident.sessionID)
+	}
+	if ident.taskID != "" {
+		runSpan.SetAttr("task.id", ident.taskID)
+	}
 	defer func() { runSpan.End(retErr) }()
 
 	// Tool advertisements are per-run scratch that PhaseStart middleware rebuilds

@@ -43,7 +43,9 @@ const (
 // rest are omitted. Note on ordering: EventToolCall and EventToolResult events
 // are emitted after the phase_end event of the phase that produced them,
 // because they are derived from State and only become available once that
-// phase's handler has returned.
+// phase's handler has returned. The identity fields (RunID, SessionID, TaskID,
+// Agent) are stamped by the run loop on every emitted event and are empty when
+// unknown.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
@@ -53,6 +55,15 @@ type Event struct {
 	ToolResult  *ToolResult `json:"tool_result,omitempty"`
 	DoneReason  DoneReason  `json:"done_reason,omitempty"`
 	FinalOutput string      `json:"final_output,omitempty"`
+
+	// Identity: which run, session, task, and agent produced this event.
+	// RunID is minted per run; SessionID/TaskID come from State.Meta
+	// (MetaSessionID / MetaTaskID) when a task driver seeded them; Agent is
+	// the WithName identity. All empty when unknown.
+	RunID     string `json:"run_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	Agent     string `json:"agent,omitempty"`
 }
 
 // EventSink receives run Events. Returning an error aborts the run and the
@@ -65,20 +76,43 @@ type EventSink func(Event) error
 // sinkKey is the context key under which the active EventSink is stored.
 type sinkKey struct{}
 
-func withSink(ctx context.Context, s EventSink) context.Context {
+// WithSink returns a ctx carrying sink as the ambient EventSink. The run loop
+// installs the RunStream sink through here; callers embedding gantry (custom
+// runners, tests) may install their own. A nil sink behaves like WithoutSink.
+func WithSink(ctx context.Context, s EventSink) context.Context {
 	return context.WithValue(ctx, sinkKey{}, s)
 }
 
-func sinkFrom(ctx context.Context) EventSink {
-	s, _ := ctx.Value(sinkKey{}).(EventSink)
-	return s
+// WithoutSink returns a ctx whose ambient EventSink is shadowed: SinkFrom
+// reports no sink and emit becomes a no-op downstream of it. Use it when
+// running a nested agent from inside a streaming parent run (e.g. a delegate
+// tool) so the child's events do not interleave into the parent's stream.
+func WithoutSink(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sinkKey{}, EventSink(nil))
 }
 
-// emit sends ev to the sink in ctx, if any. With no sink it is a no-op, which
-// is what makes the shared run() loop free for plain Run.
+// SinkFrom returns the ambient EventSink and whether one is installed. A ctx
+// shadowed by WithoutSink (or carrying a nil sink) reports (nil, false).
+func SinkFrom(ctx context.Context) (EventSink, bool) {
+	s, _ := ctx.Value(sinkKey{}).(EventSink)
+	return s, s != nil
+}
+
+// emit sends ev to the sink in ctx, if any, first stamping the run's ambient
+// identity (RunID/SessionID/TaskID/Agent) onto it. The ambient identity is
+// authoritative: internal emit sites construct events with empty identity and
+// rely on this single chokepoint. With no sink emit is a no-op, which is what
+// makes the shared run() loop free for plain Run.
 func emit(ctx context.Context, ev Event) error {
-	if s := sinkFrom(ctx); s != nil {
-		return s(ev)
+	s, ok := SinkFrom(ctx)
+	if !ok {
+		return nil
 	}
-	return nil
+	if id, ok := identityFrom(ctx); ok {
+		ev.RunID = id.runID
+		ev.SessionID = id.sessionID
+		ev.TaskID = id.taskID
+		ev.Agent = id.agent
+	}
+	return s(ev)
 }

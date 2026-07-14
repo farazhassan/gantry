@@ -76,7 +76,7 @@ func TestDefaultLLMCallHandler_StreamingStillRecordsGeneration(t *testing.T) {
 	tr := NewDefaultTracer(trc)
 	var streamed string
 	ctx := withTracer(context.Background(), tr)
-	ctx = withSink(ctx, func(ev Event) error { streamed += ev.TextDelta; return nil })
+	ctx = WithSink(ctx, func(ev Event) error { streamed += ev.TextDelta; return nil })
 	ctx, root := tr.StartSpan(ctx, "run")
 
 	h := DefaultLLMCallHandler(streamStubLLM{

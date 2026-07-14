@@ -28,6 +28,7 @@ const (
 	typeToolCallArgs       = "TOOL_CALL_ARGS"
 	typeToolCallEnd        = "TOOL_CALL_END"
 	typeToolCallResult     = "TOOL_CALL_RESULT"
+	typeCustom             = "CUSTOM"
 )
 
 // --- Lifecycle ---
@@ -163,6 +164,22 @@ type ToolCallResult struct {
 func (e ToolCallResult) eventType() string { return e.Type }
 func newToolCallResult(msgID, toolCallID, content string) ToolCallResult {
 	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool"}
+}
+
+// --- Custom ---
+
+// Custom is the AG-UI CUSTOM event: a named application-defined payload
+// carried inside an otherwise standard stream. Gantry uses it to forward run
+// identity (see mapper.go); clients that don't recognize the name ignore it.
+type Custom struct {
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+	Value any    `json:"value"`
+}
+
+func (e Custom) eventType() string { return e.Type }
+func newCustom(name string, value any) Custom {
+	return Custom{Type: typeCustom, Name: name, Value: value}
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:
