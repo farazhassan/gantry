@@ -576,3 +576,197 @@ func TestDispatcherDoesNotNotifyOnErroredDrive(t *testing.T) {
 		t.Errorf("notifier fired %d times across an errored drive + a completion, want 0", notifyCount)
 	}
 }
+
+func TestNewDispatcherDefaultWorkers(t *testing.T) {
+	d := NewDispatcher(&TaskManager{})
+	if d.workers != 1 {
+		t.Errorf("default workers = %d, want 1", d.workers)
+	}
+}
+
+func TestWithWorkersSetsCount(t *testing.T) {
+	d := NewDispatcher(&TaskManager{}, WithWorkers(4))
+	if d.workers != 4 {
+		t.Errorf("workers = %d, want 4", d.workers)
+	}
+}
+
+func TestWithWorkersZeroPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Errorf("WithWorkers(0) did not panic")
+		}
+	}()
+	NewDispatcher(&TaskManager{}, WithWorkers(0))
+}
+
+func TestWithWorkersNegativePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Errorf("WithWorkers(-3) did not panic")
+		}
+	}()
+	NewDispatcher(&TaskManager{}, WithWorkers(-3))
+}
+
+// gateRunner signals each Resume entry, then blocks until the test closes
+// release (or ctx is cancelled). Because every Resume stays blocked until
+// released, K buffered entry signals can only accumulate if K Resume calls are
+// in flight simultaneously — a deterministic overlap proof.
+type gateRunner struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *gateRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	r.entered <- struct{}{}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+// blockManyRunner signals each Resume entry on a buffered channel, then blocks
+// until ctx is cancelled. Unlike blockingRunner (which closes its channel and
+// is single-use), it supports many concurrent Resume calls.
+type blockManyRunner struct {
+	entered chan struct{}
+}
+
+func (r *blockManyRunner) Resume(ctx context.Context, _ *gantry.State) (*gantry.State, error) {
+	r.entered <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDispatcherWorkersDriveConcurrently(t *testing.T) {
+	r := &gateRunner{entered: make(chan struct{}, 3), release: make(chan struct{})}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "one")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "two")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-3", "s3", "three")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond), WithWorkers(3))
+	d.Start(ctx)
+	defer d.Stop()
+
+	// All three drives must be in flight AT THE SAME TIME: each Resume blocks
+	// on release, so the third entry signal can only arrive while the first two
+	// are still blocked inside their own drives.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-r.entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("drive %d never entered; only %d concurrent drive(s), want 3", i+1, i)
+		}
+	}
+
+	// Release all three; every task completes to done.
+	close(r.release)
+	for _, id := range []string{"task-1", "task-2", "task-3"} {
+		id := id
+		waitFor(t, func() bool {
+			tk, err := tasks.LoadTask(ctx, id)
+			return err == nil && tk.Status == task.TaskDone
+		})
+	}
+}
+
+func TestDispatcherStopWaitsForAllWorkers(t *testing.T) {
+	r := &blockManyRunner{entered: make(chan struct{}, 3)}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "blocks")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "blocks")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-3", "s3", "blocks")
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond), WithWorkers(3))
+	d.Start(ctx)
+
+	// All three workers are blocked inside an in-flight drive.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-r.entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("worker %d never picked up a session; want 3 concurrent drives", i+1)
+		}
+	}
+
+	// Stop must cancel all three in-flight drives and wait for EVERY worker
+	// goroutine to exit before returning.
+	stopped := make(chan struct{})
+	go func() { d.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return; not all workers exited")
+	}
+}
+
+func TestDispatcherSingleWorkerDrivesSerially(t *testing.T) {
+	r := &gateRunner{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	tm, tasks, meta, ready := newDispatcherManager(r)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-1", "s1", "one")
+	seedReadySession(t, ctx, tasks, meta, ready, "task-2", "s2", "two")
+
+	// Default worker count (1): today's single-worker semantics, pinned.
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond))
+	d.Start(ctx)
+	defer d.Stop()
+
+	// The first drive enters...
+	select {
+	case <-r.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first drive never entered")
+	}
+	// ...and NO second drive begins while the first is still blocked.
+	select {
+	case <-r.entered:
+		t.Fatal("second drive entered while the first was in flight; want serial execution with 1 worker")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Release; the single worker finishes both sessions one after the other.
+	close(r.release)
+	for _, id := range []string{"task-1", "task-2"} {
+		id := id
+		waitFor(t, func() bool {
+			tk, err := tasks.LoadTask(ctx, id)
+			return err == nil && tk.Status == task.TaskDone
+		})
+	}
+}
+
+func TestDispatcherMultiWorkerDrainsAllSessions(t *testing.T) {
+	tm, tasks, meta, ready := newDispatcherManager(completeOnceRunner{})
+	ctx := context.Background()
+	sessions := []struct{ taskID, sid string }{
+		{"task-1", "s1"}, {"task-2", "s2"}, {"task-3", "s3"}, {"task-4", "s4"}, {"task-5", "s5"},
+	}
+	for _, s := range sessions {
+		seedReadySession(t, ctx, tasks, meta, ready, s.taskID, s.sid, "work for "+s.sid)
+	}
+
+	d := NewDispatcher(tm, WithPollInterval(time.Millisecond), WithWorkers(3))
+	d.Start(ctx)
+	defer d.Stop()
+
+	for _, s := range sessions {
+		id := s.taskID
+		waitFor(t, func() bool {
+			tk, err := tasks.LoadTask(ctx, id)
+			return err == nil && tk.Status == task.TaskDone
+		})
+	}
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("ready queue not empty after multi-worker drain")
+	}
+}

@@ -8,22 +8,25 @@ import (
 	"github.com/farazhassan/gantry/task"
 )
 
-// Dispatcher automatically consumes a TaskManager's ReadyQueue on a background
-// goroutine, driving spawned cross-session work via RunNextReady. It owns the
-// only goroutine in the package; the TaskManager it wraps stays synchronous and
-// goroutine-free. The caller-driven RunNextReady primitive remains usable
-// directly for manual or test control.
+// Dispatcher automatically consumes a TaskManager's ReadyQueue on background
+// goroutines, driving spawned cross-session work via RunNextReady. It runs a
+// pool of identical worker loops (WithWorkers; default 1). RunNextReady is safe
+// from N goroutines — each dequeue yields a distinct session id and therefore a
+// distinct per-session lock — so workers never contend on the same session. The
+// TaskManager it wraps stays synchronous and goroutine-free. The caller-driven
+// RunNextReady primitive remains usable directly for manual or test control.
 type Dispatcher struct {
 	tm         *TaskManager
 	interval   time.Duration
 	errHandler func(error)
 	notifier   func(*task.Task)
+	workers    int
 
 	mu      sync.Mutex
 	started bool
 	stopped bool
 	cancel  context.CancelFunc
-	done    chan struct{}
+	wg      sync.WaitGroup
 }
 
 // DispatcherOption configures a Dispatcher.
@@ -37,6 +40,11 @@ func WithPollInterval(d time.Duration) DispatcherOption {
 
 // WithErrorHandler sets a callback invoked with any error returned by
 // RunNextReady. Default is a no-op. Doubles as the observability seam.
+//
+// Concurrency: with WithWorkers(n > 1) the callback may fire concurrently from
+// multiple worker goroutines, so it must be safe for concurrent use (guard any
+// shared state). It runs synchronously on a worker loop's goroutine, so it must
+// also be quick and non-blocking.
 func WithErrorHandler(f func(error)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.errHandler = f }
 }
@@ -46,15 +54,27 @@ func WithErrorHandler(f func(error)) DispatcherOption {
 // (carrying SessionID, Goal, Title, and the unfulfilled ask_user calls in
 // Pending) so an external bridge can surface the question. Default is a no-op.
 //
-// Fire-and-forget: it returns no error and runs synchronously on the dispatch
+// Fire-and-forget: it returns no error and runs synchronously on a worker
 // loop's goroutine, so it must be quick and non-blocking (hand off to a channel
-// or a separate goroutine for slow work). This mirrors WithErrorHandler.
+// or a separate goroutine for slow work). Concurrency: with WithWorkers(n > 1)
+// the callback may fire concurrently from multiple worker goroutines, so it
+// must be safe for concurrent use. This mirrors WithErrorHandler.
 func WithNotifier(f func(*task.Task)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.notifier = f }
 }
 
-// NewDispatcher builds a Dispatcher over a TaskManager. It panics if tm is nil
-// or if a configured poll interval is not positive.
+// WithWorkers sets how many dispatch loop goroutines Start launches. Each
+// worker independently calls RunNextReady, so up to n dequeued sessions drive
+// in parallel (each dequeue yields a distinct session id and therefore a
+// distinct per-session lock — see TaskManager.RunNextReady). Must be >= 1.
+// Default 1 (the existing single-worker behavior).
+func WithWorkers(n int) DispatcherOption {
+	return func(dp *Dispatcher) { dp.workers = n }
+}
+
+// NewDispatcher builds a Dispatcher over a TaskManager. It panics if tm is nil,
+// if a configured poll interval is not positive, or if a configured worker
+// count is less than 1.
 func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 	if tm == nil {
 		panic("taskmanager: NewDispatcher requires a non-nil TaskManager")
@@ -64,6 +84,7 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 		interval:   time.Second,
 		errHandler: func(error) {},
 		notifier:   func(*task.Task) {},
+		workers:    1,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -71,12 +92,15 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 	if d.interval <= 0 {
 		panic("taskmanager: Dispatcher poll interval must be positive")
 	}
+	if d.workers < 1 {
+		panic("taskmanager: Dispatcher worker count must be at least 1")
+	}
 	return d
 }
 
-// Start launches the dispatch loop on a new goroutine and returns immediately.
-// Cancelling ctx is equivalent to calling Stop. Calling Start more than once
-// panics.
+// Start launches the worker pool (one loop goroutine per configured worker) and
+// returns immediately. Cancelling ctx is equivalent to calling Stop. Calling
+// Start more than once panics.
 func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -86,13 +110,15 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	d.started = true
 	runCtx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
-	d.done = make(chan struct{})
-	go d.loop(runCtx)
+	d.wg.Add(d.workers)
+	for i := 0; i < d.workers; i++ {
+		go d.loop(runCtx)
+	}
 }
 
-// Stop cancels any in-flight drive and blocks until the loop goroutine exits.
-// It is idempotent and safe to call after the Start ctx has been cancelled. A
-// Stop before Start is a no-op.
+// Stop cancels any in-flight drives and blocks until every worker goroutine
+// exits. It is idempotent and safe to call after the Start ctx has been
+// cancelled. A Stop before Start is a no-op.
 func (d *Dispatcher) Stop() {
 	d.mu.Lock()
 	if !d.started || d.stopped {
@@ -101,18 +127,18 @@ func (d *Dispatcher) Stop() {
 	}
 	d.stopped = true
 	cancel := d.cancel
-	done := d.done
 	d.mu.Unlock()
 
 	cancel()
-	<-done
+	d.wg.Wait()
 }
 
-// loop is the single-worker dispatch loop. It drains the ready queue while work
-// is available and waits one interval when the queue is empty (or a dequeue
-// errored), exiting when ctx is cancelled.
+// loop is one worker's dispatch loop. It drains the ready queue while work is
+// available and waits one interval when the queue is empty (or a dequeue
+// errored), exiting when ctx is cancelled. With WithWorkers(n), n identical
+// loops run concurrently against the shared RunNextReady.
 func (d *Dispatcher) loop(ctx context.Context) {
-	defer close(d.done)
+	defer d.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
