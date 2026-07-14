@@ -576,3 +576,35 @@ func TestDispatcherDoesNotNotifyOnErroredDrive(t *testing.T) {
 		t.Errorf("notifier fired %d times across an errored drive + a completion, want 0", notifyCount)
 	}
 }
+
+func TestNewDispatcherDefaultWorkers(t *testing.T) {
+	d := NewDispatcher(&TaskManager{})
+	if d.workers != 1 {
+		t.Errorf("default workers = %d, want 1", d.workers)
+	}
+}
+
+func TestWithWorkersSetsCount(t *testing.T) {
+	d := NewDispatcher(&TaskManager{}, WithWorkers(4))
+	if d.workers != 4 {
+		t.Errorf("workers = %d, want 4", d.workers)
+	}
+}
+
+func TestWithWorkersZeroPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Errorf("WithWorkers(0) did not panic")
+		}
+	}()
+	NewDispatcher(&TaskManager{}, WithWorkers(0))
+}
+
+func TestWithWorkersNegativePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Errorf("WithWorkers(-3) did not panic")
+		}
+	}()
+	NewDispatcher(&TaskManager{}, WithWorkers(-3))
+}

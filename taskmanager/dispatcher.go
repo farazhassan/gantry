@@ -18,6 +18,7 @@ type Dispatcher struct {
 	interval   time.Duration
 	errHandler func(error)
 	notifier   func(*task.Task)
+	workers    int
 
 	mu      sync.Mutex
 	started bool
@@ -53,8 +54,18 @@ func WithNotifier(f func(*task.Task)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.notifier = f }
 }
 
-// NewDispatcher builds a Dispatcher over a TaskManager. It panics if tm is nil
-// or if a configured poll interval is not positive.
+// WithWorkers sets how many dispatch loop goroutines Start launches. Each
+// worker independently calls RunNextReady, so up to n dequeued sessions drive
+// in parallel (each dequeue yields a distinct session id and therefore a
+// distinct per-session lock — see TaskManager.RunNextReady). Must be >= 1.
+// Default 1 (the existing single-worker behavior).
+func WithWorkers(n int) DispatcherOption {
+	return func(dp *Dispatcher) { dp.workers = n }
+}
+
+// NewDispatcher builds a Dispatcher over a TaskManager. It panics if tm is nil,
+// if a configured poll interval is not positive, or if a configured worker
+// count is less than 1.
 func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 	if tm == nil {
 		panic("taskmanager: NewDispatcher requires a non-nil TaskManager")
@@ -64,12 +75,16 @@ func NewDispatcher(tm *TaskManager, opts ...DispatcherOption) *Dispatcher {
 		interval:   time.Second,
 		errHandler: func(error) {},
 		notifier:   func(*task.Task) {},
+		workers:    1,
 	}
 	for _, opt := range opts {
 		opt(d)
 	}
 	if d.interval <= 0 {
 		panic("taskmanager: Dispatcher poll interval must be positive")
+	}
+	if d.workers < 1 {
+		panic("taskmanager: Dispatcher worker count must be at least 1")
 	}
 	return d
 }
