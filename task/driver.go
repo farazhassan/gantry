@@ -161,15 +161,20 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 
 		state, err := d.agent.Resume(ctx, state)
 		if err != nil {
+			// The run's ctx is typically already cancelled/expired here, so the
+			// terminal status must be persisted with a detached context — a
+			// ctx-respecting store would otherwise refuse the very save that
+			// records the outcome.
+			saveCtx := context.WithoutCancel(ctx)
 			if errors.Is(err, context.Canceled) {
 				// Cancellation is a clean terminal, not a failure — mirrors how a
 				// consumer's turn executor treats a cancelled run.
 				t.Status = TaskCancelled
-				_ = d.save(ctx, t)
+				_ = d.save(saveCtx, t)
 				return t, nil
 			}
 			t.Status = TaskFailed
-			_ = d.save(ctx, t) // best effort; the runner error is the primary failure
+			_ = d.save(saveCtx, t) // best effort; the runner error is the primary failure
 			return t, fmt.Errorf("task: run failed: %w", err)
 		}
 

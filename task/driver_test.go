@@ -551,3 +551,89 @@ func TestWithHydrateOutputRunesOverridesBudget(t *testing.T) {
 		t.Errorf("seen = %q, want %q", seen, want)
 	}
 }
+
+// ctxRespectingStore refuses writes once the caller's ctx is cancelled or
+// expired, mimicking a real database-backed TaskStore (InMemoryStore ignores
+// ctx, which is exactly why the bug never showed in tests).
+type ctxRespectingStore struct {
+	inner *InMemoryStore
+}
+
+func (s *ctxRespectingStore) SaveTask(ctx context.Context, t *Task) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.inner.SaveTask(ctx, t)
+}
+
+func (s *ctxRespectingStore) LoadTask(ctx context.Context, id string) (*Task, error) {
+	return s.inner.LoadTask(ctx, id)
+}
+
+func (s *ctxRespectingStore) ListBySession(ctx context.Context, sessionID string) ([]TaskRef, error) {
+	return s.inner.ListBySession(ctx, sessionID)
+}
+
+// selfCancellingRunner cancels the run's context and reports context.Canceled,
+// modelling a user interrupt landing mid-run.
+type selfCancellingRunner struct{ cancel context.CancelFunc }
+
+func (r *selfCancellingRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.cancel()
+	return st, context.Canceled
+}
+
+func TestAdvanceCancelledStatusPersistsDespiteDeadCtx(t *testing.T) {
+	store := &ctxRespectingStore{inner: NewInMemory()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := NewDriver(&selfCancellingRunner{cancel: cancel}, store)
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(ctx, tk, "do it")
+	if err != nil {
+		t.Fatalf("cancelled run must not be a Go error: %v", err)
+	}
+	if got.Status != TaskCancelled {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+	loaded, err := store.LoadTask(context.Background(), "tk-1")
+	if err != nil {
+		t.Fatalf("TaskCancelled was not persisted (save used the dead ctx): %v", err)
+	}
+	if loaded.Status != TaskCancelled {
+		t.Errorf("persisted status = %q, want cancelled", loaded.Status)
+	}
+}
+
+// cancelThenFailRunner kills the ctx then reports an ordinary runner error, so
+// the TaskFailed best-effort save also runs against a dead context.
+type cancelThenFailRunner struct{ cancel context.CancelFunc }
+
+func (r *cancelThenFailRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.cancel()
+	return st, errors.New("llm exploded mid-flight")
+}
+
+func TestAdvanceFailedStatusPersistsDespiteDeadCtx(t *testing.T) {
+	store := &ctxRespectingStore{inner: NewInMemory()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := NewDriver(&cancelThenFailRunner{cancel: cancel}, store)
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(ctx, tk, "do it")
+	if err == nil {
+		t.Fatalf("runner error must surface as a Go error")
+	}
+	if got.Status != TaskFailed {
+		t.Fatalf("status = %q, want failed", got.Status)
+	}
+	loaded, err := store.LoadTask(context.Background(), "tk-1")
+	if err != nil {
+		t.Fatalf("TaskFailed was not persisted (save used the dead ctx): %v", err)
+	}
+	if loaded.Status != TaskFailed {
+		t.Errorf("persisted status = %q, want failed", loaded.Status)
+	}
+}
