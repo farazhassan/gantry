@@ -22,15 +22,24 @@ func Hydrate(t *Task) *gantry.Plan {
 }
 
 // Flush reconciles run-made changes in the projection back into the task's
-// ledger, matching steps by ID. Only Status and Output are copied back (the run
-// owns progress, the ledger owns structure). Steps present in the projection
-// but not the ledger are ignored; ledger steps absent from the projection are
-// left unchanged. Steps with empty IDs in either the ledger or projection are
-// not reconciled (there is no key to match on). Nil projection or nil ledger
-// plan is a safe no-op.
+// ledger. Steps are matched by ID: for matches, only Status and Output are
+// copied back (the run owns progress, the ledger owns structure). Projection
+// steps the ledger has never seen — e.g. appended mid-run by the update_plan
+// tool — are ADOPTED: appended to the ledger preserving their ids, with empty
+// or colliding ids re-minted so the ledger's id key space stays unique. Ledger
+// steps absent from the projection are left unchanged. Nil projection or nil
+// ledger plan is a safe no-op.
 func Flush(t *Task, proj *gantry.Plan) {
 	if t == nil || t.Plan == nil || proj == nil {
 		return
+	}
+	// Ids the ledger owned before this flush: projection steps matching these
+	// reconcile in place; all other projection steps are adopted below.
+	ledgerIDs := make(map[string]bool, len(t.Plan.Steps))
+	for _, s := range t.Plan.Steps {
+		if s.ID != "" {
+			ledgerIDs[s.ID] = true
+		}
 	}
 	byID := make(map[string]gantry.PlanStep, len(proj.Steps))
 	for _, s := range proj.Steps {
@@ -43,5 +52,30 @@ func Flush(t *Task, proj *gantry.Plan) {
 			t.Plan.Steps[i].Status = upd.Status
 			t.Plan.Steps[i].Output = upd.Output
 		}
+	}
+	// Adopt projection-only steps. used is the collision domain for adopted
+	// ids — the pre-flush ledger ids plus every id adopted so far — so
+	// duplicate ids inside the projection are re-minted instead of dropped.
+	used := make(map[string]bool, len(ledgerIDs))
+	for id := range ledgerIDs {
+		used[id] = true
+	}
+	for _, s := range proj.Steps {
+		if s.ID != "" && ledgerIDs[s.ID] {
+			continue // existing ledger step; progress reconciled above
+		}
+		ns := s
+		if ns.Meta != nil {
+			m := make(map[string]any, len(ns.Meta))
+			for k, v := range ns.Meta {
+				m[k] = v
+			}
+			ns.Meta = m
+		}
+		if ns.ID == "" || used[ns.ID] {
+			ns.ID = mintStepID(used, len(t.Plan.Steps)+1)
+		}
+		used[ns.ID] = true
+		t.Plan.Steps = append(t.Plan.Steps, ns)
 	}
 }
