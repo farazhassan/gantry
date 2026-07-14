@@ -223,11 +223,46 @@ func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.T
 	return m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 }
 
-// CancelSession stops all work for a session: it interrupts the in-flight run (if
-// any) and marks the active task plus every queued task TaskCancelled, then clears
-// the session's active/queue state. It is idempotent — cancelling an idle or
-// already-finished session is a no-op. It errors only on a store/meta failure.
+// CancelSession stops all work for a session and cascades to the detached child
+// sessions its tasks spawned: it interrupts the in-flight run (if any), marks
+// the active task plus every queued task TaskCancelled, clears the session's
+// active/queue state, then recursively cancels every session in ChildRefs. The
+// recursion is bounded by the spawn policy's max depth, so a corrupted
+// ChildRefs graph cannot recurse unboundedly; revisiting an already-cancelled
+// session is an idempotent no-op. It errors only on a store/meta failure.
 func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error {
+	return m.cancelTree(ctx, sessionID, m.policy.maxDepth())
+}
+
+// cancelTree cancels one session, then recurses into its ChildRefs with one
+// less level of remaining depth. The per-session lock is NOT held across the
+// recursion (cancelOne acquires and releases it), so a self- or
+// ancestor-referencing ChildRef degrades to an idempotent no-op instead of a
+// deadlock.
+func (m *TaskManager) cancelTree(ctx context.Context, sessionID string, remaining int) error {
+	children, err := m.cancelOne(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if remaining <= 0 {
+		return nil
+	}
+	for _, cr := range children {
+		if cr.SessionID == "" || cr.SessionID == sessionID {
+			continue
+		}
+		if err := m.cancelTree(ctx, cr.SessionID, remaining-1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cancelOne is the single-session cancel: interrupt the in-flight run, mark the
+// active + queued tasks TaskCancelled under the session lock, clear
+// active/queue state, and return the session's ChildRefs (kept in meta as
+// history) for the caller to cascade into.
+func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.ChildRef, error) {
 	// (1) Interrupt any in-flight run WITHOUT taking the per-session lock (the
 	// in-flight drive holds it). Cancelling the drive's context unblocks Advance,
 	// which the Driver maps to TaskCancelled.
@@ -246,7 +281,7 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ids := make([]string, 0, len(sm.Queue)+1)
@@ -261,7 +296,7 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if t.Status.IsTerminal() {
 			continue // already done/failed/cancelled
@@ -269,13 +304,16 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 		t.Status = task.TaskCancelled
 		t.UpdatedAt = time.Now().UTC()
 		if err := m.tasks.SaveTask(ctx, t); err != nil {
-			return err
+			return nil, err
 		}
 		syncRef(sm, t)
 	}
 	sm.ActiveTaskID = ""
 	sm.Queue = nil
-	return m.meta.SaveMeta(ctx, sessionID, sm)
+	if err := m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
+		return nil, err
+	}
+	return sm.ChildRefs, nil
 }
 
 // RunNextReady dequeues one ready session (spawned cross-session work) and drives

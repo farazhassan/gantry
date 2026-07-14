@@ -1431,3 +1431,121 @@ func TestSpawnDepthCapBlocksGrandchild(t *testing.T) {
 		t.Errorf("ready queue not empty; grandchild should not have been enqueued")
 	}
 }
+
+// seedLinkedSession stores one pending task as sid's active task, with an
+// optional ChildRef to a child session. Used to build cancel-cascade trees
+// without driving runs.
+func seedLinkedSession(t *testing.T, ctx context.Context, tasks task.TaskStore, meta MetaStore, sid, tid, childSID, childTID string) {
+	t.Helper()
+	if err := tasks.SaveTask(ctx, &task.Task{ID: tid, SessionID: sid, Goal: "g", Status: task.TaskPending}); err != nil {
+		t.Fatalf("SaveTask(%q): %v", tid, err)
+	}
+	sm := &task.SessionMeta{
+		ActiveTaskID: tid,
+		TaskRefs:     []task.TaskRef{{ID: tid, Status: task.TaskPending}},
+	}
+	if childSID != "" {
+		sm.ChildRefs = []task.ChildRef{{SessionID: childSID, TaskID: childTID}}
+	}
+	if err := meta.SaveMeta(ctx, sid, sm); err != nil {
+		t.Fatalf("SaveMeta(%q): %v", sid, err)
+	}
+}
+
+func TestCancelSessionCascadesToChildSessions(t *testing.T) {
+	// s1 -> s2 -> s3 chain; default MaxDepth (3) covers it all.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s3", "t3")
+	seedLinkedSession(t, ctx, tasks, meta, "s3", "t3", "", "")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	for _, id := range []string{"t1", "t2", "t3"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskCancelled {
+			t.Errorf("task %q = %v, want TaskCancelled", id, tk.Status)
+		}
+	}
+	for _, sid := range []string{"s1", "s2", "s3"} {
+		m, _ := meta.LoadMeta(ctx, sid)
+		if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+			t.Errorf("session %q meta not cleared: active=%q queue=%v", sid, m.ActiveTaskID, m.Queue)
+		}
+	}
+}
+
+func TestCancelSessionCascadeBoundedByMaxDepth(t *testing.T) {
+	// MaxDepth 1: cancelling s1 reaches s2 (one level down) but NOT s3.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(),
+		WithSpawnPolicy(SpawnPolicy{MaxDepth: 1}))
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s3", "t3")
+	seedLinkedSession(t, ctx, tasks, meta, "s3", "t3", "", "")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	t1, _ := tasks.LoadTask(ctx, "t1")
+	t2, _ := tasks.LoadTask(ctx, "t2")
+	t3, _ := tasks.LoadTask(ctx, "t3")
+	if t1.Status != task.TaskCancelled || t2.Status != task.TaskCancelled {
+		t.Errorf("t1/t2 = %v/%v, want both TaskCancelled", t1.Status, t2.Status)
+	}
+	if t3.Status != task.TaskPending {
+		t.Errorf("t3 = %v, want TaskPending (beyond the depth bound)", t3.Status)
+	}
+}
+
+func TestCancelSessionCascadeSurvivesCycles(t *testing.T) {
+	// Corrupted refs: s1 -> s2 -> s1. Must terminate without deadlock, both
+	// sessions cancelled (revisits are idempotent no-ops).
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "s2", "t2")
+	seedLinkedSession(t, ctx, tasks, meta, "s2", "t2", "s1", "t1")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskCancelled {
+			t.Errorf("task %q = %v, want TaskCancelled", id, tk.Status)
+		}
+	}
+}
+
+func TestCancelSessionCascadeUnknownChildIsNoop(t *testing.T) {
+	// A ChildRef to a session with no meta: the cascade skips it gracefully.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(&alwaysComplete{}, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue())
+	ctx := context.Background()
+
+	seedLinkedSession(t, ctx, tasks, meta, "s1", "t1", "ghost", "tg")
+
+	if err := tm.CancelSession(ctx, "s1"); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	t1, _ := tasks.LoadTask(ctx, "t1")
+	if t1.Status != task.TaskCancelled {
+		t.Errorf("t1 = %v, want TaskCancelled", t1.Status)
+	}
+}
