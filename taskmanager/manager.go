@@ -231,6 +231,37 @@ func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (
 	return m.drive(ctx, sessionID, sm, t, input)
 }
 
+// ResumeTaskWithAnswers supplies per-call answers to the session's active
+// awaiting_input task, drives it onward, and drains the queue if it completes.
+// answers is keyed by pending tool-call ID (Task.Pending[i].ID); a pending
+// call with a missing or empty answer records the task.NoAnswer placeholder.
+// Returns ErrNoTaskAwaitingInput if there is no active task or it is not
+// awaiting input. For a rejection-cap park (awaiting input with no pending
+// calls) use ResumeTask — the driver rejects per-call answers there and that
+// error is returned as-is.
+func (m *TaskManager) ResumeTaskWithAnswers(ctx context.Context, sessionID string, answers map[string]string) (*task.Task, error) {
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if sm.ActiveTaskID == "" {
+		return nil, ErrNoTaskAwaitingInput
+	}
+	t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != task.TaskAwaitingInput {
+		return nil, ErrNoTaskAwaitingInput
+	}
+	return m.driveWith(ctx, sessionID, sm, t, func(c context.Context, tk *task.Task) (*task.Task, error) {
+		return m.driver.AdvanceWithAnswers(c, tk, answers)
+	})
+}
+
 // ActiveTask returns the session's current active task, or (nil, nil) if none.
 func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.Task, error) {
 	lk := m.acquire(sessionID)
@@ -386,25 +417,34 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 	return nt, nil
 }
 
-// drive advances the active task and, when it terminates, drains the pending
-// FIFO queue: pop the head into ActiveTaskID, save meta, and drive it from its
-// own goal. It returns when a task suspends (awaiting_input) or the queue is
-// empty. A queued task that fails is recorded and the drain continues to the
-// next (Decision D). sm is the already-loaded SessionMeta.
-//
-// input is the goal seed only for the first Advance of a freshly-activated task;
-// on resume it is the user's answer. Driver.Advance distinguishes these.
+// drive advances the active task from a single input string and, when it
+// terminates, drains the pending FIFO queue. See driveWith for the loop
+// contract; input is the goal seed for a freshly-activated task or the user's
+// answer on resume — Driver.Advance distinguishes these.
 func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
+	return m.driveWith(ctx, sessionID, sm, t, func(c context.Context, tk *task.Task) (*task.Task, error) {
+		return m.driver.Advance(c, tk, input)
+	})
+}
+
+// driveWith advances the active task via first — the seeded initial advance —
+// and, when it terminates, drains the pending FIFO queue: pop the head into
+// ActiveTaskID, save meta, and drive it from its own goal. It returns when a
+// task suspends (awaiting_input) or the queue is empty. A queued task that
+// fails is recorded and the drain continues to the next (Decision D). sm is
+// the already-loaded SessionMeta.
+func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, first func(context.Context, *task.Task) (*task.Task, error)) (*task.Task, error) {
 	driveCtx, cancelFn := context.WithCancel(ctx)
 	m.registerCancel(sessionID, cancelFn)
 	defer m.deregisterCancel(sessionID, cancelFn)
 
+	advance := first
 	var err error
 	for {
 		coll := &spawnCollector{}
 		runCtx := withCollector(driveCtx, coll)
 
-		t, err = m.driver.Advance(runCtx, t, input)
+		t, err = advance(runCtx, t)
 		if err != nil {
 			return t, err // errored run: spawns discarded
 		}
@@ -451,7 +491,10 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 			return t, err
 		}
 		t = nt
-		input = nt.Goal // queued task runs from its own goal
+		// Every drained task after the first runs from its own goal.
+		advance = func(c context.Context, tk *task.Task) (*task.Task, error) {
+			return m.driver.Advance(c, tk, tk.Goal)
+		}
 	}
 }
 

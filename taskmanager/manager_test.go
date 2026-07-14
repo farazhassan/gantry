@@ -1277,3 +1277,107 @@ func TestSessionLockNoDuplicateLockUnderChurn(t *testing.T) {
 		t.Errorf("locks map holds %d entries after churn, want 0", remaining)
 	}
 }
+
+// suspendCalls yields awaiting-input with one parked ask_user call per id.
+func suspendCalls(ids ...string) func(*gantry.State) *gantry.State {
+	return func(st *gantry.State) *gantry.State {
+		st.Done = true
+		st.DoneReason = gantry.DoneClientToolCall
+		for _, id := range ids {
+			st.PendingToolCalls = append(st.PendingToolCalls, gantry.ToolCall{ID: id, Name: "ask_user"})
+		}
+		return st
+	}
+}
+
+func TestResumeTaskWithAnswersAnswersPerCall(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendCalls("q1", "q2"), // t1 run -> awaiting with two parked calls
+		complete("t1 done"),      // t1 resume -> done
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	first, err := tm.StartTask(ctx, "s1", "goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if first.Status != task.TaskAwaitingInput || len(first.Pending) != 2 {
+		t.Fatalf("setup: status=%v pending=%+v", first.Status, first.Pending)
+	}
+
+	resumed, err := tm.ResumeTaskWithAnswers(ctx, "s1", map[string]string{"q1": "alpha", "q2": "beta"})
+	if err != nil {
+		t.Fatalf("ResumeTaskWithAnswers: %v", err)
+	}
+	if resumed.Status != task.TaskDone {
+		t.Errorf("status = %v, want TaskDone", resumed.Status)
+	}
+	tk, err := tasks.LoadTask(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	got := map[string]string{}
+	for _, m := range tk.Working {
+		if m.Role == gantry.RoleTool {
+			got[m.ToolCallID] = m.Content
+		}
+	}
+	if got["q1"] != "alpha" || got["q2"] != "beta" {
+		t.Errorf("answers = %v, want q1:alpha q2:beta", got)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestResumeTaskWithAnswersDrainsQueueAfterCompletion(t *testing.T) {
+	// t1 suspends with a parked call; t2 queues behind it. Per-call resume of
+	// t1 must drain t2 exactly like the single-string ResumeTask does.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendCalls("q1"),  // t1 run -> awaiting
+		complete("t1 done"), // t1 resume -> done
+		complete("t2 done"), // t2 (drained) -> done
+	}}
+	tm, tasks, meta := newManager(r)
+	ctx := context.Background()
+
+	t1, _ := tm.StartTask(ctx, "s1", "g1")
+	t2, _ := tm.StartTask(ctx, "s1", "g2")
+	if t1.Status != task.TaskAwaitingInput || t2.Status != task.TaskPending {
+		t.Fatalf("setup: t1=%v t2=%v", t1.Status, t2.Status)
+	}
+
+	resumed, err := tm.ResumeTaskWithAnswers(ctx, "s1", map[string]string{"q1": "alpha"})
+	if err != nil {
+		t.Fatalf("ResumeTaskWithAnswers: %v", err)
+	}
+	if resumed.ID != t2.ID || resumed.Status != task.TaskDone {
+		t.Errorf("resumed = (%q,%v), want the drained (%q,TaskDone)", resumed.ID, resumed.Status, t2.ID)
+	}
+	tk1, _ := tasks.LoadTask(ctx, t1.ID)
+	if tk1.Status != task.TaskDone {
+		t.Errorf("t1 status = %v, want TaskDone", tk1.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestResumeTaskWithAnswersNothingAwaiting(t *testing.T) {
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{complete("done")}}
+	tm, _, _ := newManager(r)
+	ctx := context.Background()
+
+	// No task at all.
+	if _, err := tm.ResumeTaskWithAnswers(ctx, "s1", map[string]string{"q1": "x"}); !errors.Is(err, ErrNoTaskAwaitingInput) {
+		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (no task)", err)
+	}
+	// Active task that completed (not awaiting).
+	tm.StartTask(ctx, "s1", "goal")
+	if _, err := tm.ResumeTaskWithAnswers(ctx, "s1", map[string]string{"q1": "x"}); !errors.Is(err, ErrNoTaskAwaitingInput) {
+		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (completed)", err)
+	}
+}
