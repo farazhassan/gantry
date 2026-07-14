@@ -1958,3 +1958,236 @@ func TestValidDependsOnPersistsQueuesAndRuns(t *testing.T) {
 		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
 	}
 }
+
+// depSpawningRunner drives the REAL CreateTaskTool with depends_on wiring: on
+// its FIRST Resume it creates one task per chain entry, feeding each returned
+// task_id into the next entry's depends_on (a linear backward DAG). Later
+// Resumes just apply steps. ids records the minted ids in chain order.
+type depSpawningRunner struct {
+	tool  *CreateTaskTool
+	chain []string // goals; entry i>0 depends on the task minted for entry i-1
+	ids   []string
+	steps []func(*gantry.State) *gantry.State
+	calls int
+}
+
+func (r *depSpawningRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	for i, goal := range r.chain {
+		req := map[string]any{"goal": goal}
+		if i > 0 {
+			req["depends_on"] = []string{r.ids[i-1]}
+		}
+		in, err := json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		out, err := r.tool.Invoke(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		var res struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(out, &res); err != nil {
+			return nil, err
+		}
+		r.ids = append(r.ids, res.TaskID)
+	}
+	r.chain = nil
+	step := r.steps[r.calls]
+	r.calls++
+	return step(st), nil
+}
+
+func TestCreateTaskDependencyChainRunsInOrder(t *testing.T) {
+	// Parent (task-1) creates A (task-2), B (task-3, deps A), C (task-4, deps
+	// B) via the real tool, wiring each returned task_id into the next request.
+	// The drain runs A, B, C to done with DependsOn persisted. NOTE: a linear
+	// backward chain is already satisfied by FIFO order (deps are minted before
+	// dependents), so this test guards the happy path; the red-first behavior
+	// for this task lives in the two tests below.
+	r := &depSpawningRunner{
+		tool:  NewCreateTaskTool(),
+		chain: []string{"A", "B", "C"},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			complete("A done"),
+			complete("B done"),
+			complete("C done"),
+		},
+	}
+	tm, tasks, meta, _ := newDepManager(r, nil)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if len(r.ids) != 3 {
+		t.Fatalf("minted ids = %v, want 3", r.ids)
+	}
+	wantDeps := map[string][]string{
+		r.ids[0]: nil,
+		r.ids[1]: {r.ids[0]},
+		r.ids[2]: {r.ids[1]},
+	}
+	for id, want := range wantDeps {
+		tk, err := tasks.LoadTask(ctx, id)
+		if err != nil {
+			t.Fatalf("LoadTask %q: %v", id, err)
+		}
+		if tk.Status != task.TaskDone {
+			t.Errorf("task %q status = %v, want TaskDone", id, tk.Status)
+		}
+		if len(tk.DependsOn) != len(want) {
+			t.Errorf("task %q DependsOn = %v, want %v", id, tk.DependsOn, want)
+			continue
+		}
+		for i := range want {
+			if tk.DependsOn[i] != want[i] {
+				t.Errorf("task %q DependsOn = %v, want %v", id, tk.DependsOn, want)
+			}
+		}
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestFailedDependencyCancelsDependent(t *testing.T) {
+	// Decision J: parent creates A and B (deps A). A FAILS when driven; B must
+	// be cancelled with a cause note, never driven, and the drain still
+	// finishes cleanly.
+	r := &depSpawningRunner{
+		tool:  NewCreateTaskTool(),
+		chain: []string{"A", "B"},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			fail(),                            // A -> TaskFailed
+			complete("B done (must not run)"), // spare: keeps a wrong drain from panicking
+		},
+	}
+	tm, tasks, meta, _ := newDepManager(r, nil)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if r.calls != 2 {
+		t.Errorf("runner calls = %d, want 2 (B was never driven)", r.calls)
+	}
+	a, err := tasks.LoadTask(ctx, r.ids[0])
+	if err != nil {
+		t.Fatalf("LoadTask A: %v", err)
+	}
+	if a.Status != task.TaskFailed {
+		t.Fatalf("A status = %v, want TaskFailed", a.Status)
+	}
+	b, err := tasks.LoadTask(ctx, r.ids[1])
+	if err != nil {
+		t.Fatalf("LoadTask B: %v", err)
+	}
+	if b.Status != task.TaskCancelled {
+		t.Errorf("B status = %v, want TaskCancelled (failed dependency)", b.Status)
+	}
+	if len(b.Working) == 0 {
+		t.Fatalf("B.Working empty, want a cause note")
+	}
+	note := b.Working[len(b.Working)-1].Content
+	if !strings.Contains(note, r.ids[0]) || !strings.Contains(note, "failed") {
+		t.Errorf("cause note = %q, want mention of %q and \"failed\"", note, r.ids[0])
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+	for _, ref := range m.TaskRefs {
+		if ref.ID == b.ID && ref.Status != task.TaskCancelled {
+			t.Errorf("B ref status = %v, want TaskCancelled (syncRef)", ref.Status)
+		}
+	}
+}
+
+func TestDependencyGateSkipsBlockedTaskAndLaterUnblocks(t *testing.T) {
+	// Decision K, proven with a seeded state the live engine cannot produce
+	// today (standing in for a durable backend / future shapes): queue head
+	// blocked-1 depends on dep-1, which is neither done nor terminal, while
+	// free-1 behind it has no deps. The drain must SKIP blocked-1, run free-1,
+	// then STOP with blocked-1 still queued and pending — this test returning
+	// at all proves the scan terminates (no livelock). Marking dep-1 done and
+	// driving any later terminal through the session must then unblock
+	// blocked-1 (no orphan).
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		complete("runner done"),  // runner-1 via RunNextReady
+		complete("free done"),    // free-1 (skipped past blocked-1)
+		complete("second done"),  // the later StartTask, after dep-1 is done
+		complete("blocked done"), // blocked-1, finally eligible
+	}}
+	tm, tasks, meta, ready := newDepManager(r, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	seedTasks := []*task.Task{
+		{ID: "dep-1", SessionID: "s1", Goal: "dep", Status: task.TaskActive, CreatedAt: now},
+		{ID: "runner-1", SessionID: "s1", Goal: "run me", Status: task.TaskPending, CreatedAt: now},
+		{ID: "blocked-1", SessionID: "s1", Goal: "blocked", DependsOn: []string{"dep-1"}, Status: task.TaskPending, CreatedAt: now},
+		{ID: "free-1", SessionID: "s1", Goal: "free", Status: task.TaskPending, CreatedAt: now},
+	}
+	for _, tk := range seedTasks {
+		if err := tasks.SaveTask(ctx, tk); err != nil {
+			t.Fatalf("SaveTask %q: %v", tk.ID, err)
+		}
+	}
+	sm := &task.SessionMeta{
+		TaskRefs: []task.TaskRef{
+			{ID: "dep-1", Status: task.TaskActive},
+			{ID: "runner-1", Status: task.TaskPending},
+			{ID: "blocked-1", Status: task.TaskPending},
+			{ID: "free-1", Status: task.TaskPending},
+		},
+		ActiveTaskID: "runner-1",
+		Queue:        []string{"blocked-1", "free-1"},
+	}
+	if err := meta.SaveMeta(ctx, "s1", sm); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, "s1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Phase 1: drive runner-1; the drain must skip blocked-1 and run free-1.
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok {
+		t.Fatalf("RunNextReady = (_, %v, %v), want (_, true, nil)", ok, err)
+	}
+	if driven.ID != "free-1" || driven.Status != task.TaskDone {
+		t.Fatalf("last driven = (%q, %v), want (free-1, TaskDone) — drain must skip the blocked head", driven.ID, driven.Status)
+	}
+	blocked, _ := tasks.LoadTask(ctx, "blocked-1")
+	if blocked.Status != task.TaskPending {
+		t.Fatalf("blocked-1 status = %v, want TaskPending (still blocked)", blocked.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 1 || m.Queue[0] != "blocked-1" {
+		t.Fatalf("persisted blocked state wrong: active=%q queue=%v, want active empty, queue [blocked-1]", m.ActiveTaskID, m.Queue)
+	}
+
+	// Phase 2: finish the dependency; any later terminal in the session
+	// re-checks the queue and unblocks blocked-1.
+	dep, _ := tasks.LoadTask(ctx, "dep-1")
+	dep.Status = task.TaskDone
+	if err := tasks.SaveTask(ctx, dep); err != nil {
+		t.Fatalf("SaveTask dep-1: %v", err)
+	}
+	if _, err := tm.StartTask(ctx, "s1", "second"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	blocked, _ = tasks.LoadTask(ctx, "blocked-1")
+	if blocked.Status != task.TaskDone {
+		t.Errorf("blocked-1 status = %v, want TaskDone (unblocked by the later terminal)", blocked.Status)
+	}
+	m, _ = meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("not drained after unblock: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}

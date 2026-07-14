@@ -617,9 +617,9 @@ func (m *TaskManager) appendTaskToMeta(ctx context.Context, sessionID string, t 
 }
 
 // drive advances the active task from a single input string and, when it
-// terminates, drains the pending FIFO queue. See driveWith for the loop
-// contract; input is the goal seed for a freshly-activated task or the user's
-// answer on resume — Driver.Advance distinguishes these.
+// terminates, drains the pending queue dependency-aware. See driveWith for the
+// loop contract; input is the goal seed for a freshly-activated task or the
+// user's answer on resume — Driver.Advance distinguishes these.
 func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
 	return m.driveWith(ctx, sessionID, sm, t, func(c context.Context, tk *task.Task) (*task.Task, error) {
 		return m.driver.Advance(c, tk, input)
@@ -627,11 +627,12 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 }
 
 // driveWith advances the active task via first — the seeded initial advance —
-// and, when it terminates, drains the pending FIFO queue: pop the head into
-// ActiveTaskID, save meta, and drive it from its own goal. It returns when a
-// task suspends (awaiting_input) or the queue is empty. A queued task that
-// fails is recorded and the drain continues to the next (Decision D). sm is
-// the already-loaded SessionMeta.
+// and, when it terminates, drains the pending queue dependency-aware via
+// nextEligible: the first queued task whose depends_on are all done becomes
+// ActiveTaskID and is driven from its own goal (Decisions J, K). It returns
+// when a task suspends (awaiting_input) or nothing is eligible. A queued task
+// that fails is recorded and the drain continues to the next (Decision D). sm
+// is the already-loaded SessionMeta.
 func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, first func(context.Context, *task.Task) (*task.Task, error)) (*task.Task, error) {
 	driveCtx, cancelFn := context.WithCancel(ctx)
 	m.registerCancel(sessionID, cancelFn)
@@ -668,33 +669,92 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 			return t, nil // suspended — caller resumes later
 		}
 
-		// terminal: done/failed/cancelled
+		// terminal: done/failed/cancelled — drain the queue dependency-aware.
 		sm.ActiveTaskID = ""
-		if len(sm.Queue) == 0 {
+		var next *task.Task
+		next, err = m.nextEligible(ctx, sm)
+		if err != nil {
+			return t, err
+		}
+		if next == nil {
+			// Queue empty, or every queued task is blocked on a non-terminal
+			// dependency (Decision K): persist and stop. Blocked tasks are
+			// re-checked by nextEligible on the session's next terminal, so
+			// they cannot be orphaned while the session makes progress.
 			if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
 				return t, err
 			}
 			return t, nil
 		}
-
-		next := sm.Queue[0]
-		sm.Queue = sm.Queue[1:]
-		sm.ActiveTaskID = next
+		sm.ActiveTaskID = next.ID
 		if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
 			return t, err
 		}
-
-		var nt *task.Task
-		nt, err = m.tasks.LoadTask(ctx, next)
-		if err != nil {
-			return t, err
-		}
-		t = nt
+		t = next
 		// Every drained task after the first runs from its own goal.
 		advance = func(c context.Context, tk *task.Task) (*task.Task, error) {
 			return m.driver.Advance(c, tk, tk.Goal)
 		}
 	}
+}
+
+// nextEligible scans sm.Queue in FIFO order for the first task whose
+// dependencies are all TaskDone, removes it from the queue, and returns it.
+// Dependency statuses are loaded from the TaskStore (authoritative), not from
+// the refs. Along the way it cancels any queued task with a failed/cancelled
+// dependency (Decision J): the dependent is persisted TaskCancelled with a
+// cause note appended to its Working, its ref is synced, and the scan
+// continues at the same index — a dependency is always minted (hence queued)
+// before its dependents, so a cancellation at position i can cascade only to
+// positions after i, and one bounded forward pass settles the whole queue (no
+// livelock). Returns (nil, nil) when the queue is empty or every remaining
+// task is blocked on a non-terminal dependency; blocked tasks stay queued and
+// are re-checked by this same scan on the session's next terminal (Decision K).
+func (m *TaskManager) nextEligible(ctx context.Context, sm *task.SessionMeta) (*task.Task, error) {
+	i := 0
+	for i < len(sm.Queue) {
+		qt, err := m.tasks.LoadTask(ctx, sm.Queue[i])
+		if err != nil {
+			return nil, err
+		}
+		var badDep *task.Task // first dependency that ended failed/cancelled
+		blocked := false
+		for _, depID := range qt.DependsOn {
+			dep, err := m.tasks.LoadTask(ctx, depID)
+			if err != nil {
+				return nil, err
+			}
+			if dep.Status == task.TaskDone {
+				continue
+			}
+			if dep.Status.IsTerminal() { // failed or cancelled
+				badDep = dep
+				break // a dead dependency decides the task's fate outright
+			}
+			blocked = true // non-terminal dep; keep scanning for a dead one
+		}
+		switch {
+		case badDep != nil:
+			qt.Status = task.TaskCancelled
+			qt.Working = append(qt.Working, gantry.Message{
+				Role:    gantry.RoleSystem,
+				Content: fmt.Sprintf("Task cancelled: dependency %s ended %s.", badDep.ID, badDep.Status),
+			})
+			qt.UpdatedAt = time.Now().UTC()
+			if err := m.tasks.SaveTask(ctx, qt); err != nil {
+				return nil, err
+			}
+			syncRef(sm, qt)
+			sm.Queue = append(sm.Queue[:i], sm.Queue[i+1:]...)
+			// i not advanced: the next candidate shifted into position i.
+		case blocked:
+			i++ // leave it queued; a later terminal re-checks it
+		default:
+			sm.Queue = append(sm.Queue[:i], sm.Queue[i+1:]...)
+			return qt, nil
+		}
+	}
+	return nil, nil
 }
 
 // enqueueSpawns drains two buffers from the just-finished run of parent,
