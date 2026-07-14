@@ -13,10 +13,11 @@ import (
 // Session is a keyed handle to one durable conversation. It is safe for
 // concurrent use: turns for a given id are serialized by its mutex.
 type Session struct {
-	id    string
-	agent *gantry.Agent
-	store checkpointer.Checkpointer
-	mu    sync.Mutex
+	id       string
+	agent    *gantry.Agent
+	store    checkpointer.Checkpointer
+	resolver Resolver // nil ⇒ no transfer-handoff routing
+	mu       sync.Mutex
 }
 
 // ID returns the session's id.
@@ -42,9 +43,27 @@ func (s *Session) RunStream(ctx context.Context, input string, sink gantry.Event
 	return s.run(ctx, input, sink)
 }
 
+// maxConsecutiveHandoffs bounds how many transfer handoffs one turn may chain
+// before run fails with ErrHandoffLoop. It stops two agents that keep handing
+// the conversation to each other from ping-ponging forever.
+const maxConsecutiveHandoffs = 3
+
 // run performs one turn under the session mutex. A nil sink runs without
 // streaming (Run); a non-nil sink streams Events (RunStream). The Load/Save
 // contract and error handling are identical for both and live only here.
+//
+// Transfer-handoff routing: when the run terminates with DoneReason ==
+// gantry.DoneHandoff, Mode == transfer, and a resolver is configured, the
+// SAME turn re-runs on the target agent from the accumulated transcript:
+// gantry.HandoffState rebuilds a non-terminal State (Messages, Usage, and
+// public Meta carry; termination and component-private Meta cleared) and
+// Resume/ResumeStream continues it. RunFrom is deliberately NOT used for the
+// hop — it appends its input as a new user message, which would duplicate the
+// turn's input. Hops are bounded by maxConsecutiveHandoffs; on any routing
+// error (loop exceeded, unknown target, hop run error) the turn is NOT saved,
+// so the checkpoint stays at the previous turn. With no resolver, or for a
+// delegate-mode handoff, the DoneHandoff state falls through to Save and is
+// returned as-is.
 func (s *Session) run(ctx context.Context, input string, sink gantry.EventSink) (*gantry.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,10 +86,39 @@ func (s *Session) run(ctx context.Context, input string, sink gantry.EventSink) 
 		return state, err
 	}
 
+	for hops := 0; s.resolver != nil && isTransferHandoff(state); hops++ {
+		if hops >= maxConsecutiveHandoffs {
+			return state, fmt.Errorf("%w: session %q chained more than %d handoffs in one turn",
+				ErrHandoffLoop, s.id, maxConsecutiveHandoffs)
+		}
+		target := s.resolver(s.id, state.Handoff)
+		if target == nil {
+			return state, fmt.Errorf("%w: session %q: no agent for target %q",
+				ErrHandoffTargetUnknown, s.id, state.Handoff.Target)
+		}
+		next := gantry.HandoffState(state)
+		if sink != nil {
+			state, err = target.ResumeStream(ctx, next, sink)
+		} else {
+			state, err = target.Resume(ctx, next)
+		}
+		if err != nil {
+			return state, err
+		}
+	}
+
 	if err := s.store.Save(ctx, s.id, state); err != nil {
 		return state, fmt.Errorf("%w: save %q: %w", ErrSaveFailed, s.id, err)
 	}
 	return state, nil
+}
+
+// isTransferHandoff keys on DoneReason, not merely a non-nil Handoff pointer:
+// middleware such as the critic clears termination and re-runs the loop on
+// reject, which can leave a stale state.Handoff on a run that later ends
+// another way. Only a run that actually ENDED with DoneHandoff routes.
+func isTransferHandoff(st *gantry.State) bool {
+	return st.DoneReason == gantry.DoneHandoff && st.Handoff != nil && st.Handoff.Mode == gantry.HandoffTransfer
 }
 
 // History returns the persisted transcript for this session, or an empty slice
