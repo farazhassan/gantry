@@ -11,7 +11,7 @@ import (
 )
 
 func TestWithPlannerSetsStatePlanAndInjectsIntoSystem(t *testing.T) {
-	plannerLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. first\n2. second"})
+	plannerLLM := eval.NewMockLLMClient(proposePlanResponse(`{"steps":[{"description":"first"},{"description":"second"}]}`))
 	mainLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 
 	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))

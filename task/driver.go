@@ -67,6 +67,7 @@ type Driver struct {
 	tracer       gantry.Tracer      // nil ⇒ no task spans
 	sink         gantry.EventSink   // nil ⇒ no streaming; see WithEventSink
 	resolver     func(*Task) Runner // nil ⇒ always the constructor Runner
+	replanner    Replanner          // nil ⇒ no replanning (rejection critique-hints only)
 	hydrateRunes int                // per-step Output budget for the hydrated projection
 }
 
@@ -260,6 +261,11 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 			return t, nil
 		}
 
+		// Snapshot which steps were already failed BEFORE this run so the
+		// replan trigger fires only on steps that newly failed during it —
+		// an already-failed step must never re-trigger a replan loop.
+		failedBefore := failedStepIDs(t.Plan)
+
 		// ---- seed a fresh, non-terminal run ----
 		// Working is authoritative: the request/answer was already appended to it
 		// by Advance/AdvanceWithAnswers, so Input is left empty. DefaultStartHandler
@@ -294,6 +300,7 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 
 		// ---- flush results into the ledger ----
 		adoptOrFlush(t, state.Plan)
+		newlyFailed := newlyFailedSteps(t.Plan, failedBefore)
 		if t.Status == TaskPending && t.Plan != nil && len(t.Plan.Steps) > 0 {
 			t.Status = TaskActive // "no active without a plan" invariant
 		}
@@ -350,11 +357,22 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 				}
 				return t, nil
 			}
+			// Replan escalation: on the last rejection before the consecutive cap
+			// would park the task, or when this run newly failed a plan step, ask
+			// the Replanner to revise the ledger. replan degrades to the critique
+			// hint alone on any Replanner error (a replan failure never fails the
+			// task); on success it appends the new steps and resets the streak.
+			if t.ConsecutiveRejections == maxConsecutiveRejections-1 || len(newlyFailed) > 0 {
+				d.replan(ctx, t, reason)
+			}
 		case state.DoneReason == gantry.DoneMaxIterations:
 			// Run hit its per-run cap mid-work; continue with another run from the
 			// working context. This is the normal long-running continuation, and it
 			// counts as progress, so the rejection streak resets.
 			t.ConsecutiveRejections = 0
+			if len(newlyFailed) > 0 {
+				d.replan(ctx, t, failedStepReason(newlyFailed))
+			}
 		case state.DoneReason == gantry.DoneHandoff:
 			// A routing middleware asked to hand this conversation to another
 			// agent. Handoff is a session-layer concept — session.Session
