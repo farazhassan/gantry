@@ -51,7 +51,7 @@ func TestSpawnCollectorAddMintsAndDrainsFIFO(t *testing.T) {
 
 func TestSpawnCollectorAddSessionMintsBothIDs(t *testing.T) {
 	c := newTestCollector()
-	sid, tid, err := c.addSession("new-1", "title-1")
+	sid, tid, err := c.addSession("new-1", "title-1", "")
 	if err != nil {
 		t.Fatalf("addSession: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestSpawnCollectorBuffersIndependent(t *testing.T) {
 	if _, err := c.add("same-1", ""); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if _, _, err := c.addSession("new-1", ""); err != nil {
+	if _, _, err := c.addSession("new-1", "", ""); err != nil {
 		t.Fatalf("addSession: %v", err)
 	}
 	if got := c.drainSessions(); len(got) != 1 || got[0].goal != "new-1" {
@@ -90,7 +90,7 @@ func TestSpawnCollectorDepthGate(t *testing.T) {
 	if _, err := c.add("g", ""); err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Errorf("add at max depth: err = %v, want a depth error", err)
 	}
-	if _, _, err := c.addSession("g", ""); err == nil || !strings.Contains(err.Error(), "depth") {
+	if _, _, err := c.addSession("g", "", ""); err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Errorf("addSession at max depth: err = %v, want a depth error", err)
 	}
 	if got := c.drain(); len(got) != 0 {

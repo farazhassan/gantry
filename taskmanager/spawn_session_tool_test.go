@@ -28,6 +28,9 @@ func TestSpawnSessionToolDefinition(t *testing.T) {
 	if _, ok := schema.Properties["title"]; !ok {
 		t.Errorf("schema missing title property")
 	}
+	if _, ok := schema.Properties["agent"]; !ok {
+		t.Errorf("schema missing agent property")
+	}
 	if len(schema.Required) != 1 || schema.Required[0] != "goal" {
 		t.Errorf("required = %v, want [goal]", schema.Required)
 	}
@@ -38,7 +41,7 @@ func TestSpawnSessionToolInvokeReturnsMintedIDs(t *testing.T) {
 	ctx := withCollector(context.Background(), coll)
 	tool := NewSpawnSessionTool()
 
-	out, err := tool.Invoke(ctx, json.RawMessage(`{"goal":"do x","title":"X"}`))
+	out, err := tool.Invoke(ctx, json.RawMessage(`{"goal":"do x","title":"X","agent":"researcher"}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -58,8 +61,21 @@ func TestSpawnSessionToolInvokeReturnsMintedIDs(t *testing.T) {
 		t.Errorf("goals buffer = %+v, want empty", got)
 	}
 	sess := coll.drainSessions()
-	if len(sess) != 1 || sess[0] != (spawnReq{goal: "do x", title: "X", taskID: "task-1", sessionID: "sess-1"}) {
-		t.Errorf("sessions buffer = %+v, want one {do x X task-1 sess-1}", sess)
+	if len(sess) != 1 || sess[0] != (spawnReq{goal: "do x", title: "X", taskID: "task-1", sessionID: "sess-1", agent: "researcher"}) {
+		t.Errorf("sessions buffer = %+v, want one {do x X task-1 sess-1 researcher}", sess)
+	}
+}
+
+func TestSpawnSessionToolAgentDefaultsEmpty(t *testing.T) {
+	coll := newTestCollector()
+	ctx := withCollector(context.Background(), coll)
+
+	if _, err := NewSpawnSessionTool().Invoke(ctx, json.RawMessage(`{"goal":"do x"}`)); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	sess := coll.drainSessions()
+	if len(sess) != 1 || sess[0].agent != "" {
+		t.Errorf("sessions buffer = %+v, want one entry with empty agent (default runner)", sess)
 	}
 }
 

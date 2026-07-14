@@ -64,9 +64,10 @@ type Driver struct {
 	agent        Runner
 	store        TaskStore
 	verifier     Verifier
-	tracer       gantry.Tracer    // nil ⇒ no task spans
-	sink         gantry.EventSink // nil ⇒ no streaming; see WithEventSink
-	hydrateRunes int              // per-step Output budget for the hydrated projection
+	tracer       gantry.Tracer      // nil ⇒ no task spans
+	sink         gantry.EventSink   // nil ⇒ no streaming; see WithEventSink
+	resolver     func(*Task) Runner // nil ⇒ always the constructor Runner
+	hydrateRunes int                // per-step Output budget for the hydrated projection
 }
 
 // Option configures a Driver at construction.
@@ -108,16 +109,40 @@ func WithEventSink(sink gantry.EventSink) Option {
 	}
 }
 
-// resume runs one prepared, non-terminal State to termination, streaming when
-// both a sink is configured and the runner supports it — the same optional-
-// capability type assertion the core loop uses for StreamingLLMClient.
-func (d *Driver) resume(ctx context.Context, state *gantry.State) (*gantry.State, error) {
+// resume runs one prepared, non-terminal State to termination on the given
+// runner (already resolved per-task via runnerFor), streaming when both a sink
+// is configured and that runner supports it — the same optional-capability
+// type assertion the core loop uses for StreamingLLMClient.
+func (d *Driver) resume(ctx context.Context, runner Runner, state *gantry.State) (*gantry.State, error) {
 	if d.sink != nil {
-		if sr, ok := d.agent.(StreamingRunner); ok {
+		if sr, ok := runner.(StreamingRunner); ok {
 			return sr.ResumeStream(ctx, state, d.sink)
 		}
 	}
-	return d.agent.Resume(ctx, state)
+	return runner.Resume(ctx, state)
+}
+
+// WithRunnerResolver wires per-task runner resolution: before each Advance
+// drive-cycle the resolver is called with the task, and a non-nil answer runs
+// the task instead of the constructor Runner. Returning nil — the expected
+// answer for an empty or unknown AgentProfile — falls back to the constructor
+// Runner, as does leaving the resolver unset. The Runner seam itself stays
+// identity-free: resolution keys off the *Task, and Resume still receives only
+// the State.
+func WithRunnerResolver(f func(*Task) Runner) Option {
+	return func(d *Driver) { d.resolver = f }
+}
+
+// runnerFor resolves the Runner that will drive t: the resolver's non-nil
+// answer, or the constructor Runner when no resolver is set or it returns nil
+// (empty or unknown profile).
+func (d *Driver) runnerFor(t *Task) Runner {
+	if d.resolver != nil {
+		if r := d.resolver(t); r != nil {
+			return r
+		}
+	}
+	return d.agent
 }
 
 // WithHydrateOutputRunes overrides the per-step Output rune budget applied
@@ -224,6 +249,8 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 		}()
 	}
 
+	runner := d.runnerFor(t)
+
 	for {
 		if t.Budget.exceeded() {
 			t.Status = TaskFailed
@@ -246,7 +273,7 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 			Trace:    gantry.NewTrace(),
 		}
 
-		state, err := d.resume(ctx, state)
+		state, err := d.resume(ctx, runner, state)
 		if err != nil {
 			// The run's ctx is typically already cancelled/expired here, so the
 			// terminal status must be persisted with a detached context — a

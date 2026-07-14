@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/task"
 )
 
@@ -21,13 +22,14 @@ var ErrNoTaskAwaitingInput = errors.New("taskmanager: no task awaiting input")
 // through the task.Driver. Operations on the same session id are serialized;
 // different session ids proceed concurrently.
 type TaskManager struct {
-	driver       *task.Driver
-	tasks        task.TaskStore
-	meta         MetaStore
-	ready        ReadyQueue
-	newID        func() string
-	newSessionID func() string
-	policy       SpawnPolicy // zero value: default depth cap, inherit-limits budgets
+	driver        *task.Driver
+	tasks         task.TaskStore
+	meta          MetaStore
+	ready         ReadyQueue
+	newID         func() string
+	newSessionID  func() string
+	policy        SpawnPolicy      // zero value: default depth cap, inherit-limits budgets
+	orphanHandler func(*task.Task) // result-join drops: parent missing/terminal
 
 	mu    sync.Mutex
 	locks map[string]*sessionLock
@@ -50,6 +52,20 @@ func WithSessionIDFunc(f func() string) Option {
 	return func(m *TaskManager) { m.newSessionID = f }
 }
 
+// WithOrphanResultHandler sets a callback invoked with a terminal child task
+// whose result cannot be joined because its parent task is missing or already
+// terminal. The child is passed so the callback can log or persist the dropped
+// result. Default is a no-op. Fire-and-forget: it runs synchronously (under the
+// parent's session lock), so it must be quick and non-blocking — mirrors the
+// Dispatcher's WithErrorHandler. A nil handler is ignored (the default is kept).
+func WithOrphanResultHandler(f func(*task.Task)) Option {
+	return func(m *TaskManager) {
+		if f != nil {
+			m.orphanHandler = f
+		}
+	}
+}
+
 // NewTaskManager builds a TaskManager over a Driver, the same TaskStore the
 // Driver persists through, a MetaStore, and a ReadyQueue for cross-session
 // spawned work. It panics if any is nil.
@@ -58,14 +74,15 @@ func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, r
 		panic("taskmanager: NewTaskManager requires non-nil driver, tasks, meta, and ready")
 	}
 	m := &TaskManager{
-		driver:       driver,
-		tasks:        tasks,
-		meta:         meta,
-		ready:        ready,
-		newID:        newTaskID,
-		newSessionID: newSessionID,
-		locks:        make(map[string]*sessionLock),
-		cancels:      make(map[string]context.CancelFunc),
+		driver:        driver,
+		tasks:         tasks,
+		meta:          meta,
+		ready:         ready,
+		newID:         newTaskID,
+		newSessionID:  newSessionID,
+		orphanHandler: func(*task.Task) {},
+		locks:         make(map[string]*sessionLock),
+		cancels:       make(map[string]context.CancelFunc),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -387,6 +404,18 @@ func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.C
 // task, or an active task parked awaiting_input — driving that one would feed
 // its goal to its pending ask_user call, so the resume is left to ResumeTask.
 //
+// Result join (plan 07): the join keys off the ORIGINALLY-ACTIVATED task of the
+// dequeued session, not drive's return value — a same-session FIFO drain
+// returns the LAST task it drove, which is a create_task follow-on when the
+// detached child spawned one. When the drive returns cleanly and the activated
+// task ended done/failed with a cross-session parent (ParentTaskID set and
+// ParentSessionID != SessionID), its result is delivered via deliverResult —
+// called only AFTER the child session's lock is released, so the parent's lock
+// is never taken while the child's is held (locks never nest). Same-session
+// children never join here (plan 11's mailbox bridges those). Cancelled tasks
+// do not join (teardown path). A join error is returned as the call's error;
+// the drive itself already committed.
+//
 // The caller composes this: loop for a sequential drain, or call from N
 // goroutines for parallel drive (each dequeue yields a distinct session id ->
 // distinct per-session lock, so goroutines never contend).
@@ -403,22 +432,55 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 		return nil, false, nil // empty queue
 	}
 
+	driven, activatedID, err := m.driveReady(ctx, sid)
+	if err != nil {
+		return driven, true, err
+	}
+	if driven == nil {
+		return nil, true, nil // Decision H: nothing to do
+	}
+
+	// Join the originally-activated task's result. When the drain moved past it
+	// (driven is a follow-on), reload its committed terminal state — it is
+	// terminal and immutable by construction of the drain, so no lock is needed.
+	child := driven
+	if driven.ID != activatedID {
+		if child, err = m.tasks.LoadTask(ctx, activatedID); err != nil {
+			return driven, true, err
+		}
+	}
+	if child.ParentTaskID != "" && child.ParentSessionID != child.SessionID &&
+		(child.Status == task.TaskDone || child.Status == task.TaskFailed) {
+		err = m.deliverResult(ctx, child)
+	}
+	return driven, true, err
+}
+
+// driveReady loads and drives the session's active task under the session lock,
+// releasing it before returning. Alongside drive's result (the last task the
+// FIFO drain drove), it returns the id of the ORIGINALLY-ACTIVATED task so the
+// caller can join that task's result even when the drain moved past it. It
+// returns (nil, "", nil) when the session is undrivable (Decision H): no active
+// task, an already-terminal active task, or an active task parked
+// awaiting_input — driving that one would feed its goal to its pending
+// ask_user call, so the resume is left to ResumeTask.
+func (m *TaskManager) driveReady(ctx context.Context, sid string) (driven *task.Task, activatedID string, err error) {
 	lk := m.acquire(sid)
 	defer m.release(sid, lk)
 
 	sm, err := m.loadOrFreshMeta(ctx, sid)
 	if err != nil {
-		return nil, true, err // session was real; couldn't load its meta
+		return nil, "", err // session was real; couldn't load its meta
 	}
 	if sm.ActiveTaskID == "" {
-		return nil, true, nil // Decision H: nothing to do
+		return nil, "", nil // Decision H: nothing to do
 	}
 	t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 	if err != nil {
-		return nil, true, err
+		return nil, "", err
 	}
 	if t.Status.IsTerminal() {
-		return nil, true, nil // Decision H: already finished
+		return nil, "", nil // Decision H: already finished
 	}
 	if t.Status == task.TaskAwaitingInput {
 		// Parked for a human answer (StartTaskAsync may have re-enqueued the
@@ -426,10 +488,84 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 		// the task's goal to its pending ask_user call as if it were the user's
 		// reply. Skip; ResumeTask owns this transition, and the queue behind the
 		// parked task drains when that inline resume completes.
-		return nil, true, nil
+		return nil, "", nil
 	}
-	driven, err := m.drive(ctx, sid, sm, t, t.Goal)
-	return driven, true, err
+	driven, err = m.drive(ctx, sid, sm, t, t.Goal)
+	return driven, t.ID, err
+}
+
+// deliverResult joins a terminal child's result back to its parent task. It MUST
+// be called with no session locks held: it takes the PARENT's session lock, and
+// because no code path in this package ever holds two session locks at once,
+// lock ordering cannot deadlock. Callers pass only cross-session children
+// (RunNextReady's ParentSessionID != SessionID guard) — same-session children
+// finish inside their parent's own drain and are plan 11's mailbox territory.
+//
+// Branches over the parent's state machine:
+//   - parent task missing (task.ErrNotFound) or terminal: the result has no
+//     live consumer — drop it via the orphan handler (not an error).
+//   - parent non-terminal: append "[subtask <id> <done|failed>] <result>" to
+//     parent.Working as a RoleUser message and save. Wake decision:
+//   - awaiting_input (with or without Pending): NO wake. A ReadyQueue drive
+//     would feed the parent's Goal to Advance as the resume input — it
+//     would fulfill parked ask_user calls or masquerade as the user's
+//     reply. The appended message rides the next human resume instead.
+//   - ActiveTaskID == parent.ID (pending/active) or ActiveTaskID == another
+//     task: the parent is already activated or waiting in the session
+//     FIFO; the existing machinery reaches it. NO wake.
+//   - ActiveTaskID == "" && parent pending: idle session, resumable task (a
+//     fresh drive from its own Goal is the normal seed). Re-activate it,
+//     save meta, and enqueue the parent session on the ReadyQueue.
+//     Defensive: unreachable via today's API, but durable stores can
+//     surface it after a crash.
+//   - ActiveTaskID == "" && any other non-terminal status: not resumable
+//     (an "active" task here means a run was lost mid-flight); append-only.
+func (m *TaskManager) deliverResult(ctx context.Context, child *task.Task) error {
+	lk := m.acquire(child.ParentSessionID)
+	defer m.release(child.ParentSessionID, lk)
+
+	parent, err := m.tasks.LoadTask(ctx, child.ParentTaskID)
+	if errors.Is(err, task.ErrNotFound) {
+		m.orphanHandler(child)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if parent.Status.IsTerminal() {
+		m.orphanHandler(child)
+		return nil
+	}
+
+	verdict := "done"
+	if child.Status == task.TaskFailed {
+		verdict = "failed"
+	}
+	summary := task.Result(child)
+	if summary == "" {
+		summary = "(no output)"
+	}
+	parent.Working = append(parent.Working, gantry.Message{
+		Role:    gantry.RoleUser,
+		Content: fmt.Sprintf("[subtask %s %s] %s", child.ID, verdict, summary),
+	})
+	parent.UpdatedAt = time.Now().UTC()
+	if err := m.tasks.SaveTask(ctx, parent); err != nil {
+		return err
+	}
+
+	sm, err := m.loadOrFreshMeta(ctx, child.ParentSessionID)
+	if err != nil {
+		return err
+	}
+	if sm.ActiveTaskID == "" && parent.Status == task.TaskPending {
+		sm.ActiveTaskID = parent.ID
+		if err := m.meta.SaveMeta(ctx, child.ParentSessionID, sm); err != nil {
+			return err
+		}
+		return m.ready.Enqueue(ctx, child.ParentSessionID)
+	}
+	return nil
 }
 
 // detachedSpec collects the optional overrides for StartDetachedSession.
@@ -441,6 +577,7 @@ type detachedSpec struct {
 	depth           int
 	budget          task.TaskBudget
 	hasParent       bool
+	agent           string // runner-profile registry key; "" ⇒ default runner
 }
 
 // DetachedOption customizes StartDetachedSession.
@@ -468,6 +605,14 @@ func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task
 	}
 }
 
+// DetachedAgent names the runner profile (registry key) the spawned task should
+// run under; StartDetachedSession persists it to Task.AgentProfile, and the
+// Driver resolves it via WithRunnerResolver. Empty means the default runner —
+// equivalent to omitting the option.
+func DetachedAgent(profile string) DetachedOption {
+	return func(s *detachedSpec) { s.agent = profile }
+}
+
 // StartDetachedSession mints a new session, creates a pending task in it,
 // persists both (the task, then the session meta with that task active plus a
 // TaskRef), and enqueues the session on the ReadyQueue — WITHOUT driving it. The
@@ -476,8 +621,10 @@ func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task
 // task, which carries its id and the new session id.
 //
 // Options: DetachedIDs consumes ids pre-minted by a spawn tool; DetachedParent
-// stamps parent linkage, depth, and budget on the child. With no options the
-// behavior is unchanged from before (fresh ids, no parent, zero budget).
+// stamps parent linkage, depth, and budget on the child; DetachedAgent persists
+// the runner-profile registry key to Task.AgentProfile ("" ⇒ default runner).
+// With no options the behavior is unchanged from before (fresh ids, no parent,
+// zero budget, default runner).
 //
 // This is the single source of truth for the persist-before-enqueue +
 // new-session invariant: a successfully-enqueued id always points at a real,
@@ -497,12 +644,13 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 		newTID = m.newID()
 	}
 	nt := &task.Task{
-		ID:        newTID,
-		SessionID: newSID,
-		Title:     title,
-		Goal:      goal,
-		Status:    task.TaskPending,
-		CreatedAt: time.Now().UTC(),
+		ID:           newTID,
+		SessionID:    newSID,
+		Title:        title,
+		Goal:         goal,
+		AgentProfile: spec.agent,
+		Status:       task.TaskPending,
+		CreatedAt:    time.Now().UTC(),
 	}
 	if spec.hasParent {
 		nt.ParentSessionID = spec.parentSessionID
@@ -721,6 +869,7 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,
 			DetachedIDs(req.sessionID, req.taskID),
 			DetachedParent(sessionID, parent.ID, parent.Depth+1, m.childBudget(parent)),
+			DetachedAgent(req.agent),
 		)
 		if err != nil {
 			return err
