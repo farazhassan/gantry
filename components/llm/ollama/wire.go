@@ -88,10 +88,20 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 		msgs = append(msgs, cm)
 	}
 
+	tools := toChatTools(req.Tools)
+	// Ollama's /api/chat has no tool_choice parameter. Mode "none" degrades
+	// explicitly by sending no tools at all — semantically identical, since
+	// the model cannot call what it cannot see. Modes "required" and "tool"
+	// are rejected by validateToolChoice (ollama.go) before this function
+	// runs; "auto" is the provider default, so it is a no-op.
+	if req.ToolChoice != nil && req.ToolChoice.Mode == gantry.ToolChoiceNone {
+		tools = nil
+	}
+
 	return chatRequest{
 		Model:    model,
 		Messages: msgs,
-		Tools:    toChatTools(req.Tools),
+		Tools:    tools,
 		Stream:   stream,
 		Options:  toChatOptions(req),
 	}

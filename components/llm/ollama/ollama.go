@@ -156,6 +156,9 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
+	if err := validateToolChoice(req.ToolChoice); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(toChatRequest(c.model, req, stream))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: encode request: %w", err)
@@ -171,6 +174,22 @@ func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (
 		return nil, fmt.Errorf("ollama: chat request: %w", err)
 	}
 	return resp, nil
+}
+
+// validateToolChoice rejects tool-choice modes the Ollama API cannot honor.
+// Ollama's /api/chat has no tool_choice parameter, so a forced-tool request
+// ("required" or "tool") cannot be expressed — per the adapter conventions it
+// must fail loudly rather than be silently ignored. "auto" is the provider
+// default and "none" degrades to sending no tools (wire.go), so both pass.
+func validateToolChoice(tc *gantry.ToolChoice) error {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case gantry.ToolChoiceRequired, gantry.ToolChoiceTool:
+		return fmt.Errorf("ollama: tool_choice mode %q is not supported by the Ollama API", tc.Mode)
+	}
+	return nil
 }
 
 func checkStatus(resp *http.Response) error {
