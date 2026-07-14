@@ -78,24 +78,71 @@ func TestFlushReconcilesByID(t *testing.T) {
 	}
 }
 
-func TestFlushIgnoresUnknownAndMissingIDs(t *testing.T) {
+func TestFlushAdoptsProjectionOnlySteps(t *testing.T) {
 	tk := newLedgerTask()
-	// A projection that dropped a step and added an unknown one must not panic
-	// or corrupt the ledger; only matching IDs are reconciled.
+	// The run updated s2 and appended a step the ledger has never seen (the
+	// update_plan tool does exactly this mid-run). The unknown step must be
+	// ADOPTED with its id — not silently dropped.
 	proj := &gantry.Plan{Steps: []gantry.PlanStep{
 		{ID: "s2", Status: gantry.StepDone},
-		{ID: "ghost", Status: gantry.StepDone},
+		{ID: "s4", Description: "write docs", Status: gantry.StepPending, AcceptanceCriteria: "README updated"},
 	}}
 	Flush(tk, proj)
 	if tk.Plan.Steps[1].Status != gantry.StepDone {
 		t.Errorf("s2 not updated: %+v", tk.Plan.Steps[1])
 	}
-	if len(tk.Plan.Steps) != 3 {
-		t.Errorf("Flush changed step count to %d", len(tk.Plan.Steps))
+	if len(tk.Plan.Steps) != 4 {
+		t.Fatalf("step count = %d, want 4 (s4 adopted)", len(tk.Plan.Steps))
 	}
-	// Steps not present in the projection must be left entirely unchanged.
+	got := tk.Plan.Steps[3]
+	if got.ID != "s4" || got.Description != "write docs" || got.AcceptanceCriteria != "README updated" {
+		t.Errorf("adopted step = %+v, want s4 carried over wholesale", got)
+	}
+	// Ledger steps absent from the projection stay untouched.
 	if tk.Plan.Steps[0].Status != gantry.StepDone || tk.Plan.Steps[2].Status != gantry.StepPending {
 		t.Errorf("unmatched steps were mutated: %+v / %+v", tk.Plan.Steps[0], tk.Plan.Steps[2])
+	}
+}
+
+func TestFlushReMintsEmptyAndCollidingAdoptedIDs(t *testing.T) {
+	tk := newLedgerTask() // ledger owns s1..s3
+	proj := &gantry.Plan{Steps: []gantry.PlanStep{
+		{Description: "no id"},               // empty id: minted
+		{ID: "n1", Description: "first n1"},  // fresh id: preserved
+		{ID: "n1", Description: "second n1"}, // in-projection duplicate: re-minted
+	}}
+	Flush(tk, proj)
+	if len(tk.Plan.Steps) != 6 {
+		t.Fatalf("step count = %d, want 6", len(tk.Plan.Steps))
+	}
+	a, b, c := tk.Plan.Steps[3], tk.Plan.Steps[4], tk.Plan.Steps[5]
+	if a.ID != "s4" {
+		t.Errorf("empty-id step got %q, want minted s4", a.ID)
+	}
+	if b.ID != "n1" {
+		t.Errorf("fresh id clobbered: %q", b.ID)
+	}
+	if c.ID == "n1" || c.ID == "" {
+		t.Errorf("duplicate id survived adoption: %q", c.ID)
+	}
+	seen := map[string]bool{}
+	for _, s := range tk.Plan.Steps {
+		if seen[s.ID] {
+			t.Errorf("duplicate ledger id %q after flush", s.ID)
+		}
+		seen[s.ID] = true
+	}
+}
+
+func TestFlushAdoptedStepMetaIsolated(t *testing.T) {
+	tk := newLedgerTask()
+	proj := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "n1", Description: "new", Meta: map[string]any{"k": "v"}},
+	}}
+	Flush(tk, proj)
+	proj.Steps[0].Meta["k"] = "mutated"
+	if tk.Plan.Steps[3].Meta["k"] != "v" {
+		t.Errorf("adopted step shares its Meta map with the projection: %v", tk.Plan.Steps[3].Meta["k"])
 	}
 }
 

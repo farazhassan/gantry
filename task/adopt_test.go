@@ -90,3 +90,39 @@ func TestAdoptOrFlushNilProjectionIsNoop(t *testing.T) {
 		t.Errorf("zero-step projection must not create a plan: %+v", tk.Plan)
 	}
 }
+
+func TestAdoptReMintsCollidingPlannerIDs(t *testing.T) {
+	// A planner-provided id must not be handed out again to an id-less step:
+	// without collision detection ["s2", ""] became ["s2", "s2"], a duplicate
+	// ledger key that corrupts every future Flush.
+	tk := &Task{ID: "tk-1"}
+	projected := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s2", Description: "a"},
+		{Description: "b"},
+	}}
+	adoptOrFlush(tk, projected)
+	if tk.Plan.Steps[0].ID != "s2" {
+		t.Errorf("provided id clobbered: %q", tk.Plan.Steps[0].ID)
+	}
+	if tk.Plan.Steps[1].ID != "s3" {
+		t.Errorf("id-less step got %q, want s3 (s2 is claimed)", tk.Plan.Steps[1].ID)
+	}
+}
+
+func TestAdoptReMintsDuplicateProvidedIDs(t *testing.T) {
+	tk := &Task{ID: "tk-1"}
+	projected := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "dup", Description: "a"},
+		{ID: "dup", Description: "b"},
+	}}
+	adoptOrFlush(tk, projected)
+	if tk.Plan.Steps[0].ID != "dup" {
+		t.Errorf("first occurrence must keep its id: %q", tk.Plan.Steps[0].ID)
+	}
+	if tk.Plan.Steps[1].ID != "s2" {
+		t.Errorf("duplicate got %q, want re-minted s2", tk.Plan.Steps[1].ID)
+	}
+	if tk.Plan.Steps[0].ID == tk.Plan.Steps[1].ID {
+		t.Errorf("duplicate ids survived adoption")
+	}
+}
