@@ -21,7 +21,7 @@ func TestNotificationKindValues(t *testing.T) {
 	}
 }
 
-func TestInMemoryNotificationsAppendDrainFIFO(t *testing.T) {
+func TestInMemoryNotificationsPeekFIFOAndNonDestructive(t *testing.T) {
 	store := NewInMemoryNotificationStore()
 	ctx := context.Background()
 	n1 := &Notification{ID: "n1", SessionID: "s1", TaskID: "t1", Kind: NotificationDone, Title: "first", Body: "b1", CreatedAt: time.Now().UTC()}
@@ -33,12 +33,12 @@ func TestInMemoryNotificationsAppendDrainFIFO(t *testing.T) {
 		t.Fatalf("Append n2: %v", err)
 	}
 
-	got, err := store.DrainFor(ctx, "s1")
+	got, err := store.PeekFor(ctx, "s1")
 	if err != nil {
-		t.Fatalf("DrainFor: %v", err)
+		t.Fatalf("PeekFor: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("drain len = %d, want 2", len(got))
+		t.Fatalf("peek len = %d, want 2", len(got))
 	}
 	if got[0].ID != "n1" || got[1].ID != "n2" {
 		t.Errorf("order = [%q, %q], want FIFO [n1, n2]", got[0].ID, got[1].ID)
@@ -46,13 +46,72 @@ func TestInMemoryNotificationsAppendDrainFIFO(t *testing.T) {
 	if got[0].Kind != NotificationDone || got[0].Body != "b1" || got[0].TaskID != "t1" {
 		t.Errorf("got[0] = %+v, want the full n1 record", got[0])
 	}
-	// Drain clears the session's buffer.
-	again, err := store.DrainFor(ctx, "s1")
+	// Peek is non-destructive: a second peek sees the same records.
+	again, err := store.PeekFor(ctx, "s1")
 	if err != nil {
-		t.Fatalf("second DrainFor: %v", err)
+		t.Fatalf("second PeekFor: %v", err)
 	}
-	if len(again) != 0 {
-		t.Errorf("second drain len = %d, want 0 (buffer cleared)", len(again))
+	if len(again) != 2 {
+		t.Errorf("second peek len = %d, want 2 (peek must not remove)", len(again))
+	}
+}
+
+func TestInMemoryNotificationsAckRemovesOnlyGivenIDs(t *testing.T) {
+	store := NewInMemoryNotificationStore()
+	ctx := context.Background()
+	for _, id := range []string{"n1", "n2", "n3"} {
+		if err := store.Append(ctx, &Notification{ID: id, SessionID: "s1", Kind: NotificationDone}); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+
+	if err := store.Ack(ctx, "s1", []string{"n1", "n3"}); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	left, _ := store.PeekFor(ctx, "s1")
+	if len(left) != 1 || left[0].ID != "n2" {
+		t.Errorf("after partial ack, left = %+v, want only [n2]", left)
+	}
+	// Acking the rest clears the session's buffer.
+	if err := store.Ack(ctx, "s1", []string{"n2"}); err != nil {
+		t.Fatalf("Ack n2: %v", err)
+	}
+	empty, _ := store.PeekFor(ctx, "s1")
+	if len(empty) != 0 {
+		t.Errorf("after full ack, peek len = %d, want 0", len(empty))
+	}
+}
+
+func TestInMemoryNotificationsAckUnknownIsNoOp(t *testing.T) {
+	store := NewInMemoryNotificationStore()
+	ctx := context.Background()
+	if err := store.Ack(ctx, "never-seen", []string{"nope"}); err != nil {
+		t.Errorf("Ack on unknown session = %v, want nil", err)
+	}
+	if err := store.Append(ctx, &Notification{ID: "n1", SessionID: "s1", Kind: NotificationDone}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := store.Ack(ctx, "s1", []string{"unknown-id"}); err != nil {
+		t.Errorf("Ack with unknown id = %v, want nil", err)
+	}
+	left, _ := store.PeekFor(ctx, "s1")
+	if len(left) != 1 {
+		t.Errorf("unknown-id ack removed something: %d left, want 1", len(left))
+	}
+}
+
+func TestInMemoryNotificationsPeekIsCopy(t *testing.T) {
+	store := NewInMemoryNotificationStore()
+	ctx := context.Background()
+	if err := store.Append(ctx, &Notification{ID: "n1", SessionID: "s1", Kind: NotificationDone, Body: "original"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, _ := store.PeekFor(ctx, "s1")
+	got[0].Body = "mutated-by-caller"
+
+	again, _ := store.PeekFor(ctx, "s1")
+	if again[0].Body != "original" {
+		t.Errorf("store corrupted by mutating a peeked record: %+v", again[0])
 	}
 }
 
@@ -66,14 +125,17 @@ func TestInMemoryNotificationsSessionIsolation(t *testing.T) {
 		t.Fatalf("Append s2: %v", err)
 	}
 
-	got1, _ := store.DrainFor(ctx, "s1")
-	if len(got1) != 1 || got1[0].ID != "a" {
-		t.Errorf("s1 drain = %+v, want only [a]", got1)
+	if err := store.Ack(ctx, "s1", []string{"a"}); err != nil {
+		t.Fatalf("Ack s1: %v", err)
 	}
-	// s2 must be untouched by s1's drain.
-	got2, _ := store.DrainFor(ctx, "s2")
+	got1, _ := store.PeekFor(ctx, "s1")
+	if len(got1) != 0 {
+		t.Errorf("s1 peek after ack = %+v, want empty", got1)
+	}
+	// s2 must be untouched by s1's ack.
+	got2, _ := store.PeekFor(ctx, "s2")
 	if len(got2) != 1 || got2[0].ID != "b" {
-		t.Errorf("s2 drain = %+v, want only [b]", got2)
+		t.Errorf("s2 peek = %+v, want only [b]", got2)
 	}
 }
 
@@ -86,20 +148,20 @@ func TestInMemoryNotificationsAppendIsCopy(t *testing.T) {
 	}
 	n.Body = "mutated-after-append" // caller mutates its copy
 
-	got, _ := store.DrainFor(ctx, "s1")
+	got, _ := store.PeekFor(ctx, "s1")
 	if len(got) != 1 || got[0].Body != "original" {
 		t.Errorf("store corrupted by caller mutation: %+v", got)
 	}
 }
 
-func TestInMemoryNotificationsDrainUnknownSessionIsEmpty(t *testing.T) {
+func TestInMemoryNotificationsPeekUnknownSessionIsEmpty(t *testing.T) {
 	store := NewInMemoryNotificationStore()
-	got, err := store.DrainFor(context.Background(), "never-seen")
+	got, err := store.PeekFor(context.Background(), "never-seen")
 	if err != nil {
-		t.Fatalf("DrainFor: %v", err)
+		t.Fatalf("PeekFor: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("drain of unknown session = %+v, want empty", got)
+		t.Errorf("peek of unknown session = %+v, want empty", got)
 	}
 }
 

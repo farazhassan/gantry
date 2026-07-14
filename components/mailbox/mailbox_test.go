@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestMailboxInjectsDigestBeforeUserInput(t *testing.T) {
 	}
 }
 
-func TestMailboxDrainsSoSecondTurnInjectsNothing(t *testing.T) {
+func TestMailboxAcksSoSecondTurnInjectsNothing(t *testing.T) {
 	store := taskmanager.NewInMemoryNotificationStore()
 	seedNote(t, store, "s1")
 	a := newAgent(t, store, 2)
@@ -92,13 +93,97 @@ func TestMailboxDrainsSoSecondTurnInjectsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
+	// The completed run acked its delivery: the store is empty and the
+	// per-run ack bookkeeping does not leak into the state's Meta.
+	if left, _ := store.PeekFor(ctx, "s1"); len(left) != 0 {
+		t.Errorf("store after successful run = %d notifications, want 0 (acked)", len(left))
+	}
+	if _, leaked := first.Meta["components/mailbox:ack"]; leaked {
+		t.Errorf("ack meta key leaked past PhaseEnd")
+	}
 	second, err := a.RunFrom(ctx, first, "and again")
 	if err != nil {
 		t.Fatalf("RunFrom: %v", err)
 	}
 
 	if got := len(digests(second.Messages)); got != 1 {
-		t.Errorf("digest count after two turns = %d, want 1 (drained; injected once)", got)
+		t.Errorf("digest count after two turns = %d, want 1 (acked; injected once)", got)
+	}
+}
+
+func TestMailboxRedeliversAfterFailedRun(t *testing.T) {
+	store := taskmanager.NewInMemoryNotificationStore()
+	seedNote(t, store, "s1")
+	// First turn's LLM call fails mid-run (after the digest was injected at
+	// PhaseStart); the second turn succeeds.
+	client := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Err: errors.New("provider unavailable")},
+		{Response: gantry.LLMResponse{Content: "ok"}},
+	})
+	a, err := gantry.NewAgent(
+		gantry.WithLLM(client),
+		gantry.WithComponents(New(store)),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	ctx := context.Background()
+
+	st := gantry.NewState("hello")
+	st.Meta[gantry.MetaSessionID] = "s1"
+	if _, err := a.Resume(ctx, st); err == nil {
+		t.Fatalf("Resume = nil error, want the scripted LLM failure")
+	}
+
+	// The failed run must NOT have consumed the notification.
+	left, _ := store.PeekFor(ctx, "s1")
+	if len(left) != 1 {
+		t.Fatalf("store after failed run = %d notifications, want 1 (redeliverable)", len(left))
+	}
+
+	// The next (successful) turn delivers and acks it. The failed turn's
+	// state is discarded, as a session layer would after a run error.
+	retry := gantry.NewState("hello again")
+	retry.Meta[gantry.MetaSessionID] = "s1"
+	out, err := a.Resume(ctx, retry)
+	if err != nil {
+		t.Fatalf("retry Resume: %v", err)
+	}
+	if got := len(digests(out.Messages)); got != 1 {
+		t.Errorf("digest count on retry = %d, want 1 (redelivered)", got)
+	}
+	if after, _ := store.PeekFor(ctx, "s1"); len(after) != 0 {
+		t.Errorf("store after successful retry = %d, want 0 (acked)", len(after))
+	}
+}
+
+// failingAckStore wraps a NotificationStore and fails every Ack.
+type failingAckStore struct {
+	taskmanager.NotificationStore
+}
+
+func (s *failingAckStore) Ack(context.Context, string, []string) error {
+	return errors.New("ack store unavailable")
+}
+
+func TestMailboxAckFailureDoesNotFailRun(t *testing.T) {
+	inner := taskmanager.NewInMemoryNotificationStore()
+	store := &failingAckStore{NotificationStore: inner}
+	seedNote(t, inner, "s1")
+	a := newAgent(t, store, 1)
+
+	st := gantry.NewState("hello")
+	st.Meta[gantry.MetaSessionID] = "s1"
+	out, err := a.Resume(context.Background(), st)
+	if err != nil {
+		t.Fatalf("Resume = %v, want nil (a failed ack must not fail a completed turn)", err)
+	}
+	if got := len(digests(out.Messages)); got != 1 {
+		t.Errorf("digest count = %d, want 1", got)
+	}
+	// Degraded mode: the un-acked notification stays for redelivery.
+	if left, _ := inner.PeekFor(context.Background(), "s1"); len(left) != 1 {
+		t.Errorf("store after failed ack = %d, want 1 (at-least-once redelivery)", len(left))
 	}
 }
 
@@ -115,9 +200,9 @@ func TestMailboxNoSessionIDIsNoOp(t *testing.T) {
 		t.Errorf("digest count = %d, want 0 without a session id", got)
 	}
 	// The notification is still queued for its real session.
-	left, _ := store.DrainFor(context.Background(), "s1")
+	left, _ := store.PeekFor(context.Background(), "s1")
 	if len(left) != 1 {
-		t.Errorf("store drained by a session-less run: %d left, want 1", len(left))
+		t.Errorf("store consumed by a session-less run: %d left, want 1", len(left))
 	}
 }
 
@@ -152,9 +237,9 @@ func TestMailboxSkipsTaskRuns(t *testing.T) {
 	if got := len(digests(out.Messages)); got != 0 {
 		t.Errorf("digest count = %d, want 0 inside a task run", got)
 	}
-	left, _ := store.DrainFor(context.Background(), "s1")
+	left, _ := store.PeekFor(context.Background(), "s1")
 	if len(left) != 1 {
-		t.Errorf("task run drained the chat session's mailbox: %d left, want 1", len(left))
+		t.Errorf("task run consumed the chat session's mailbox: %d left, want 1", len(left))
 	}
 }
 

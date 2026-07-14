@@ -34,9 +34,9 @@ func TestNotifyBridgeParkedWritesQuestionToOwnSession(t *testing.T) {
 	}
 	parked(tk)
 
-	got, err := store.DrainFor(context.Background(), "s1")
+	got, err := store.PeekFor(context.Background(), "s1")
 	if err != nil {
-		t.Fatalf("DrainFor: %v", err)
+		t.Fatalf("PeekFor: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("notifications = %d, want 1", len(got))
@@ -72,11 +72,11 @@ func TestNotifyBridgeTargetsParentSessionWhenSet(t *testing.T) {
 		Working: []gantry.Message{{Role: gantry.RoleAssistant, Content: "child summary"}},
 	})
 
-	own, _ := store.DrainFor(ctx, "child-sess")
+	own, _ := store.PeekFor(ctx, "child-sess")
 	if len(own) != 0 {
 		t.Errorf("child session received %d notifications, want 0 (parent is the target)", len(own))
 	}
-	parent, _ := store.DrainFor(ctx, "parent-sess")
+	parent, _ := store.PeekFor(ctx, "parent-sess")
 	if len(parent) != 2 {
 		t.Fatalf("parent session received %d notifications, want 2", len(parent))
 	}
@@ -100,7 +100,7 @@ func TestNotifyBridgeTerminalKindsAndResultBody(t *testing.T) {
 	terminal(mk("t2", task.TaskFailed))
 	terminal(mk("t3", task.TaskCancelled))
 
-	got, _ := store.DrainFor(ctx, "s1")
+	got, _ := store.PeekFor(ctx, "s1")
 	if len(got) != 3 {
 		t.Fatalf("notifications = %d, want 3", len(got))
 	}
@@ -121,7 +121,7 @@ func TestNotifyBridgeTerminalIgnoresNonTerminalStatus(t *testing.T) {
 	_, terminal := NotifyBridge(store)
 
 	terminal(&task.Task{ID: "t1", SessionID: "s1", Status: task.TaskActive})
-	got, _ := store.DrainFor(context.Background(), "s1")
+	got, _ := store.PeekFor(context.Background(), "s1")
 	if len(got) != 0 {
 		t.Errorf("non-terminal task produced %d notifications, want 0", len(got))
 	}
@@ -133,7 +133,7 @@ func TestNotifyBridgeParkedWithoutQuestionStillRecords(t *testing.T) {
 
 	// Rejection-cap park: awaiting_input with empty Pending (see task/driver.go).
 	parked(&task.Task{ID: "t1", SessionID: "s1", Status: task.TaskAwaitingInput})
-	got, _ := store.DrainFor(context.Background(), "s1")
+	got, _ := store.PeekFor(context.Background(), "s1")
 	if len(got) != 1 {
 		t.Fatalf("notifications = %d, want 1", len(got))
 	}
@@ -148,7 +148,7 @@ func TestNotifyBridgeNilTaskIsNoOp(t *testing.T) {
 	parked(nil)
 	terminal(nil)
 	// No session to drain by name; verify both known probes are empty.
-	if got, _ := store.DrainFor(context.Background(), ""); len(got) != 0 {
+	if got, _ := store.PeekFor(context.Background(), ""); len(got) != 0 {
 		t.Errorf("nil task produced %d notifications, want 0", len(got))
 	}
 }

@@ -21,7 +21,8 @@ const (
 // Notification is one durable "something happened to a task you care about"
 // record, surfaced to the user the next time the target chat session runs (see
 // components/mailbox). It is write-once: appended by a bridge on the dispatch
-// loop, drained exactly once by the session that owns it.
+// loop, then peeked by the owning session's run and acked once that run
+// completes — so a run that fails mid-turn redelivers it (at-least-once).
 type Notification struct {
 	ID        string
 	SessionID string // session to surface this in (the parent chat session)
@@ -34,12 +35,25 @@ type Notification struct {
 
 // NotificationStore persists Notifications keyed by target session id. It
 // mirrors MetaStore: a single key space, with implementations free to copy so
-// callers cannot mutate stored state by reference. DrainFor is destructive —
-// it returns the session's pending notifications in append order and removes
-// them, so each notification is delivered at most once.
+// callers cannot mutate stored state by reference.
+//
+// Delivery is two-phase so a failed run cannot lose notifications: PeekFor
+// reads without removing, and Ack settles the delivered ids only after the
+// consumer knows the delivery stuck (components/mailbox acks at PhaseEnd,
+// which a run reaches only when it completes). A run that errors after
+// peeking leaves the notifications in place for redelivery — the contract is
+// at-least-once, with duplicates possible only when a delivered turn's ack
+// fails.
 type NotificationStore interface {
 	Append(ctx context.Context, n *Notification) error
-	DrainFor(ctx context.Context, sessionID string) ([]*Notification, error)
+	// PeekFor returns the session's pending notifications in append order
+	// WITHOUT removing them. An unknown session yields an empty slice and no
+	// error.
+	PeekFor(ctx context.Context, sessionID string) ([]*Notification, error)
+	// Ack removes the identified notifications for the session after a
+	// successful delivery. Ids that are unknown (already acked, or never
+	// existed) are ignored.
+	Ack(ctx context.Context, sessionID string, ids []string) error
 }
 
 // newNotificationID mints a random notification id. Falls back to a timestamp
