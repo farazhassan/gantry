@@ -224,6 +224,23 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 			// working context. This is the normal long-running continuation, and it
 			// counts as progress, so the rejection streak resets.
 			t.ConsecutiveRejections = 0
+		case state.DoneReason == gantry.DoneHandoff:
+			// A routing middleware asked to hand this conversation to another
+			// agent. Handoff is a session-layer concept — session.Session
+			// resolves the target and re-runs the turn — but the driver has no
+			// agent registry, so it fails fast with a NAMED cause appended to
+			// Working (the ledger records why) instead of falling through to
+			// the anonymous default terminal.
+			cause := "task failed: handoff is not supported inside task-driven runs yet"
+			if state.Handoff != nil {
+				cause += " (requested target: " + state.Handoff.Target + ")"
+			}
+			t.Working = append(t.Working, gantry.Message{Role: gantry.RoleSystem, Content: cause})
+			t.Status = TaskFailed
+			if err := d.save(ctx, t); err != nil {
+				return t, err
+			}
+			return t, nil
 		default:
 			t.Status = TaskFailed // budget/guardrail/human-abort/error terminals
 			if err := d.save(ctx, t); err != nil {
