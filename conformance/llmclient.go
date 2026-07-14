@@ -46,4 +46,21 @@ func LLMClientSuite(t *testing.T, factory func() gantry.LLMClient) {
 			t.Errorf("Generate with tools: %v", err)
 		}
 	})
+
+	t.Run("Generate_accepts_tool_choice_auto", func(t *testing.T) {
+		// ToolChoiceAuto is the one non-nil mode every client must accept: it
+		// is the provider default, so even adapters whose provider has no
+		// tool_choice parameter (Ollama) treat it as a no-op. Forced modes
+		// (required/tool) are deliberately NOT part of the shared contract —
+		// adapters may reject them when the provider cannot express them.
+		c := factory()
+		_, err := c.Generate(context.Background(), gantry.LLMRequest{
+			Messages:   []gantry.Message{{Role: gantry.RoleUser, Content: "x"}},
+			Tools:      []gantry.ToolDef{{Name: "noop", Description: "no-op", Schema: []byte(`{}`)}},
+			ToolChoice: &gantry.ToolChoice{Mode: gantry.ToolChoiceAuto},
+		})
+		if err != nil {
+			t.Errorf("Generate with tool_choice auto: %v", err)
+		}
+	})
 }
