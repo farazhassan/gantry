@@ -1,6 +1,8 @@
 package task
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -152,4 +154,80 @@ func TestFlushNilSafe(t *testing.T) {
 	Flush(&Task{ID: "x"}, tk.Plan) // nil ledger plan: no-op
 	Flush(nil, tk.Plan)            // nil task: no-op
 	// Reaching here without a panic is the assertion.
+}
+
+func TestHydrateBoundsDoneStepOutput(t *testing.T) {
+	// Multibyte runes prove the budget counts runes, not bytes.
+	long := strings.Repeat("界", DefaultOutputRuneBudget+42)
+	tk := &Task{ID: "tk-1", Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: long},
+		{ID: "s2", Status: gantry.StepActive, Output: long}, // non-done: projected in full
+	}}}
+
+	proj := Hydrate(tk)
+	want := strings.Repeat("界", DefaultOutputRuneBudget) +
+		fmt.Sprintf("… (truncated, %d total)", DefaultOutputRuneBudget+42)
+	if proj.Steps[0].Output != want {
+		t.Errorf("done-step output = %q, want %q", proj.Steps[0].Output, want)
+	}
+	if proj.Steps[1].Output != long {
+		t.Errorf("active-step output was truncated; must be projected in full")
+	}
+	if tk.Plan.Steps[0].Output != long {
+		t.Errorf("ledger output changed by Hydrate; the ledger keeps the full record")
+	}
+}
+
+func TestHydrateShortOutputUnchanged(t *testing.T) {
+	tk := &Task{ID: "tk-1", Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: "small"},
+	}}}
+	if got := Hydrate(tk).Steps[0].Output; got != "small" {
+		t.Errorf("under-budget output = %q, want unchanged %q", got, "small")
+	}
+}
+
+func TestHydrateBoundedZeroIsUnlimited(t *testing.T) {
+	long := strings.Repeat("a", DefaultOutputRuneBudget*3)
+	tk := &Task{ID: "tk-1", Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: long},
+	}}}
+	if got := HydrateBounded(tk, 0).Steps[0].Output; got != long {
+		t.Errorf("HydrateBounded(t, 0) truncated; a non-positive budget means unbounded")
+	}
+}
+
+func TestFlushDoesNotClobberSettledDoneOutput(t *testing.T) {
+	// A step that was done and stayed done keeps its ledger Output: the
+	// projection's copy may be the truncated form from HydrateBounded.
+	tk := &Task{ID: "tk-1", Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: "the full record"},
+		{ID: "s2", Status: gantry.StepActive},
+	}}}
+	proj := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: "the full re… (truncated, 15 total)"},
+		{ID: "s2", Status: gantry.StepDone, Output: "fresh result"},
+	}}
+
+	Flush(tk, proj)
+
+	if tk.Plan.Steps[0].Output != "the full record" {
+		t.Errorf("settled done Output clobbered: %q", tk.Plan.Steps[0].Output)
+	}
+	if tk.Plan.Steps[1].Status != gantry.StepDone || tk.Plan.Steps[1].Output != "fresh result" {
+		t.Errorf("newly-done step not reconciled: %+v", tk.Plan.Steps[1])
+	}
+}
+
+func TestFlushCopiesOutputWhenDoneStepReopened(t *testing.T) {
+	tk := &Task{ID: "tk-1", Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepDone, Output: "old"},
+	}}}
+	proj := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Status: gantry.StepActive, Output: "reworking"},
+	}}
+	Flush(tk, proj)
+	if tk.Plan.Steps[0].Status != gantry.StepActive || tk.Plan.Steps[0].Output != "reworking" {
+		t.Errorf("re-opened step not reconciled: %+v", tk.Plan.Steps[0])
+	}
 }

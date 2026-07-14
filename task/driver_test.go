@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -247,12 +248,15 @@ func TestAdvanceRejectInjectsCriticFeedback(t *testing.T) {
 	}
 	var found gantry.Message
 	for _, m := range got.Working {
-		if m.Role == gantry.RoleSystem && m.Name == CriticAuthor {
+		if m.Name == CriticAuthor {
 			found = m
 		}
 	}
 	if found.Content == "" {
 		t.Fatalf("no critic feedback message injected into Working: %+v", got.Working)
+	}
+	if found.Role != gantry.RoleUser {
+		t.Errorf("critic feedback role = %q, want user (adapters have no mid-transcript system slot)", found.Role)
 	}
 	if !strings.Contains(found.Content, "not yet") {
 		t.Errorf("feedback missing the rejection reason; got %q", found.Content)
@@ -548,5 +552,284 @@ func TestAdvanceFlushAdoptsMidRunAddedSteps(t *testing.T) {
 	// Run 3's hydration included the adopted step — the full round trip.
 	if lastHydrated == nil || len(lastHydrated.Steps) != 3 || lastHydrated.Steps[2].ID != "s3" {
 		t.Errorf("run 3 hydration missing the adopted step: %+v", lastHydrated)
+	}
+}
+
+func TestAdvanceHydratesBoundedOutputsAndPreservesLedger(t *testing.T) {
+	longOut := strings.Repeat("x", DefaultOutputRuneBudget+100)
+	var seen string
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			seen = in.Plan.Steps[0].Output // what the run actually receives
+			in.Done = true
+			in.DoneReason = gantry.DoneNoToolCalls
+			return in
+		},
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{
+		ID:     "tk-1",
+		Status: TaskActive,
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+			{ID: "s1", Description: "prior", Status: gantry.StepDone, Output: longOut},
+			{ID: "s2", Description: "next", Status: gantry.StepActive},
+		}},
+	}
+
+	got, err := d.Advance(context.Background(), tk, "continue")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	wantSeen := strings.Repeat("x", DefaultOutputRuneBudget) +
+		fmt.Sprintf("… (truncated, %d total)", DefaultOutputRuneBudget+100)
+	if seen != wantSeen {
+		t.Errorf("run saw output of %d runes, want the bounded projection", len([]rune(seen)))
+	}
+	if got.Plan.Steps[0].Output != longOut {
+		t.Errorf("ledger output clobbered by the bounded projection round-trip (Flush guard failed)")
+	}
+}
+
+func TestWithHydrateOutputRunesOverridesBudget(t *testing.T) {
+	var seen string
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			seen = in.Plan.Steps[0].Output
+			in.Done = true
+			in.DoneReason = gantry.DoneNoToolCalls
+			return in
+		},
+	}}
+	d := NewDriver(runner, NewInMemory(), WithHydrateOutputRunes(5))
+	tk := &Task{
+		ID:     "tk-1",
+		Status: TaskActive,
+		Plan: &gantry.Plan{Steps: []gantry.PlanStep{
+			{ID: "s1", Status: gantry.StepDone, Output: "abcdefghij"},
+		}},
+	}
+	if _, err := d.Advance(context.Background(), tk, "continue"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if want := "abcde… (truncated, 10 total)"; seen != want {
+		t.Errorf("seen = %q, want %q", seen, want)
+	}
+}
+
+// ctxRespectingStore refuses writes once the caller's ctx is cancelled or
+// expired, mimicking a real database-backed TaskStore (InMemoryStore ignores
+// ctx, which is exactly why the bug never showed in tests).
+type ctxRespectingStore struct {
+	inner *InMemoryStore
+}
+
+func (s *ctxRespectingStore) SaveTask(ctx context.Context, t *Task) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.inner.SaveTask(ctx, t)
+}
+
+func (s *ctxRespectingStore) LoadTask(ctx context.Context, id string) (*Task, error) {
+	return s.inner.LoadTask(ctx, id)
+}
+
+func (s *ctxRespectingStore) ListBySession(ctx context.Context, sessionID string) ([]TaskRef, error) {
+	return s.inner.ListBySession(ctx, sessionID)
+}
+
+// selfCancellingRunner cancels the run's context and reports context.Canceled,
+// modelling a user interrupt landing mid-run.
+type selfCancellingRunner struct{ cancel context.CancelFunc }
+
+func (r *selfCancellingRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.cancel()
+	return st, context.Canceled
+}
+
+func TestAdvanceCancelledStatusPersistsDespiteDeadCtx(t *testing.T) {
+	store := &ctxRespectingStore{inner: NewInMemory()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := NewDriver(&selfCancellingRunner{cancel: cancel}, store)
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(ctx, tk, "do it")
+	if err != nil {
+		t.Fatalf("cancelled run must not be a Go error: %v", err)
+	}
+	if got.Status != TaskCancelled {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+	loaded, err := store.LoadTask(context.Background(), "tk-1")
+	if err != nil {
+		t.Fatalf("TaskCancelled was not persisted (save used the dead ctx): %v", err)
+	}
+	if loaded.Status != TaskCancelled {
+		t.Errorf("persisted status = %q, want cancelled", loaded.Status)
+	}
+}
+
+// cancelThenFailRunner kills the ctx then reports an ordinary runner error, so
+// the TaskFailed best-effort save also runs against a dead context.
+type cancelThenFailRunner struct{ cancel context.CancelFunc }
+
+func (r *cancelThenFailRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.cancel()
+	return st, errors.New("llm exploded mid-flight")
+}
+
+func TestAdvanceFailedStatusPersistsDespiteDeadCtx(t *testing.T) {
+	store := &ctxRespectingStore{inner: NewInMemory()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := NewDriver(&cancelThenFailRunner{cancel: cancel}, store)
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(ctx, tk, "do it")
+	if err == nil {
+		t.Fatalf("runner error must surface as a Go error")
+	}
+	if got.Status != TaskFailed {
+		t.Fatalf("status = %q, want failed", got.Status)
+	}
+	loaded, err := store.LoadTask(context.Background(), "tk-1")
+	if err != nil {
+		t.Fatalf("TaskFailed was not persisted (save used the dead ctx): %v", err)
+	}
+	if loaded.Status != TaskFailed {
+		t.Errorf("persisted status = %q, want failed", loaded.Status)
+	}
+}
+
+// suspendWithCalls yields awaiting-input with one parked ask_user call per id.
+func suspendWithCalls(ids ...string) func(*gantry.State) *gantry.State {
+	return func(in *gantry.State) *gantry.State {
+		in.Done = true
+		in.DoneReason = gantry.DoneClientToolCall
+		for _, id := range ids {
+			in.PendingToolCalls = append(in.PendingToolCalls, gantry.ToolCall{ID: id, Name: "ask_user"})
+		}
+		in.Usage = gantry.Usage{InputTokens: 1, OutputTokens: 1}
+		return in
+	}
+}
+
+// answersByCallID indexes the transcript's tool results by ToolCallID.
+func answersByCallID(msgs []gantry.Message) map[string]string {
+	out := map[string]string{}
+	for _, m := range msgs {
+		if m.Role == gantry.RoleTool {
+			out[m.ToolCallID] = m.Content
+		}
+	}
+	return out
+}
+
+func TestAdvanceWithAnswersPerCall(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendWithCalls("q1", "q2"),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, err := d.Advance(context.Background(), tk, "do it")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got.Status != TaskAwaitingInput || len(got.Pending) != 2 {
+		t.Fatalf("setup: status=%v pending=%+v", got.Status, got.Pending)
+	}
+
+	got, err = d.AdvanceWithAnswers(context.Background(), got, map[string]string{"q1": "alpha", "q2": "beta"})
+	if err != nil {
+		t.Fatalf("AdvanceWithAnswers: %v", err)
+	}
+	if got.Status != TaskDone {
+		t.Errorf("status = %q, want done", got.Status)
+	}
+	res := answersByCallID(got.Working)
+	if res["q1"] != "alpha" || res["q2"] != "beta" {
+		t.Errorf("answers = %v, want q1:alpha q2:beta", res)
+	}
+}
+
+func TestAdvanceWithAnswersMissingOrEmptyGetsPlaceholder(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendWithCalls("q1", "q2", "q3"),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, _ := d.Advance(context.Background(), tk, "do it")
+	got, err := d.AdvanceWithAnswers(context.Background(), got, map[string]string{
+		"q1":    "alpha",
+		"q2":    "",        // present but empty → placeholder
+		"ghost": "ignored", // unknown id → ignored
+	})
+	if err != nil {
+		t.Fatalf("AdvanceWithAnswers: %v", err)
+	}
+	res := answersByCallID(got.Working)
+	if res["q1"] != "alpha" {
+		t.Errorf("q1 = %q, want alpha", res["q1"])
+	}
+	if res["q2"] != NoAnswer || res["q3"] != NoAnswer {
+		t.Errorf("q2/q3 = %q/%q, want the %q placeholder for both", res["q2"], res["q3"], NoAnswer)
+	}
+	if _, ok := res["ghost"]; ok {
+		t.Errorf("unknown answer key produced a tool result")
+	}
+}
+
+func TestAdvanceWithAnswersRequiresPendingCalls(t *testing.T) {
+	d := NewDriver(&scriptedRunner{}, NewInMemory())
+	// Fresh task: not awaiting input.
+	if _, err := d.AdvanceWithAnswers(context.Background(), &Task{ID: "a", Status: TaskPending}, nil); err == nil {
+		t.Errorf("fresh task: want an error")
+	}
+	// Rejection-cap park: awaiting input with nothing pending — Advance's plain
+	// user-turn resume is the right tool there, not per-call answers.
+	if _, err := d.AdvanceWithAnswers(context.Background(), &Task{ID: "b", Status: TaskAwaitingInput}, map[string]string{"q1": "x"}); err == nil {
+		t.Errorf("parked task with no pending calls: want an error")
+	}
+}
+
+func TestAdvanceSinglePendingDelegatesToAnswers(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendWithCalls("q1"),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, _ := d.Advance(context.Background(), tk, "go")
+	got, err := d.Advance(context.Background(), got, "Ada")
+	if err != nil {
+		t.Fatalf("Advance (resume): %v", err)
+	}
+	if res := answersByCallID(got.Working); res["q1"] != "Ada" {
+		t.Errorf("q1 = %q, want Ada", res["q1"])
+	}
+}
+
+func TestAdvanceMultiPendingBroadcastsLegacy(t *testing.T) {
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspendWithCalls("q1", "q2"),
+		done(gantry.DoneNoToolCalls, nil),
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	got, _ := d.Advance(context.Background(), tk, "go")
+	got, err := d.Advance(context.Background(), got, "same answer")
+	if err != nil {
+		t.Fatalf("Advance (resume): %v", err)
+	}
+	res := answersByCallID(got.Working)
+	if res["q1"] != "same answer" || res["q2"] != "same answer" {
+		t.Errorf("broadcast answers = %v, want both calls to receive the input", res)
 	}
 }
