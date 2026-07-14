@@ -64,6 +64,11 @@ type Event struct {
 	SessionID string `json:"session_id,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
 	Agent     string `json:"agent,omitempty"`
+
+	// Dropped counts events discarded by a buffering wrapper (see
+	// NewBufferedSink) since the previous delivered event; zero on direct,
+	// unbuffered streams. A plain int so Event stays comparable.
+	Dropped int `json:"dropped,omitempty"`
 }
 
 // EventSink receives run Events. Returning an error aborts the run and the
