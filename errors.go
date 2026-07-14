@@ -35,6 +35,13 @@ const (
 	// resuming (see tool.Client). Distinct from DoneMaxIterations and
 	// the normal DoneNoToolCalls finish.
 	DoneClientToolCall DoneReason = "client_tool_call"
+	// DoneHandoff means routing middleware terminated the run to hand the
+	// conversation to another agent; state.Handoff carries the target and
+	// mode (set together — see State.Handoff). The layer above the run acts
+	// on it: session.Session resolves and re-runs transfer handoffs when a
+	// resolver is configured (session.WithResolver), while task-driven runs
+	// treat it as an explicit failure (see task/driver.go).
+	DoneHandoff DoneReason = "handoff"
 )
 
 // TraceCarrier is implemented by errors that carry the partial trace of
