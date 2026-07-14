@@ -147,6 +147,13 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 	}
 
 	st, err := t.child.Run(runCtx, seed)
+	// Fold the child's consumption into the per-dispatch recorder installed by
+	// Component's usage_fold middleware (absent under plain tool.FromTools).
+	// Record BEFORE the error check: the Run family always returns a non-nil
+	// *State, and an errored child run has still consumed tokens.
+	if rec, ok := usageRecorderFrom(ctx); ok {
+		rec.add(st.Usage)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: child run failed: %w", t.name, err)
 	}
