@@ -397,22 +397,32 @@ func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.C
 	return sm.ChildRefs, nil
 }
 
-// RunNextReady dequeues one ready session (spawned cross-session work, or a
+// RunNextReady claims one ready session (spawned cross-session work, or a
 // same-session task started via StartTaskAsync) and drives its active task to
 // suspension or terminal via the existing drive engine. It returns
 // (task, true, nil) for a driven session; (nil, false, nil) when the ready
-// queue is empty; (nil, true, nil) when the dequeued session has nothing
-// drivable (Decision H): an empty ActiveTaskID, an already-terminal active
-// task, or an active task parked awaiting_input — driving that one would feed
-// its goal to its pending ask_user call, so the resume is left to ResumeTask.
+// queue is empty; (nil, true, nil) when the claimed session has nothing
+// drivable — an empty ActiveTaskID, an already-terminal active task (Decision
+// H), or an active task parked awaiting HUMAN input, which only ResumeTask may
+// feed (driving it would feed the task's goal to its pending ask_user call as
+// if it were the user's reply — Decision H extension, plan 13).
 //
 // The caller composes this: loop for a sequential drain, or call from N
-// goroutines for parallel drive (each dequeue yields a distinct session id ->
+// goroutines for parallel drive (each claim yields a distinct session id ->
 // distinct per-session lock, so goroutines never contend).
 //
-// A returned error means the session id has already been consumed from the queue
-// (FIFO, no claim/ack — Decision E) and is not re-enqueued; the underlying task
-// stays durable, so retry is the caller's responsibility.
+// Delivery is claim-based (Decision L, superseding Decision E's consumed-on-
+// dequeue FIFO): a clean outcome — driven, or skipped as undrivable — ACKS the
+// claim; any error NACKS it, so the session id is redelivered rather than
+// lost. Redelivery makes consumption at-least-once. The status check above,
+// taken under the per-session lock, is what turns a duplicate delivery into a
+// no-op: by the time a duplicate acquires the lock, the first delivery has
+// either finished (ActiveTaskID cleared, active task terminal, or active task
+// parked — all skipped and acked) or persisted nothing (re-driving is exactly
+// the retry we want). Caveat: a drive that persisted partial progress before
+// erroring re-runs from the saved Working, so transcript appends and budget
+// counts can duplicate — Driver.Advance is not yet idempotent (2026-07-13
+// design-review risk).
 func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error) {
 	sid, ok, err := m.ready.Dequeue(ctx)
 	if err != nil {
@@ -427,28 +437,33 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 
 	sm, err := m.loadOrFreshMeta(ctx, sid)
 	if err != nil {
-		return nil, true, err // session was real; couldn't load its meta
+		return nil, true, m.settle(ctx, sid, err)
 	}
 	if sm.ActiveTaskID == "" {
-		return nil, true, nil // Decision H: nothing to do
+		return nil, true, m.settle(ctx, sid, nil) // Decision H: nothing to do
 	}
 	t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
 	if err != nil {
-		return nil, true, err
+		return nil, true, m.settle(ctx, sid, err)
 	}
-	if t.Status.IsTerminal() {
-		return nil, true, nil // Decision H: already finished
-	}
-	if t.Status == task.TaskAwaitingInput {
-		// Parked for a human answer (StartTaskAsync may have re-enqueued the
-		// session while its active task was suspended). Driving here would feed
-		// the task's goal to its pending ask_user call as if it were the user's
-		// reply. Skip; ResumeTask owns this transition, and the queue behind the
-		// parked task drains when that inline resume completes.
-		return nil, true, nil
+	if t.Status.IsTerminal() || t.Status == task.TaskAwaitingInput {
+		return nil, true, m.settle(ctx, sid, nil) // finished, or parked for a human
 	}
 	driven, err := m.drive(ctx, sid, sm, t, t.Goal)
-	return driven, true, err
+	return driven, true, m.settle(ctx, sid, err)
+}
+
+// settle finishes a ReadyQueue claim: Ack on a clean outcome (err == nil),
+// Nack (redelivery) otherwise. The original error is preserved; a settlement
+// failure is joined onto it so neither is lost.
+func (m *TaskManager) settle(ctx context.Context, sid string, err error) error {
+	if err == nil {
+		return m.ready.Ack(ctx, sid)
+	}
+	if nerr := m.ready.Nack(ctx, sid); nerr != nil {
+		return errors.Join(err, nerr)
+	}
+	return err
 }
 
 // detachedSpec collects the optional overrides for StartDetachedSession.

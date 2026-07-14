@@ -18,9 +18,10 @@ type Schedule struct {
 	FireAt time.Time
 }
 
-// ScheduleStore persists pending one-shot schedules. Deliberately minimal,
-// mirroring ReadyQueue (Add/Due/Remove, no claim/ack): a durable backend may add
-// redelivery later, but the in-memory impl cannot meaningfully exercise it.
+// ScheduleStore persists pending one-shot schedules. Deliberately minimal
+// (Add/Due/Remove, no claim/ack — unlike ReadyQueue, which grew Ack/Nack in
+// the task-dependencies plan): a durable backend may add redelivery later, but
+// the in-memory impl cannot meaningfully exercise it.
 type ScheduleStore interface {
 	Add(ctx context.Context, s Schedule) error
 	// Due returns schedules whose FireAt <= now, ordered by FireAt (FIFO).

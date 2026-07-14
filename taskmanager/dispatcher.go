@@ -134,9 +134,12 @@ func (d *Dispatcher) Stop() {
 }
 
 // loop is one worker's dispatch loop. It drains the ready queue while work is
-// available and waits one interval when the queue is empty (or a dequeue
-// errored), exiting when ctx is cancelled. With WithWorkers(n), n identical
-// loops run concurrently against the shared RunNextReady.
+// available, waits one interval when the queue is empty, and ALSO waits one
+// interval after an errored claim — the error path nacks and redelivers the
+// entry (Decision L), so continuing immediately would hot-spin on a
+// persistently-failing head. It exits when ctx is cancelled. With
+// WithWorkers(n), n identical loops run concurrently against the shared
+// RunNextReady.
 func (d *Dispatcher) loop(ctx context.Context) {
 	defer d.wg.Done()
 	for {
@@ -149,21 +152,23 @@ func (d *Dispatcher) loop(ctx context.Context) {
 		t, ok, err := d.tm.RunNextReady(ctx)
 		if err != nil {
 			d.errHandler(err)
-		} else if t != nil && t.Status == task.TaskAwaitingInput {
-			// Headless park: a task with no human attached is waiting for input.
-			// Surface it via the notifier. This fires ONLY on a clean park, not on
-			// terminal completion (t.Status != awaiting_input), the Decision-H
-			// undrivable skip (t == nil), or an errored drive (err != nil routes to
-			// errHandler and skips this branch).
-			d.notifier(t)
-		}
-		if ok {
-			// Consumed a queue item (driven, undrivable, or drive-errored);
-			// try the next one immediately.
-			continue
+			// Fall through to the interval wait: the errored claim was nacked
+			// and redelivered, so pacing the retry is what prevents a spin.
+		} else {
+			if t != nil && t.Status == task.TaskAwaitingInput {
+				// Headless park: a task with no human attached is waiting for
+				// input. Surface it via the notifier. This fires ONLY on a
+				// clean park — not terminals, undrivable skips (t == nil), or
+				// errored drives (routed to errHandler above).
+				d.notifier(t)
+			}
+			if ok {
+				// Consumed a queue item cleanly; try the next one immediately.
+				continue
+			}
 		}
 
-		// Empty queue (or dequeue error): wait one interval or stop.
+		// Empty queue or errored claim: wait one interval or stop.
 		select {
 		case <-ctx.Done():
 			return

@@ -2191,3 +2191,68 @@ func TestDependencyGateSkipsBlockedTaskAndLaterUnblocks(t *testing.T) {
 		t.Errorf("not drained after unblock: active=%q queue=%v", m.ActiveTaskID, m.Queue)
 	}
 }
+
+func TestRunNextReadyNacksOnDriveErrorThenSettles(t *testing.T) {
+	// First delivery: the drive errors (runner returns a Go error), so the
+	// claim is NACKED and the session redelivered. The errored run persisted
+	// the task as TaskFailed, so the SECOND delivery finds a terminal active
+	// task, no-ops (Decision H), and ACKS — the queue ends empty.
+	tm, tasks, meta, ready := newDepManager(&errThenCompleteRunner{}, nil)
+	ctx := context.Background()
+	seedReadySession(t, ctx, tasks, meta, ready, "task-x", "s1", "will error")
+
+	if _, ok, err := tm.RunNextReady(ctx); !ok || err == nil {
+		t.Fatalf("first RunNextReady = (_, %v, %v), want ok=true with a drive error", ok, err)
+	}
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || driven != nil {
+		t.Fatalf("second RunNextReady = (%+v, %v, %v), want (nil, true, nil) no-op on redelivery", driven, ok, err)
+	}
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("queue not empty after settle; the no-op delivery must ACK")
+	}
+	tk, _ := tasks.LoadTask(ctx, "task-x")
+	if tk.Status != task.TaskFailed {
+		t.Errorf("task status = %v, want TaskFailed (persisted by the errored run)", tk.Status)
+	}
+}
+
+func TestRunNextReadyAcksSkippedAwaitingInputSession(t *testing.T) {
+	// A parked (awaiting_input) active task must NOT be re-driven by a queue
+	// delivery — resuming it with its goal as the "answer" would corrupt the
+	// transcript (behavior also pinned by async_test.go's
+	// TestRunNextReadySkipsAwaitingInputSession). This variant seeds the parked
+	// state directly and additionally asserts the skip ACKS its claim, which is
+	// what makes at-least-once delivery a true no-op for parked sessions
+	// (relied on by Recover).
+	tm, tasks, meta, ready := newDepManager(&alwaysComplete{}, nil)
+	ctx := context.Background()
+	parked := &task.Task{
+		ID: "task-p", SessionID: "s1", Goal: "g", Status: task.TaskAwaitingInput,
+		Pending: []gantry.ToolCall{{ID: "call-1", Name: "ask_user"}},
+	}
+	if err := tasks.SaveTask(ctx, parked); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	if err := meta.SaveMeta(ctx, "s1", &task.SessionMeta{
+		ActiveTaskID: "task-p",
+		TaskRefs:     []task.TaskRef{{ID: "task-p", Status: task.TaskAwaitingInput}},
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := ready.Enqueue(ctx, "s1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || driven != nil {
+		t.Fatalf("RunNextReady = (%+v, %v, %v), want (nil, true, nil) skip", driven, ok, err)
+	}
+	tk, _ := tasks.LoadTask(ctx, "task-p")
+	if tk.Status != task.TaskAwaitingInput || len(tk.Working) != 0 {
+		t.Errorf("parked task disturbed: status=%v, working=%d msgs; want awaiting_input, untouched", tk.Status, len(tk.Working))
+	}
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("queue not empty; the skip must ACK, not redeliver")
+	}
+}

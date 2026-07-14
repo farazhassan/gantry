@@ -770,3 +770,45 @@ func TestDispatcherMultiWorkerDrainsAllSessions(t *testing.T) {
 		t.Errorf("ready queue not empty after multi-worker drain")
 	}
 }
+
+// failingMetaStore delegates to the embedded MetaStore but fails every
+// LoadMeta, making any claimed session a persistently-erroring (poison) entry.
+type failingMetaStore struct{ MetaStore }
+
+func (failingMetaStore) LoadMeta(context.Context, string) (*task.SessionMeta, error) {
+	return nil, errSentinel{}
+}
+
+func TestDispatcherPacesRetriesOnPersistentlyFailingSession(t *testing.T) {
+	// A nacked poison entry is redelivered forever; the loop must wait one poll
+	// interval between retries instead of hot-spinning on it.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, failingMetaStore{NewInMemoryMetaStore()}, ready)
+	ctx := context.Background()
+	if err := ready.Enqueue(ctx, "poison"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	var mu sync.Mutex
+	errCount := 0
+	d := NewDispatcher(tm,
+		WithPollInterval(5*time.Millisecond),
+		WithErrorHandler(func(error) { mu.Lock(); errCount++; mu.Unlock() }),
+	)
+	d.Start(ctx)
+	time.Sleep(60 * time.Millisecond)
+	d.Stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if errCount < 1 {
+		t.Fatalf("errHandler never fired; want at least one paced retry")
+	}
+	// 60ms / 5ms ≈ 12 paced cycles; a hot spin would produce thousands. The
+	// bound is deliberately generous to avoid scheduler flakes.
+	if errCount > 40 {
+		t.Fatalf("errHandler fired %d times in 60ms; loop is hot-spinning on a nacked entry", errCount)
+	}
+}
