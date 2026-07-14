@@ -131,12 +131,17 @@ func RunExample(ctx context.Context) error {
 		},
 	)
 
-	// Helper LLM: planner returns a 3-step plan (turn 1); the critic runs in
+	// Helper LLM: planner returns a 3-step plan (turn 1) as the propose_plan
+	// tool call its forced ToolChoice requires; the critic runs in
 	// PhasePostLLM on every iteration, so it is invoked once per main turn.
 	// With two main turns (tool-call, then final answer) that is two critic
 	// calls, so the critic needs two PASS verdicts (turns 2 and 3).
 	helperLLM := eval.NewMockLLMClient(
-		gantry.LLMResponse{Content: "1. parse inputs\n2. invoke calc\n3. report"},
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{{ID: "p1", Name: "propose_plan", Input: json.RawMessage(
+				`{"steps":[{"description":"parse inputs"},{"description":"invoke calc"},{"description":"report"}]}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
 		gantry.LLMResponse{Content: "VERDICT: PASS — proceeding with the tool call."},
 		gantry.LLMResponse{Content: "VERDICT: PASS — answer matches the tool output."},
 	)
