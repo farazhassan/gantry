@@ -40,6 +40,11 @@ func WithPollInterval(d time.Duration) DispatcherOption {
 
 // WithErrorHandler sets a callback invoked with any error returned by
 // RunNextReady. Default is a no-op. Doubles as the observability seam.
+//
+// Concurrency: with WithWorkers(n > 1) the callback may fire concurrently from
+// multiple worker goroutines, so it must be safe for concurrent use (guard any
+// shared state). It runs synchronously on a worker loop's goroutine, so it must
+// also be quick and non-blocking.
 func WithErrorHandler(f func(error)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.errHandler = f }
 }
@@ -49,9 +54,11 @@ func WithErrorHandler(f func(error)) DispatcherOption {
 // (carrying SessionID, Goal, Title, and the unfulfilled ask_user calls in
 // Pending) so an external bridge can surface the question. Default is a no-op.
 //
-// Fire-and-forget: it returns no error and runs synchronously on the dispatch
+// Fire-and-forget: it returns no error and runs synchronously on a worker
 // loop's goroutine, so it must be quick and non-blocking (hand off to a channel
-// or a separate goroutine for slow work). This mirrors WithErrorHandler.
+// or a separate goroutine for slow work). Concurrency: with WithWorkers(n > 1)
+// the callback may fire concurrently from multiple worker goroutines, so it
+// must be safe for concurrent use. This mirrors WithErrorHandler.
 func WithNotifier(f func(*task.Task)) DispatcherOption {
 	return func(dp *Dispatcher) { dp.notifier = f }
 }
