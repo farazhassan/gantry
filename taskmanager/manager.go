@@ -207,11 +207,18 @@ func (m *TaskManager) ResumeTask(ctx context.Context, sessionID, input string) (
 }
 
 // ActiveTask returns the session's current active task, or (nil, nil) if none.
+//
+// It deliberately does NOT take the per-session lock, so it never blocks behind
+// an in-flight drive — a busy session stays observable. The cost is eventual
+// consistency: mid-drive you may observe the pre-drive snapshot (the last
+// persisted task state, e.g. still pending/active moments before it suspends or
+// completes), and because the meta read and the task read are two separate
+// store reads they may straddle a drive's save points (it can even report a
+// just-finished task while the drive is popping the queue). Treat the result as
+// a point-in-time observation, not a lock-protected truth. Stores must be safe
+// for concurrent use — the in-memory implementations are (mutex-guarded,
+// deep-copying on save and load); see the MetaStore doc for the requirement.
 func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.Task, error) {
-	lk := m.lockFor(sessionID)
-	lk.Lock()
-	defer lk.Unlock()
-
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
 		return nil, err

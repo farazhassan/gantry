@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/task"
@@ -390,5 +391,66 @@ func TestStartTaskAsyncWhileDriveInFlight(t *testing.T) {
 	}
 	if len(m.TaskRefs) != 2 {
 		t.Errorf("TaskRefs len = %d, want 2 (inline + async)", len(m.TaskRefs))
+	}
+}
+
+func TestActiveTaskNonBlockingDuringDrive(t *testing.T) {
+	// An in-flight drive holds the per-session lock. ActiveTask must return
+	// promptly anyway (it reads the stores without the lock), showing the last
+	// PERSISTED snapshot — the documented eventual-consistency caveat: mid-drive
+	// you see the pre-drive status, here TaskPending.
+	tasks := task.NewInMemory()
+	r := &gatedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(),
+		WithIDFunc(func() string { return "task-1" }))
+	ctx := context.Background()
+
+	inlineDone := make(chan error, 1)
+	go func() {
+		_, err := tm.StartTask(ctx, "s1", "goal")
+		inlineDone <- err
+	}()
+	<-r.started // drive in flight, session lock held
+
+	type res struct {
+		tk  *task.Task
+		err error
+	}
+	got := make(chan res, 1)
+	go func() {
+		tk, err := tm.ActiveTask(ctx, "s1")
+		got <- res{tk, err}
+	}()
+
+	select {
+	case g := <-got:
+		if g.err != nil {
+			t.Fatalf("ActiveTask: %v", g.err)
+		}
+		if g.tk == nil || g.tk.ID != "task-1" {
+			t.Fatalf("ActiveTask = %+v, want task-1", g.tk)
+		}
+		if g.tk.Status != task.TaskPending {
+			t.Errorf("mid-drive status = %v, want TaskPending (pre-drive persisted snapshot)", g.tk.Status)
+		}
+	case <-time.After(2 * time.Second):
+		close(r.release) // unblock the drive so the test exits cleanly
+		<-inlineDone
+		t.Fatal("ActiveTask blocked behind the in-flight drive; want a non-blocking read")
+	}
+
+	close(r.release)
+	if err := <-inlineDone; err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	// After the drive completes there is no active task.
+	tk, err := tm.ActiveTask(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ActiveTask (after): %v", err)
+	}
+	if tk != nil {
+		t.Errorf("ActiveTask after completion = %+v, want nil", tk)
 	}
 }
