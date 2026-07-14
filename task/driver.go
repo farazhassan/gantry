@@ -49,6 +49,14 @@ type Runner interface {
 	Resume(ctx context.Context, prior *gantry.State) (*gantry.State, error)
 }
 
+// StreamingRunner is an OPTIONAL extension of Runner, mirroring how
+// gantry.StreamingLLMClient extends LLMClient: the Driver detects support via
+// a type assertion, so a plain Runner keeps working unchanged. *gantry.Agent
+// satisfies it via its existing ResumeStream method.
+type StreamingRunner interface {
+	ResumeStream(ctx context.Context, prior *gantry.State, sink gantry.EventSink) (*gantry.State, error)
+}
+
 // Driver executes a Task across as many bounded runs as its budget allows. It is
 // a sibling to session.Manager: it owns the multi-run loop and the hydrate/flush
 // boundary, leaving the core agent loop and middleware untouched.
@@ -56,8 +64,9 @@ type Driver struct {
 	agent        Runner
 	store        TaskStore
 	verifier     Verifier
-	tracer       gantry.Tracer // nil ⇒ no task spans
-	hydrateRunes int           // per-step Output budget for the hydrated projection
+	tracer       gantry.Tracer    // nil ⇒ no task spans
+	sink         gantry.EventSink // nil ⇒ no streaming; see WithEventSink
+	hydrateRunes int              // per-step Output budget for the hydrated projection
 }
 
 // Option configures a Driver at construction.
@@ -79,6 +88,36 @@ func WithVerifier(v Verifier) Option {
 // disables task spans (the default).
 func WithTracer(tr gantry.Tracer) Option {
 	return func(d *Driver) { d.tracer = tr }
+}
+
+// WithEventSink wires an EventSink so Advance streams each run's whole-run
+// Events (phase transitions, text deltas, tool calls/results, done) when the
+// Runner also implements StreamingRunner; a plain Runner silently falls back
+// to Resume. The Driver is constructed once and drives EVERY task, so the sink
+// is process-global: events from all tasks interleave on it, and consumers
+// demultiplex by Event.TaskID / Event.SessionID (stamped by the agent from the
+// State.Meta identity the Driver already seeds — no per-event wrapping happens
+// here). The sink is called synchronously on the run goroutine; wrap slow
+// consumers with gantry.NewBufferedSink so a laggard cannot stall the
+// Dispatcher. A nil sink is ignored (streaming stays off, the default).
+func WithEventSink(sink gantry.EventSink) Option {
+	return func(d *Driver) {
+		if sink != nil {
+			d.sink = sink
+		}
+	}
+}
+
+// resume runs one prepared, non-terminal State to termination, streaming when
+// both a sink is configured and the runner supports it — the same optional-
+// capability type assertion the core loop uses for StreamingLLMClient.
+func (d *Driver) resume(ctx context.Context, state *gantry.State) (*gantry.State, error) {
+	if d.sink != nil {
+		if sr, ok := d.agent.(StreamingRunner); ok {
+			return sr.ResumeStream(ctx, state, d.sink)
+		}
+	}
+	return d.agent.Resume(ctx, state)
 }
 
 // WithHydrateOutputRunes overrides the per-step Output rune budget applied
@@ -207,7 +246,7 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 			Trace:    gantry.NewTrace(),
 		}
 
-		state, err := d.agent.Resume(ctx, state)
+		state, err := d.resume(ctx, state)
 		if err != nil {
 			// The run's ctx is typically already cancelled/expired here, so the
 			// terminal status must be persisted with a detached context — a
@@ -350,3 +389,8 @@ func (d *Driver) save(ctx context.Context, t *Task) error {
 
 // Compile-time check: *gantry.Agent satisfies Runner via its Resume method.
 var _ Runner = (*gantry.Agent)(nil)
+
+// Compile-time check: *gantry.Agent also satisfies StreamingRunner via its
+// ResumeStream method, so WithEventSink streams out of the box with the
+// default agent runner.
+var _ StreamingRunner = (*gantry.Agent)(nil)
