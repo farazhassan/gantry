@@ -22,11 +22,11 @@ func newTestCollector() *spawnCollector {
 
 func TestSpawnCollectorAddMintsAndDrainsFIFO(t *testing.T) {
 	c := newTestCollector()
-	id1, err := c.add("goal-1", "title-1")
+	id1, err := c.add("goal-1", "title-1", nil)
 	if err != nil {
 		t.Fatalf("add 1: %v", err)
 	}
-	id2, err := c.add("goal-2", "")
+	id2, err := c.add("goal-2", "", nil)
 	if err != nil {
 		t.Fatalf("add 2: %v", err)
 	}
@@ -37,10 +37,12 @@ func TestSpawnCollectorAddMintsAndDrainsFIFO(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("drain len = %d, want 2", len(got))
 	}
-	if got[0] != (spawnReq{goal: "goal-1", title: "title-1", taskID: "task-1"}) {
+	if got[0].goal != "goal-1" || got[0].title != "title-1" || got[0].taskID != "task-1" ||
+		got[0].sessionID != "" || got[0].dependsOn != nil {
 		t.Errorf("got[0] = %+v, want {goal-1 title-1 task-1}", got[0])
 	}
-	if got[1] != (spawnReq{goal: "goal-2", taskID: "task-2"}) {
+	if got[1].goal != "goal-2" || got[1].title != "" || got[1].taskID != "task-2" ||
+		got[1].sessionID != "" || got[1].dependsOn != nil {
 		t.Errorf("got[1] = %+v, want {goal-2 \"\" task-2}", got[1])
 	}
 	// Drain clears the buffer.
@@ -59,7 +61,11 @@ func TestSpawnCollectorAddSessionMintsBothIDs(t *testing.T) {
 		t.Errorf("ids = (%q,%q), want (sess-1, task-1)", sid, tid)
 	}
 	sess := c.drainSessions()
-	if len(sess) != 1 || sess[0] != (spawnReq{goal: "new-1", title: "title-1", taskID: "task-1", sessionID: "sess-1"}) {
+	if len(sess) != 1 {
+		t.Fatalf("drainSessions len = %d, want 1", len(sess))
+	}
+	if sess[0].goal != "new-1" || sess[0].title != "title-1" || sess[0].taskID != "task-1" ||
+		sess[0].sessionID != "sess-1" || sess[0].dependsOn != nil {
 		t.Errorf("sessions = %+v, want one fully-populated req", sess)
 	}
 	if again := c.drainSessions(); len(again) != 0 {
@@ -69,7 +75,7 @@ func TestSpawnCollectorAddSessionMintsBothIDs(t *testing.T) {
 
 func TestSpawnCollectorBuffersIndependent(t *testing.T) {
 	c := newTestCollector()
-	if _, err := c.add("same-1", ""); err != nil {
+	if _, err := c.add("same-1", "", nil); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	if _, _, err := c.addSession("new-1", "", ""); err != nil {
@@ -87,7 +93,7 @@ func TestSpawnCollectorDepthGate(t *testing.T) {
 	c := newTestCollector()
 	c.parentDepth = DefaultMaxSpawnDepth // a child would be depth 4 > 3
 
-	if _, err := c.add("g", ""); err == nil || !strings.Contains(err.Error(), "depth") {
+	if _, err := c.add("g", "", nil); err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Errorf("add at max depth: err = %v, want a depth error", err)
 	}
 	if _, _, err := c.addSession("g", "", ""); err == nil || !strings.Contains(err.Error(), "depth") {
@@ -130,5 +136,34 @@ func TestCollectorCarriesRunIdentity(t *testing.T) {
 	}
 	if got.sessionID != "s1" || got.taskID != "t1" {
 		t.Errorf("identity = (%q, %q), want (s1, t1)", got.sessionID, got.taskID)
+	}
+}
+
+func TestSpawnCollectorCarriesDependsOn(t *testing.T) {
+	c := newTestCollector()
+	id1, err := c.add("goal-1", "", nil)
+	if err != nil {
+		t.Fatalf("add 1: %v", err)
+	}
+	deps := []string{id1}
+	id2, err := c.add("goal-2", "t2", deps)
+	if err != nil {
+		t.Fatalf("add 2: %v", err)
+	}
+	if id1 != "task-1" || id2 != "task-2" {
+		t.Fatalf("minted ids = (%q, %q), want (task-1, task-2)", id1, id2)
+	}
+	// The collector must copy the deps slice, not alias the caller's.
+	deps[0] = "mutated"
+
+	got := c.drain()
+	if len(got) != 2 {
+		t.Fatalf("drain len = %d, want 2", len(got))
+	}
+	if got[0].dependsOn != nil {
+		t.Errorf("got[0].dependsOn = %v, want nil", got[0].dependsOn)
+	}
+	if len(got[1].dependsOn) != 1 || got[1].dependsOn[0] != "task-1" {
+		t.Errorf("got[1].dependsOn = %v, want [task-1] (isolated from caller mutation)", got[1].dependsOn)
 	}
 }

@@ -136,3 +136,30 @@ func TestInMemoryListUnknownSessionEmpty(t *testing.T) {
 		t.Errorf("want empty, got %d", len(refs))
 	}
 }
+
+func TestInMemoryDependsOnRoundTripAndIsolation(t *testing.T) {
+	s := NewInMemory()
+	ctx := context.Background()
+	in := &Task{ID: "t3", SessionID: "s1", Goal: "g", DependsOn: []string{"t1", "t2"}}
+	if err := s.SaveTask(ctx, in); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	// Mutating the caller's slice after save must not affect the store.
+	in.DependsOn[0] = "mutated"
+	got, err := s.LoadTask(ctx, "t3")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if len(got.DependsOn) != 2 || got.DependsOn[0] != "t1" || got.DependsOn[1] != "t2" {
+		t.Errorf("DependsOn = %v, want [t1 t2]", got.DependsOn)
+	}
+	// Mutating the loaded slice must not affect the store either.
+	got.DependsOn[1] = "mutated"
+	again, err := s.LoadTask(ctx, "t3")
+	if err != nil {
+		t.Fatalf("LoadTask again: %v", err)
+	}
+	if again.DependsOn[1] != "t2" {
+		t.Errorf("store corrupted via loaded slice: %v", again.DependsOn)
+	}
+}

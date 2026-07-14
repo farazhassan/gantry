@@ -31,6 +31,8 @@ type TaskManager struct {
 	policy        SpawnPolicy      // zero value: default depth cap, inherit-limits budgets
 	orphanHandler func(*task.Task) // result-join drops: parent missing/terminal
 
+	spawnErrHandler func(error)
+
 	mu    sync.Mutex
 	locks map[string]*sessionLock
 
@@ -66,6 +68,21 @@ func WithOrphanResultHandler(f func(*task.Task)) Option {
 	}
 }
 
+// WithSpawnErrorHandler sets a callback invoked when a drain-time spawn problem
+// is recorded — today, a create_task depends_on referencing an id that is not a
+// task in the spawning session (Decision I). The spawn is persisted cancelled
+// rather than failing the parent's drive, so this callback is the only signal.
+// Default no-op. Doubles as the observability seam (mirrors the Dispatcher's
+// WithErrorHandler and the Scheduler's WithScheduleErrorHandler). A nil f is
+// ignored (the default is kept).
+func WithSpawnErrorHandler(f func(error)) Option {
+	return func(m *TaskManager) {
+		if f != nil {
+			m.spawnErrHandler = f
+		}
+	}
+}
+
 // NewTaskManager builds a TaskManager over a Driver, the same TaskStore the
 // Driver persists through, a MetaStore, and a ReadyQueue for cross-session
 // spawned work. It panics if any is nil.
@@ -74,15 +91,16 @@ func NewTaskManager(driver *task.Driver, tasks task.TaskStore, meta MetaStore, r
 		panic("taskmanager: NewTaskManager requires non-nil driver, tasks, meta, and ready")
 	}
 	m := &TaskManager{
-		driver:        driver,
-		tasks:         tasks,
-		meta:          meta,
-		ready:         ready,
-		newID:         newTaskID,
-		newSessionID:  newSessionID,
-		orphanHandler: func(*task.Task) {},
-		locks:         make(map[string]*sessionLock),
-		cancels:       make(map[string]context.CancelFunc),
+		driver:          driver,
+		tasks:           tasks,
+		meta:            meta,
+		ready:           ready,
+		newID:           newTaskID,
+		newSessionID:    newSessionID,
+		orphanHandler:   func(*task.Task) {},
+		spawnErrHandler: func(error) {},
+		locks:           make(map[string]*sessionLock),
+		cancels:         make(map[string]context.CancelFunc),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -395,14 +413,15 @@ func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.C
 	return sm.ChildRefs, nil
 }
 
-// RunNextReady dequeues one ready session (spawned cross-session work, or a
+// RunNextReady claims one ready session (spawned cross-session work, or a
 // same-session task started via StartTaskAsync) and drives its active task to
 // suspension or terminal via the existing drive engine. It returns
 // (task, true, nil) for a driven session; (nil, false, nil) when the ready
-// queue is empty; (nil, true, nil) when the dequeued session has nothing
-// drivable (Decision H): an empty ActiveTaskID, an already-terminal active
-// task, or an active task parked awaiting_input — driving that one would feed
-// its goal to its pending ask_user call, so the resume is left to ResumeTask.
+// queue is empty; (nil, true, nil) when the claimed session has nothing
+// drivable — an empty ActiveTaskID, an already-terminal active task (Decision
+// H), or an active task parked awaiting HUMAN input, which only ResumeTask may
+// feed (driving it would feed the task's goal to its pending ask_user call as
+// if it were the user's reply — Decision H extension, plan 13).
 //
 // Result join (plan 07): the join keys off the ORIGINALLY-ACTIVATED task of the
 // dequeued session, not drive's return value — a same-session FIFO drain
@@ -417,12 +436,24 @@ func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.C
 // the drive itself already committed.
 //
 // The caller composes this: loop for a sequential drain, or call from N
-// goroutines for parallel drive (each dequeue yields a distinct session id ->
+// goroutines for parallel drive (each claim yields a distinct session id ->
 // distinct per-session lock, so goroutines never contend).
 //
-// A returned error means the session id has already been consumed from the queue
-// (FIFO, no claim/ack — Decision E) and is not re-enqueued; the underlying task
-// stays durable, so retry is the caller's responsibility.
+// Delivery is claim-based (Decision L, superseding Decision E's consumed-on-
+// dequeue FIFO): a clean outcome — driven, or skipped as undrivable — ACKS the
+// claim; any error NACKS it, so the session id is redelivered rather than
+// lost. Redelivery makes consumption at-least-once. The status check above,
+// taken under the per-session lock, is what turns a duplicate delivery into a
+// no-op: by the time a duplicate acquires the lock, the first delivery has
+// either finished (ActiveTaskID cleared, active task terminal, or active task
+// parked — all skipped and acked) or persisted nothing (re-driving is exactly
+// the retry we want). The claim is settled on the drive-phase outcome alone;
+// the result join runs after the ack, and a join error does NOT nack (a
+// redelivery could not retry the join — the drive already committed).
+// Caveat: a drive that persisted partial progress before
+// erroring re-runs from the saved Working, so transcript appends and budget
+// counts can duplicate — Driver.Advance is not yet idempotent (2026-07-13
+// design-review risk).
 func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error) {
 	sid, ok, err := m.ready.Dequeue(ctx)
 	if err != nil {
@@ -433,7 +464,7 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	}
 
 	driven, activatedID, err := m.driveReady(ctx, sid)
-	if err != nil {
+	if err = m.settle(ctx, sid, err); err != nil {
 		return driven, true, err
 	}
 	if driven == nil {
@@ -568,6 +599,19 @@ func (m *TaskManager) deliverResult(ctx context.Context, child *task.Task) error
 	return nil
 }
 
+// settle finishes a ReadyQueue claim: Ack on a clean outcome (err == nil),
+// Nack (redelivery) otherwise. The original error is preserved; a settlement
+// failure is joined onto it so neither is lost.
+func (m *TaskManager) settle(ctx context.Context, sid string, err error) error {
+	if err == nil {
+		return m.ready.Ack(ctx, sid)
+	}
+	if nerr := m.ready.Nack(ctx, sid); nerr != nil {
+		return errors.Join(err, nerr)
+	}
+	return err
+}
+
 // detachedSpec collects the optional overrides for StartDetachedSession.
 type detachedSpec struct {
 	sessionID       string
@@ -680,6 +724,65 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 	return nt, nil
 }
 
+// Recover scans every stored session and re-enqueues each one whose active
+// task is still drivable without input — TaskPending or TaskActive (a run that
+// never started, or one interrupted mid-flight by a crash). Call it at process
+// start, after wiring the TaskManager and before starting the Dispatcher: the
+// durable stores survive a crash but the in-memory ReadyQueue (including its
+// claimed set) does not, so this scan is the durable backstop that claim/ack
+// redelivery cannot provide across processes (Decision M).
+//
+// Sessions whose active task is awaiting_input are deliberately skipped: they
+// park for a HUMAN answer (ResumeTask), and a queue delivery must not resume
+// them with the task goal as input (RunNextReady also skips them defensively).
+//
+// Recovery is at-least-once: a session already enqueued (or mid-drive) may be
+// enqueued again. That is safe because RunNextReady re-checks status under the
+// per-session lock — the duplicate arrives after the first delivery finished
+// (terminal or parked: skipped and acked) or persisted nothing (re-driving is
+// the desired retry). Caveat: a crash that persisted partial run progress
+// re-drives from the saved Working, so transcript appends and budget counts
+// can duplicate — Driver.Advance is not yet idempotent (2026-07-13 design-
+// review risk).
+//
+// Returns the number of sessions enqueued. A store error aborts the scan
+// (already-enqueued sessions stay enqueued); a session whose active task id
+// has no stored task is skipped as corrupt-but-ignorable.
+func (m *TaskManager) Recover(ctx context.Context) (int, error) {
+	ids, err := m.meta.ListSessions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
+	for _, sid := range ids {
+		sm, err := m.meta.LoadMeta(ctx, sid)
+		if errors.Is(err, ErrMetaNotFound) {
+			continue
+		}
+		if err != nil {
+			return recovered, err
+		}
+		if sm.ActiveTaskID == "" {
+			continue
+		}
+		t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+		if errors.Is(err, task.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return recovered, err
+		}
+		if t.Status != task.TaskPending && t.Status != task.TaskActive {
+			continue // terminal, or parked awaiting a human
+		}
+		if err := m.ready.Enqueue(ctx, sid); err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
 // StartTaskAsync creates a task for the session WITHOUT driving it: the task is
 // persisted, appended to the session's meta (active if the session has no
 // active task, queued behind it otherwise), and the session id is enqueued on
@@ -746,9 +849,9 @@ func (m *TaskManager) appendTaskToMeta(ctx context.Context, sessionID string, t 
 }
 
 // drive advances the active task from a single input string and, when it
-// terminates, drains the pending FIFO queue. See driveWith for the loop
-// contract; input is the goal seed for a freshly-activated task or the user's
-// answer on resume — Driver.Advance distinguishes these.
+// terminates, drains the pending queue dependency-aware. See driveWith for the
+// loop contract; input is the goal seed for a freshly-activated task or the
+// user's answer on resume — Driver.Advance distinguishes these.
 func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, input string) (*task.Task, error) {
 	return m.driveWith(ctx, sessionID, sm, t, func(c context.Context, tk *task.Task) (*task.Task, error) {
 		return m.driver.Advance(c, tk, input)
@@ -756,11 +859,12 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 }
 
 // driveWith advances the active task via first — the seeded initial advance —
-// and, when it terminates, drains the pending FIFO queue: pop the head into
-// ActiveTaskID, save meta, and drive it from its own goal. It returns when a
-// task suspends (awaiting_input) or the queue is empty. A queued task that
-// fails is recorded and the drain continues to the next (Decision D). sm is
-// the already-loaded SessionMeta.
+// and, when it terminates, drains the pending queue dependency-aware via
+// nextEligible: the first queued task whose depends_on are all done becomes
+// ActiveTaskID and is driven from its own goal (Decisions J, K). It returns
+// when a task suspends (awaiting_input) or nothing is eligible. A queued task
+// that fails is recorded and the drain continues to the next (Decision D). sm
+// is the already-loaded SessionMeta.
 func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.SessionMeta, t *task.Task, first func(context.Context, *task.Task) (*task.Task, error)) (*task.Task, error) {
 	driveCtx, cancelFn := context.WithCancel(ctx)
 	m.registerCancel(sessionID, cancelFn)
@@ -797,28 +901,28 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 			return t, nil // suspended — caller resumes later
 		}
 
-		// terminal: done/failed/cancelled
+		// terminal: done/failed/cancelled — drain the queue dependency-aware.
 		sm.ActiveTaskID = ""
-		if len(sm.Queue) == 0 {
+		var next *task.Task
+		next, err = m.nextEligible(ctx, sm)
+		if err != nil {
+			return t, err
+		}
+		if next == nil {
+			// Queue empty, or every queued task is blocked on a non-terminal
+			// dependency (Decision K): persist and stop. Blocked tasks are
+			// re-checked by nextEligible on the session's next terminal, so
+			// they cannot be orphaned while the session makes progress.
 			if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
 				return t, err
 			}
 			return t, nil
 		}
-
-		next := sm.Queue[0]
-		sm.Queue = sm.Queue[1:]
-		sm.ActiveTaskID = next
+		sm.ActiveTaskID = next.ID
 		if err = m.meta.SaveMeta(ctx, sessionID, sm); err != nil {
 			return t, err
 		}
-
-		var nt *task.Task
-		nt, err = m.tasks.LoadTask(ctx, next)
-		if err != nil {
-			return t, err
-		}
-		t = nt
+		t = next
 		// Every drained task after the first runs from its own goal.
 		advance = func(c context.Context, tk *task.Task) (*task.Task, error) {
 			return m.driver.Advance(c, tk, tk.Goal)
@@ -826,13 +930,77 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 	}
 }
 
+// nextEligible scans sm.Queue in FIFO order for the first task whose
+// dependencies are all TaskDone, removes it from the queue, and returns it.
+// Dependency statuses are loaded from the TaskStore (authoritative), not from
+// the refs. Along the way it cancels any queued task with a failed/cancelled
+// dependency (Decision J): the dependent is persisted TaskCancelled with a
+// cause note appended to its Working, its ref is synced, and the scan
+// continues at the same index — a dependency is always minted (hence queued)
+// before its dependents, so a cancellation at position i can cascade only to
+// positions after i, and one bounded forward pass settles the whole queue (no
+// livelock). Returns (nil, nil) when the queue is empty or every remaining
+// task is blocked on a non-terminal dependency; blocked tasks stay queued and
+// are re-checked by this same scan on the session's next terminal (Decision K).
+func (m *TaskManager) nextEligible(ctx context.Context, sm *task.SessionMeta) (*task.Task, error) {
+	i := 0
+	for i < len(sm.Queue) {
+		qt, err := m.tasks.LoadTask(ctx, sm.Queue[i])
+		if err != nil {
+			return nil, err
+		}
+		var badDep *task.Task // first dependency that ended failed/cancelled
+		blocked := false
+		for _, depID := range qt.DependsOn {
+			dep, err := m.tasks.LoadTask(ctx, depID)
+			if err != nil {
+				return nil, err
+			}
+			if dep.Status == task.TaskDone {
+				continue
+			}
+			if dep.Status.IsTerminal() { // failed or cancelled
+				badDep = dep
+				break // a dead dependency decides the task's fate outright
+			}
+			blocked = true // non-terminal dep; keep scanning for a dead one
+		}
+		switch {
+		case badDep != nil:
+			qt.Status = task.TaskCancelled
+			qt.Working = append(qt.Working, gantry.Message{
+				Role:    gantry.RoleSystem,
+				Content: fmt.Sprintf("Task cancelled: dependency %s ended %s.", badDep.ID, badDep.Status),
+			})
+			qt.UpdatedAt = time.Now().UTC()
+			if err := m.tasks.SaveTask(ctx, qt); err != nil {
+				return nil, err
+			}
+			syncRef(sm, qt)
+			sm.Queue = append(sm.Queue[:i], sm.Queue[i+1:]...)
+			// i not advanced: the next candidate shifted into position i.
+		case blocked:
+			i++ // leave it queued; a later terminal re-checks it
+		default:
+			sm.Queue = append(sm.Queue[:i], sm.Queue[i+1:]...)
+			return qt, nil
+		}
+	}
+	return nil, nil
+}
+
 // enqueueSpawns drains two buffers from the just-finished run of parent,
 // consuming the ids the collector minted at Invoke time (the ids the model
 // already saw) and stamping parent linkage, depth, and the policy-derived
 // budget on every child:
-//   - same-session requests (create_task): tasks are persisted under their
-//     pre-minted ids and appended to sm.Queue so they run in the current
-//     session's FIFO after the active task terminates.
+//   - same-session requests (create_task): each is persisted under its
+//     pre-minted id. depends_on ids are validated against the session's
+//     TaskRefs history (Decision I): a valid spawn is appended pending to
+//     sm.Queue; a spawn with an unknown/foreign/self/forward id is persisted
+//     TaskCancelled with a cause note, NOT enqueued, and reported via the
+//     spawn error handler — the parent's drive is unaffected. Because refs
+//     are appended as the loop goes, a spawn may depend on any earlier
+//     same-session task, including earlier spawns from this same drain.
 //   - new-session requests (spawn_session): each pre-minted session/task id
 //     pair is handed to StartDetachedSession (persist-before-enqueue), and the
 //     parent's meta records a ChildRef so cancellation can cascade. The
@@ -841,18 +1009,34 @@ func (m *TaskManager) driveWith(ctx context.Context, sessionID string, sm *task.
 // Runs under the session lock, on the orchestrator goroutine, after Advance
 // returned — never re-entering the driver. A no-op when both buffers are empty.
 func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, parent *task.Task, coll *spawnCollector) error {
+	known := make(map[string]bool, len(sm.TaskRefs))
+	for _, ref := range sm.TaskRefs {
+		known[ref.ID] = true
+	}
 	for _, req := range coll.drain() {
 		nt := &task.Task{
 			ID:              req.taskID,
 			SessionID:       sessionID,
 			Title:           req.title,
 			Goal:            req.goal,
+			DependsOn:       req.dependsOn,
 			Status:          task.TaskPending,
 			ParentSessionID: sessionID,
 			ParentTaskID:    parent.ID,
 			Depth:           parent.Depth + 1,
 			Budget:          m.childBudget(parent),
 			CreatedAt:       time.Now().UTC(),
+		}
+		for _, dep := range req.dependsOn {
+			if !known[dep] {
+				nt.Status = task.TaskCancelled
+				nt.Working = append(nt.Working, gantry.Message{
+					Role:    gantry.RoleSystem,
+					Content: fmt.Sprintf("Task cancelled at creation: depends_on references %q, which is not a task in this session.", dep),
+				})
+				m.spawnErrHandler(fmt.Errorf("taskmanager: spawned task %s cancelled: depends_on references %q, not a task in session %s", nt.ID, dep, sessionID))
+				break
+			}
 		}
 		if err := m.tasks.SaveTask(ctx, nt); err != nil {
 			return err
@@ -863,7 +1047,10 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 			Status:    nt.Status,
 			CreatedAt: nt.CreatedAt,
 		})
-		sm.Queue = append(sm.Queue, nt.ID)
+		known[nt.ID] = true
+		if nt.Status == task.TaskPending {
+			sm.Queue = append(sm.Queue, nt.ID)
+		}
 	}
 	for _, req := range coll.drainSessions() {
 		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,

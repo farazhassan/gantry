@@ -57,6 +57,13 @@ type Task struct {
 	SessionID string // ID of the session that created this task
 	Title     string
 	Goal      string
+	// DependsOn lists task ids in the SAME session that must reach TaskDone
+	// before this task is eligible to run. If any listed task ends failed or
+	// cancelled, this task is cancelled at drain time instead of run (Decision
+	// J). v1 supports same-session edges only; cross-session dependencies are
+	// out of scope. Ids referencing tasks outside the session are rejected at
+	// drain time (Decision I).
+	DependsOn []string
 	Status    TaskStatus
 	// Parent linkage: set on tasks spawned by another task's run (create_task /
 	// spawn_session). All zero on root tasks started directly by a caller.

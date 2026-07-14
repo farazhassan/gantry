@@ -18,6 +18,10 @@ import (
 type MetaStore interface {
 	LoadMeta(ctx context.Context, sessionID string) (*task.SessionMeta, error)
 	SaveMeta(ctx context.Context, sessionID string, m *task.SessionMeta) error
+	// ListSessions returns the id of every session with stored meta, in a
+	// stable order (the in-memory impl sorts lexicographically). Used by
+	// TaskManager.Recover to rebuild the ReadyQueue after a crash.
+	ListSessions(ctx context.Context) ([]string, error)
 }
 
 // ErrMetaNotFound is returned by LoadMeta when a session has no meta yet.

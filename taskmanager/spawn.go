@@ -13,13 +13,16 @@ import (
 // model) and consumed verbatim by enqueueSpawns after the run returns.
 // sessionID is set only for new-session (spawn_session) requests, as is agent —
 // the registry key of the runner profile the spawned task should run under
-// ("" ⇒ default runner).
+// ("" ⇒ default runner). dependsOn carries the same-session task ids a
+// create_task spawn is gated on (plan 13), validated at drain time by
+// enqueueSpawns.
 type spawnReq struct {
 	goal      string
 	title     string
 	taskID    string
 	sessionID string
 	agent     string
+	dependsOn []string
 }
 
 // spawnCollector buffers spawn requests during one Advance. It carries the
@@ -60,16 +63,23 @@ func (c *spawnCollector) depthErr() error {
 
 // add mints a task id, buffers a same-session spawn request, and returns the
 // id. It errors (without buffering) when the spawn would exceed the max depth.
-// Safe for concurrent use (the run goroutine may invoke tools from parallel
-// tool dispatch).
-func (c *spawnCollector) add(goal, title string) (string, error) {
+// dependsOn lists previously-minted same-session task ids; it is defensively
+// copied here and validated at drain time — the collector has no store access
+// (Decision I). Safe for concurrent use (the run goroutine may invoke tools
+// from parallel tool dispatch).
+func (c *spawnCollector) add(goal, title string, dependsOn []string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.depthErr(); err != nil {
 		return "", err
 	}
 	id := c.newTaskID()
-	c.goals = append(c.goals, spawnReq{goal: goal, title: title, taskID: id})
+	var deps []string
+	if len(dependsOn) > 0 {
+		deps = make([]string, len(dependsOn))
+		copy(deps, dependsOn)
+	}
+	c.goals = append(c.goals, spawnReq{goal: goal, title: title, taskID: id, dependsOn: deps})
 	return id, nil
 }
 
