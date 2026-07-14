@@ -12,11 +12,12 @@ import (
 // bracket text correctly and close an open message before any other event.
 // Use one Mapper per run.
 type Mapper struct {
-	threadID string
-	runID    string
-	started  bool   // RUN_STARTED emitted?
-	openMsg  string // non-empty messageId while a text message is open
-	msgSeq   int    // monotonic counter for synthesized messageIds
+	threadID     string
+	runID        string
+	started      bool   // RUN_STARTED emitted?
+	identitySent bool   // CUSTOM gantry.identity emitted?
+	openMsg      string // non-empty messageId while a text message is open
+	msgSeq       int    // monotonic counter for synthesized messageIds
 }
 
 // NewMapper returns a Mapper for a single run identified by threadID/runID.
@@ -24,13 +25,29 @@ func NewMapper(threadID, runID string) *Mapper {
 	return &Mapper{threadID: threadID, runID: runID}
 }
 
+// identityName is the CUSTOM event name under which the Mapper forwards the
+// Gantry identity stamped on run events.
+const identityName = "gantry.identity"
+
+// runIdentity is the CUSTOM "gantry.identity" payload: the identity fields
+// Gantry stamps on its Events, in AG-UI camelCase. Empty fields are omitted so
+// the frame stays minimal.
+type runIdentity struct {
+	RunID     string `json:"runId,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+}
+
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
-// RUN_STARTED lazily before the first translated event, and closes any open
-// text message (with TEXT_MESSAGE_END) before emitting a non-text event.
+// RUN_STARTED lazily before the first translated event, forwards the run's
+// Gantry identity once as a CUSTOM "gantry.identity" event, and closes any
+// open text message (with TEXT_MESSAGE_END) before emitting a non-text event.
 // RUN_ERROR is intentionally not produced here — a Go error is not part of the
 // Event stream; the Sink emits it from RunStream's returned error.
 func (m *Mapper) Map(ev gantry.Event) []Event {
 	out := m.startFrame()
+	out = append(out, m.identityFrame(ev)...)
 
 	switch ev.Type {
 	case gantry.EventTextDelta:
@@ -84,6 +101,26 @@ func (m *Mapper) startFrame() []Event {
 	}
 	m.started = true
 	return []Event{newRunStarted(m.threadID, m.runID)}
+}
+
+// identityFrame forwards the Gantry identity stamped on ev as one CUSTOM
+// "gantry.identity" event, the first time any identity field is seen. Events
+// without identity (pre-identity producers, replayed streams) emit nothing,
+// so their wire output is unchanged.
+func (m *Mapper) identityFrame(ev gantry.Event) []Event {
+	if m.identitySent {
+		return nil
+	}
+	if ev.RunID == "" && ev.SessionID == "" && ev.TaskID == "" && ev.Agent == "" {
+		return nil
+	}
+	m.identitySent = true
+	return []Event{newCustom(identityName, runIdentity{
+		RunID:     ev.RunID,
+		SessionID: ev.SessionID,
+		TaskID:    ev.TaskID,
+		Agent:     ev.Agent,
+	})}
 }
 
 // closeText emits TEXT_MESSAGE_END for an open text message, if any, and clears
