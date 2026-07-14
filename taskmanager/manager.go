@@ -27,6 +27,7 @@ type TaskManager struct {
 	ready        ReadyQueue
 	newID        func() string
 	newSessionID func() string
+	policy       SpawnPolicy // zero value: default depth cap, inherit-limits budgets
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
