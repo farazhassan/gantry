@@ -29,6 +29,7 @@ const (
 	FieldTrace            Field = "Trace"
 	FieldUsage            Field = "Usage"
 	FieldMeta             Field = "Meta"
+	FieldHandoff          Field = "Handoff"
 )
 
 // AllFields returns every Field constant (used to validate coverage of State).
@@ -37,7 +38,7 @@ func AllFields() []Field {
 		FieldInput, FieldTask, FieldSystem, FieldMessages, FieldTools, FieldRetrieved,
 		FieldPlan, FieldIteration, FieldLastResponse, FieldPendingToolCalls,
 		FieldToolResults, FieldDone, FieldDoneReason, FieldFinalOutput, FieldTrace,
-		FieldUsage, FieldMeta,
+		FieldUsage, FieldMeta, FieldHandoff,
 	}
 }
 

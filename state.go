@@ -25,6 +25,7 @@ type State struct {
 	Done        bool
 	DoneReason  DoneReason
 	FinalOutput string
+	Handoff     *Handoff // set by routing middleware alongside DoneHandoff; nil otherwise
 
 	// Observability
 	Trace *Trace
@@ -42,4 +43,23 @@ func NewState(input string) *State {
 		Trace: NewTrace(),
 		Meta:  map[string]any{},
 	}
+}
+
+// HandoffMode selects how a handoff moves work between agents.
+type HandoffMode string
+
+const (
+	HandoffTransfer HandoffMode = "transfer" // conversation moves to the target agent
+	HandoffDelegate HandoffMode = "delegate" // target runs, result returns to source
+)
+
+// Handoff is a routing decision recorded by middleware (e.g. a router's
+// PhasePostLLM middleware) alongside Done/DoneHandoff. The core loop never
+// reads it — the layer above the run does: session.Session re-runs a
+// transfer turn on the target agent; delegate handling belongs to the
+// subagent-delegate plan.
+type Handoff struct {
+	Target string // registry key of the target agent
+	Mode   HandoffMode
+	Reason string
 }

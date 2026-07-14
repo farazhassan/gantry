@@ -3,6 +3,7 @@ package gantry
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // RunFrom starts a new turn seeded from prior, appends input as a new user
@@ -60,6 +61,45 @@ func newStateFrom(prior *State, input string) *State {
 
 	return &State{
 		Input:    input,
+		Messages: msgs,
+		Usage:    prior.Usage,
+		Meta:     meta,
+		Trace:    NewTrace(),
+	}
+}
+
+// HandoffState builds the State a handoff target agent resumes from: the
+// accumulated conversation (Messages) and cumulative Usage carry over, while
+// termination fields, per-run scratch, and the Handoff record itself start
+// zero-valued — so the returned State is NON-terminal and ready for
+// Resume/ResumeStream on the target agent. (A DoneHandoff state is terminal,
+// and the Resume family no-ops on terminal priors; this helper is the
+// prescribed rebuild, mirroring the DoneClientToolCall workflow.)
+//
+// Meta transfer contract: keys containing "/" are component-private under the
+// State.Meta namespacing convention (e.g. "components/tool:client_tools" set
+// by tool.Client) and are STRIPPED — the target agent's own PhaseStart
+// middleware rebuilds its scratch. All other keys (e.g. "task.id",
+// "task.session_id" seeded by task.Driver) carry over unchanged.
+//
+// A nil prior returns a fresh empty State, honoring the Run-family contract
+// that a returned *State is never nil.
+func HandoffState(prior *State) *State {
+	if prior == nil {
+		return NewState("")
+	}
+	msgs := make([]Message, len(prior.Messages))
+	copy(msgs, prior.Messages)
+
+	meta := make(map[string]any, len(prior.Meta))
+	for k, v := range prior.Meta {
+		if strings.Contains(k, "/") {
+			continue // component-private; stays with the source run
+		}
+		meta[k] = v
+	}
+
+	return &State{
 		Messages: msgs,
 		Usage:    prior.Usage,
 		Meta:     meta,
