@@ -28,8 +28,8 @@ type TaskManager struct {
 	ready         ReadyQueue
 	newID         func() string
 	newSessionID  func() string
-	policy        SpawnPolicy       // zero value: default depth cap, inherit-limits budgets
-	orphanHandler func(*task.Task)  // result-join drops: parent missing/terminal
+	policy        SpawnPolicy      // zero value: default depth cap, inherit-limits budgets
+	orphanHandler func(*task.Task) // result-join drops: parent missing/terminal
 
 	mu    sync.Mutex
 	locks map[string]*sessionLock
