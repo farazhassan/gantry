@@ -148,3 +148,62 @@ func TestRunNextReadyDrivesAsyncStartedTask(t *testing.T) {
 		t.Errorf("TaskRefs = %+v, want one done ref", m.TaskRefs)
 	}
 }
+
+func TestRunNextReadySkipsAwaitingInputSession(t *testing.T) {
+	// t1 starts async and suspends when RunNextReady drives it. A second async
+	// start re-enqueues s1. Dequeuing that entry must NOT resume the parked t1
+	// (that would feed t1's GOAL to its pending ask_user call) — it must skip,
+	// leaving the resume to a human ResumeTask.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 driven via RunNextReady -> awaiting_input
+		complete("t1 done"), // consumed ONLY by the human ResumeTask below
+		complete("t2 done"), // t2 drained inline after t1 completes
+	}}
+	tm, tasks, meta, _ := newAsyncManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTaskAsync(ctx, "s1", "g1"); err != nil {
+		t.Fatalf("StartTaskAsync t1: %v", err)
+	}
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || driven == nil || driven.Status != task.TaskAwaitingInput {
+		t.Fatalf("first RunNextReady = (%+v,%v,%v), want t1 awaiting_input", driven, ok, err)
+	}
+
+	if _, err := tm.StartTaskAsync(ctx, "s1", "g2"); err != nil {
+		t.Fatalf("StartTaskAsync t2: %v", err)
+	}
+	// The re-enqueued entry must be skipped — no drive, no resume.
+	skipped, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("second RunNextReady: %v", err)
+	}
+	if !ok {
+		t.Errorf("ok = false, want true (the entry was consumed)")
+	}
+	if skipped != nil {
+		t.Errorf("driven = %+v, want nil (awaiting task is parked for a human)", skipped)
+	}
+	t1, _ := tasks.LoadTask(ctx, "task-1")
+	if t1.Status != task.TaskAwaitingInput {
+		t.Errorf("t1 = %v, want still TaskAwaitingInput (not mis-resumed with its goal)", t1.Status)
+	}
+	if r.calls != 1 {
+		t.Errorf("runner calls = %d, want 1 (the skip consumed no runner step)", r.calls)
+	}
+
+	// The human resume still works and drains t2 behind it.
+	if _, err := tm.ResumeTask(ctx, "s1", "the real answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	for _, id := range []string{"task-1", "task-2"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskDone {
+			t.Errorf("task %q = %v, want TaskDone", id, tk.Status)
+		}
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta dirty: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}

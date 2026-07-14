@@ -277,11 +277,14 @@ func (m *TaskManager) CancelSession(ctx context.Context, sessionID string) error
 	return m.meta.SaveMeta(ctx, sessionID, sm)
 }
 
-// RunNextReady dequeues one ready session (spawned cross-session work) and drives
-// its active task to suspension or terminal via the existing drive engine. It
-// returns (task, true, nil) for a driven session; (nil, false, nil) when the
-// ready queue is empty; (nil, true, nil) when the dequeued session has nothing
-// drivable (empty ActiveTaskID or an already-terminal active task — Decision H).
+// RunNextReady dequeues one ready session (spawned cross-session work, or a
+// same-session task started via StartTaskAsync) and drives its active task to
+// suspension or terminal via the existing drive engine. It returns
+// (task, true, nil) for a driven session; (nil, false, nil) when the ready
+// queue is empty; (nil, true, nil) when the dequeued session has nothing
+// drivable (Decision H): an empty ActiveTaskID, an already-terminal active
+// task, or an active task parked awaiting_input — driving that one would feed
+// its goal to its pending ask_user call, so the resume is left to ResumeTask.
 //
 // The caller composes this: loop for a sequential drain, or call from N
 // goroutines for parallel drive (each dequeue yields a distinct session id ->
@@ -316,6 +319,14 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	}
 	if t.Status.IsTerminal() {
 		return nil, true, nil // Decision H: already finished
+	}
+	if t.Status == task.TaskAwaitingInput {
+		// Parked for a human answer (StartTaskAsync may have re-enqueued the
+		// session while its active task was suspended). Driving here would feed
+		// the task's goal to its pending ask_user call as if it were the user's
+		// reply. Skip; ResumeTask owns this transition, and the queue behind the
+		// parked task drains when that inline resume completes.
+		return nil, true, nil
 	}
 	driven, err := m.drive(ctx, sid, sm, t, t.Goal)
 	return driven, true, err
