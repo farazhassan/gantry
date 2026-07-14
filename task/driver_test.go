@@ -247,12 +247,15 @@ func TestAdvanceRejectInjectsCriticFeedback(t *testing.T) {
 	}
 	var found gantry.Message
 	for _, m := range got.Working {
-		if m.Role == gantry.RoleSystem && m.Name == CriticAuthor {
+		if m.Name == CriticAuthor {
 			found = m
 		}
 	}
 	if found.Content == "" {
 		t.Fatalf("no critic feedback message injected into Working: %+v", got.Working)
+	}
+	if found.Role != gantry.RoleUser {
+		t.Errorf("critic feedback role = %q, want user (adapters have no mid-transcript system slot)", found.Role)
 	}
 	if !strings.Contains(found.Content, "not yet") {
 		t.Errorf("feedback missing the rejection reason; got %q", found.Content)

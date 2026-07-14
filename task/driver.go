@@ -192,12 +192,15 @@ func (d *Driver) Advance(ctx context.Context, t *Task, input string) (res *Task,
 				}
 				return t, nil
 			}
-			// Rejected: feed the critique back as a hidden system message so the
-			// model can address the unmet criteria on the next run, then continue.
-			// The CriticAuthor tag keeps it out of user-facing transcript rendering
-			// (VisibleTranscript) while the model still sees it as a system note.
+			// Rejected: feed the critique back as a user turn tagged CriticAuthor
+			// so the model can address the unmet criteria on the next run, then
+			// continue. RoleUser, not RoleSystem: providers have no mid-transcript
+			// system slot, and the Anthropic adapter silently folded RoleSystem
+			// into an unmarked user turn anyway — this makes the transcript say
+			// what the model actually sees. The Name tag keeps it out of
+			// user-facing rendering (VisibleTranscript).
 			t.Working = append(t.Working, gantry.Message{
-				Role:    gantry.RoleSystem,
+				Role:    gantry.RoleUser,
 				Name:    CriticAuthor,
 				Content: "Completion rejected: " + reason + "\nAddress the unmet acceptance criteria, then finish.",
 			})
