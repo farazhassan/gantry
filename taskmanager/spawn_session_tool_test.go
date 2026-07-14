@@ -58,7 +58,11 @@ func TestSpawnSessionToolInvokeReturnsMintedIDs(t *testing.T) {
 		t.Errorf("goals buffer = %+v, want empty", got)
 	}
 	sess := coll.drainSessions()
-	if len(sess) != 1 || sess[0] != (spawnReq{goal: "do x", title: "X", taskID: "task-1", sessionID: "sess-1"}) {
+	if len(sess) != 1 {
+		t.Fatalf("drainSessions len = %d, want 1", len(sess))
+	}
+	if sess[0].goal != "do x" || sess[0].title != "X" || sess[0].taskID != "task-1" ||
+		sess[0].sessionID != "sess-1" || sess[0].dependsOn != nil {
 		t.Errorf("sessions buffer = %+v, want one {do x X task-1 sess-1}", sess)
 	}
 }
