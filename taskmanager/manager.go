@@ -264,10 +264,18 @@ func (m *TaskManager) ResumeTaskWithAnswers(ctx context.Context, sessionID strin
 }
 
 // ActiveTask returns the session's current active task, or (nil, nil) if none.
+//
+// It deliberately does NOT take the per-session lock, so it never blocks behind
+// an in-flight drive — a busy session stays observable. The cost is eventual
+// consistency: mid-drive you may observe the pre-drive snapshot (the last
+// persisted task state, e.g. still pending/active moments before it suspends or
+// completes), and because the meta read and the task read are two separate
+// store reads they may straddle a drive's save points (it can even report a
+// just-finished task while the drive is popping the queue). Treat the result as
+// a point-in-time observation, not a lock-protected truth. Stores must be safe
+// for concurrent use — the in-memory implementations are (mutex-guarded,
+// deep-copying on save and load); see the MetaStore doc for the requirement.
 func (m *TaskManager) ActiveTask(ctx context.Context, sessionID string) (*task.Task, error) {
-	lk := m.acquire(sessionID)
-	defer m.release(sessionID, lk)
-
 	sm, err := m.loadOrFreshMeta(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -370,11 +378,14 @@ func (m *TaskManager) cancelOne(ctx context.Context, sessionID string) ([]task.C
 	return sm.ChildRefs, nil
 }
 
-// RunNextReady dequeues one ready session (spawned cross-session work) and drives
-// its active task to suspension or terminal via the existing drive engine. It
-// returns (task, true, nil) for a driven session; (nil, false, nil) when the
-// ready queue is empty; (nil, true, nil) when the dequeued session has nothing
-// drivable (empty ActiveTaskID or an already-terminal active task — Decision H).
+// RunNextReady dequeues one ready session (spawned cross-session work, or a
+// same-session task started via StartTaskAsync) and drives its active task to
+// suspension or terminal via the existing drive engine. It returns
+// (task, true, nil) for a driven session; (nil, false, nil) when the ready
+// queue is empty; (nil, true, nil) when the dequeued session has nothing
+// drivable (Decision H): an empty ActiveTaskID, an already-terminal active
+// task, or an active task parked awaiting_input — driving that one would feed
+// its goal to its pending ask_user call, so the resume is left to ResumeTask.
 //
 // The caller composes this: loop for a sequential drain, or call from N
 // goroutines for parallel drive (each dequeue yields a distinct session id ->
@@ -408,6 +419,14 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	}
 	if t.Status.IsTerminal() {
 		return nil, true, nil // Decision H: already finished
+	}
+	if t.Status == task.TaskAwaitingInput {
+		// Parked for a human answer (StartTaskAsync may have re-enqueued the
+		// session while its active task was suspended). Driving here would feed
+		// the task's goal to its pending ask_user call as if it were the user's
+		// reply. Skip; ResumeTask owns this transition, and the queue behind the
+		// parked task drains when that inline resume completes.
+		return nil, true, nil
 	}
 	driven, err := m.drive(ctx, sid, sm, t, t.Goal)
 	return driven, true, err
@@ -511,6 +530,71 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 		return nil, err
 	}
 	return nt, nil
+}
+
+// StartTaskAsync creates a task for the session WITHOUT driving it: the task is
+// persisted, appended to the session's meta (active if the session has no
+// active task, queued behind it otherwise), and the session id is enqueued on
+// the ReadyQueue for the Dispatcher (or a manual RunNextReady caller) to drive.
+// The returned task is always TaskPending.
+//
+// Unlike StartTask, the per-session lock is held only for the meta
+// read-modify-write — never across a drive. If a drive is in flight for this
+// session, StartTaskAsync waits for it to release the lock (a wait bounded by
+// that drive), appends, and returns; it never joins or starts a drive itself.
+//
+// It reuses StartDetachedSession's persist-before-enqueue invariant: task and
+// meta are durable before the session id becomes visible on the ReadyQueue, so
+// a dequeued id always points at a real, loadable session. A ready entry that
+// has nothing drivable by dequeue time — the task already drained through an
+// inline drive, or the active task is parked awaiting input — is skipped by
+// RunNextReady (Decision H).
+func (m *TaskManager) StartTaskAsync(ctx context.Context, sessionID, goal string) (*task.Task, error) {
+	t := &task.Task{
+		ID:        m.newID(),
+		SessionID: sessionID,
+		Goal:      goal,
+		Status:    task.TaskPending,
+		CreatedAt: time.Now().UTC(),
+	}
+	// Persist the task BEFORE it becomes reachable via meta or the ready queue.
+	if err := m.tasks.SaveTask(ctx, t); err != nil {
+		return nil, err
+	}
+	if err := m.appendTaskToMeta(ctx, sessionID, t); err != nil {
+		return nil, err
+	}
+	// Persist-before-enqueue: task + meta are saved above, so the id on the
+	// queue always points at a real session (mirrors StartDetachedSession).
+	if err := m.ready.Enqueue(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// appendTaskToMeta records t in the session's meta — active if none, queued
+// behind the active task otherwise — under the per-session lock. The lock is
+// held only for this read-modify-write; the caller must not already hold it.
+func (m *TaskManager) appendTaskToMeta(ctx context.Context, sessionID string, t *task.Task) error {
+	lk := m.acquire(sessionID)
+	defer m.release(sessionID, lk)
+
+	sm, err := m.loadOrFreshMeta(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	sm.TaskRefs = append(sm.TaskRefs, task.TaskRef{
+		ID:        t.ID,
+		Title:     t.Title,
+		Status:    t.Status,
+		CreatedAt: t.CreatedAt,
+	})
+	if sm.ActiveTaskID == "" {
+		sm.ActiveTaskID = t.ID
+	} else {
+		sm.Queue = append(sm.Queue, t.ID)
+	}
+	return m.meta.SaveMeta(ctx, sessionID, sm)
 }
 
 // drive advances the active task from a single input string and, when it
