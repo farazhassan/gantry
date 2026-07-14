@@ -88,6 +88,10 @@ func cloneTask(t *Task) *Task {
 		c.Working = make([]gantry.Message, len(t.Working))
 		copy(c.Working, t.Working)
 	}
+	if t.DependsOn != nil {
+		c.DependsOn = make([]string, len(t.DependsOn))
+		copy(c.DependsOn, t.DependsOn)
+	}
 	return &c
 }
 
