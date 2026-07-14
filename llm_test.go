@@ -33,3 +33,34 @@ func TestStopReasonConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestToolChoiceModeConstants(t *testing.T) {
+	cases := []struct {
+		got  gantry.ToolChoiceMode
+		want string
+	}{
+		{gantry.ToolChoiceAuto, "auto"},
+		{gantry.ToolChoiceNone, "none"},
+		{gantry.ToolChoiceRequired, "required"},
+		{gantry.ToolChoiceTool, "tool"},
+	}
+	for _, c := range cases {
+		if string(c.got) != c.want {
+			t.Errorf("ToolChoiceMode %q != %q", string(c.got), c.want)
+		}
+	}
+}
+
+func TestLLMRequestCarriesToolChoice(t *testing.T) {
+	req := gantry.LLMRequest{
+		ToolChoice: &gantry.ToolChoice{Mode: gantry.ToolChoiceTool, Name: "emit_plan"},
+	}
+	if req.ToolChoice.Mode != gantry.ToolChoiceTool || req.ToolChoice.Name != "emit_plan" {
+		t.Errorf("ToolChoice = %+v, want {Mode: tool, Name: emit_plan}", req.ToolChoice)
+	}
+	// nil means "provider default" — the zero value must be nil.
+	var zero gantry.LLMRequest
+	if zero.ToolChoice != nil {
+		t.Errorf("zero LLMRequest.ToolChoice = %v, want nil", zero.ToolChoice)
+	}
+}
