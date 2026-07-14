@@ -16,9 +16,16 @@ type chatRequest struct {
 	System      string       `json:"system,omitempty"`
 	Messages    []reqMessage `json:"messages"`
 	Tools       []reqTool    `json:"tools,omitempty"`
+	ToolChoice  *toolChoice  `json:"tool_choice,omitempty"`
 	MaxTokens   int          `json:"max_tokens"`
 	Temperature float64      `json:"temperature,omitempty"`
 	Stream      bool         `json:"stream"`
+}
+
+// toolChoice mirrors Anthropic's tool_choice parameter.
+type toolChoice struct {
+	Type string `json:"type"`           // "auto", "none", "any", or "tool"
+	Name string `json:"name,omitempty"` // set only when Type == "tool"
 }
 
 type reqMessage struct {
@@ -90,10 +97,34 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 		System:      req.System,
 		Messages:    toMessages(req.Messages),
 		Tools:       toTools(req.Tools),
+		ToolChoice:  toWireToolChoice(req.ToolChoice),
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 		Stream:      stream,
 	}
+}
+
+// toWireToolChoice maps the gantry tool choice to Anthropic's tool_choice
+// object. nil (and unknown future modes) return nil so the field is omitted
+// and the provider default (auto) applies. Gantry's "required" is Anthropic's
+// "any". The mapping is mechanical — a forced tool with an empty Name is
+// forwarded as-is and rejected loudly by the provider (HTTP 400 via
+// checkStatus), never fixed up silently.
+func toWireToolChoice(tc *gantry.ToolChoice) *toolChoice {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case gantry.ToolChoiceAuto:
+		return &toolChoice{Type: "auto"}
+	case gantry.ToolChoiceNone:
+		return &toolChoice{Type: "none"}
+	case gantry.ToolChoiceRequired:
+		return &toolChoice{Type: "any"}
+	case gantry.ToolChoiceTool:
+		return &toolChoice{Type: "tool", Name: tc.Name}
+	}
+	return nil
 }
 
 // toMessages maps gantry messages to Anthropic's user/assistant content-block
