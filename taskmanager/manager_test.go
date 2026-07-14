@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -475,15 +476,16 @@ func newSpawningManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaSt
 
 // newSessionSpawnManager wires a spawningRunner into a real Driver + in-memory
 // stores with deterministic task and session id minters, and returns the ready
-// queue so tests can inspect/drive cross-session spawned work.
-func newSessionSpawnManager(r *spawningRunner) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
+// queue so tests can inspect/drive cross-session spawned work. Extra options
+// (e.g. WithSpawnPolicy) are appended after the deterministic minters.
+func newSessionSpawnManager(r *spawningRunner, opts ...Option) (*TaskManager, task.TaskStore, MetaStore, *InMemoryReadyQueue) {
 	tasks := task.NewInMemory()
 	driver := task.NewDriver(r, tasks)
 	meta := NewInMemoryMetaStore()
 	ready := NewInMemoryReadyQueue()
 	n := 0
 	sn := 0
-	tm := NewTaskManager(driver, tasks, meta, ready,
+	all := append([]Option{
 		WithIDFunc(func() string {
 			n++
 			return "task-" + string(rune('0'+n))
@@ -492,7 +494,8 @@ func newSessionSpawnManager(r *spawningRunner) (*TaskManager, task.TaskStore, Me
 			sn++
 			return "sess-" + string(rune('0'+sn))
 		}),
-	)
+	}, opts...)
+	tm := NewTaskManager(driver, tasks, meta, ready, all...)
 	return tm, tasks, meta, ready
 }
 
@@ -1298,5 +1301,133 @@ func TestEagerIDsMatchPersistedTasks(t *testing.T) {
 	sid, ok, err := ready.Dequeue(ctx)
 	if err != nil || !ok || sid != r.spawnSessionID {
 		t.Errorf("ready.Dequeue = (%q,%v,%v), want (%q,true,nil)", sid, ok, err, r.spawnSessionID)
+	}
+}
+
+func TestSpawnedChildrenCarryParentLinkage(t *testing.T) {
+	// Parent (task-1, depth 0) spawns a same-session child and a detached child.
+	// Both must carry ParentSessionID/ParentTaskID/Depth; only the detached child
+	// gets a ChildRef on the parent's meta.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		spawnReqs:   []spawnReq{{goal: "same-child"}},
+		sessionReqs: []spawnReq{{goal: "new-child", title: "N"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),     // task-1: spawns both
+			complete("same-child done"), // task-2: same-session child drains inline
+		},
+	}
+	tm, tasks, meta, _ := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	parent, _ := tasks.LoadTask(ctx, "task-1")
+	if parent.ParentSessionID != "" || parent.ParentTaskID != "" || parent.Depth != 0 {
+		t.Errorf("root task linkage = (%q,%q,%d), want all zero", parent.ParentSessionID, parent.ParentTaskID, parent.Depth)
+	}
+	same, _ := tasks.LoadTask(ctx, "task-2")
+	if same.ParentSessionID != "s1" || same.ParentTaskID != "task-1" || same.Depth != 1 {
+		t.Errorf("same-session child linkage = (%q,%q,%d), want (s1, task-1, 1)", same.ParentSessionID, same.ParentTaskID, same.Depth)
+	}
+	det, _ := tasks.LoadTask(ctx, "task-3")
+	if det.ParentSessionID != "s1" || det.ParentTaskID != "task-1" || det.Depth != 1 {
+		t.Errorf("detached child linkage = (%q,%q,%d), want (s1, task-1, 1)", det.ParentSessionID, det.ParentTaskID, det.Depth)
+	}
+	pm, _ := meta.LoadMeta(ctx, "s1")
+	if len(pm.ChildRefs) != 1 {
+		t.Fatalf("ChildRefs = %+v, want exactly one (detached spawns only)", pm.ChildRefs)
+	}
+	if pm.ChildRefs[0] != (task.ChildRef{SessionID: "sess-1", TaskID: "task-3", Title: "N"}) {
+		t.Errorf("ChildRef = %+v, want {sess-1 task-3 N}", pm.ChildRefs[0])
+	}
+}
+
+func TestSpawnPolicyBudgetAppliedToChildren(t *testing.T) {
+	r := &spawningRunner{
+		tool:      NewCreateTaskTool(),
+		spawnReqs: []spawnReq{{goal: "child"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"),
+			complete("child done"),
+		},
+	}
+	tm, tasks, _, _ := newSessionSpawnManager(r, WithSpawnPolicy(SpawnPolicy{
+		Budget: func(parent *task.Task) task.TaskBudget {
+			return task.TaskBudget{MaxRuns: 5, MaxTokens: 1234}
+		},
+	}))
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	child, _ := tasks.LoadTask(ctx, "task-2")
+	if child.Budget.MaxRuns != 5 || child.Budget.MaxTokens != 1234 {
+		t.Errorf("child budget = %+v, want MaxRuns 5 MaxTokens 1234", child.Budget)
+	}
+}
+
+// depthProbeRunner: the first Resume (the parent) spawns a detached child; the
+// second Resume (that child, driven via RunNextReady) attempts another spawn,
+// records the tool error, and completes anyway — proving the depth gate is a
+// model-visible tool error, not a run-killer.
+type depthProbeRunner struct {
+	sessionTool   *SpawnSessionTool
+	calls         int
+	childSpawnErr error
+}
+
+func (r *depthProbeRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	r.calls++
+	if r.calls == 1 {
+		if _, err := r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"child"}`)); err != nil {
+			return nil, err
+		}
+	} else {
+		_, r.childSpawnErr = r.sessionTool.Invoke(ctx, json.RawMessage(`{"goal":"grandchild"}`))
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestSpawnDepthCapBlocksGrandchild(t *testing.T) {
+	r := &depthProbeRunner{sessionTool: NewSpawnSessionTool()}
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	n, sn := 0, 0
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { n++; return fmt.Sprintf("task-%d", n) }),
+		WithSessionIDFunc(func() string { sn++; return fmt.Sprintf("sess-%d", sn) }),
+		WithSpawnPolicy(SpawnPolicy{MaxDepth: 1}),
+	)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	// Drive the child (depth 1); its grandchild spawn must be rejected.
+	child, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok {
+		t.Fatalf("RunNextReady = (ok=%v, err=%v), want a driven child", ok, err)
+	}
+	if child.Depth != 1 {
+		t.Errorf("child depth = %d, want 1", child.Depth)
+	}
+	if child.Status != task.TaskDone {
+		t.Errorf("child status = %v, want TaskDone (run continued past the tool error)", child.Status)
+	}
+	if r.childSpawnErr == nil || !strings.Contains(r.childSpawnErr.Error(), "depth") {
+		t.Errorf("grandchild spawn err = %v, want a depth error", r.childSpawnErr)
+	}
+	// The rejected grandchild was never enqueued.
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("ready queue not empty; grandchild should not have been enqueued")
 	}
 }

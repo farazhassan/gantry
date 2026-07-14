@@ -452,7 +452,7 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 
 		// Drain spawns BEFORE branching, so suspended AND terminal tasks queue
 		// their follow-on work.
-		if err = m.enqueueSpawns(ctx, sessionID, sm, coll); err != nil {
+		if err = m.enqueueSpawns(ctx, sessionID, sm, t, coll); err != nil {
 			return t, err
 		}
 
@@ -491,27 +491,33 @@ func (m *TaskManager) drive(ctx context.Context, sessionID string, sm *task.Sess
 	}
 }
 
-// enqueueSpawns drains two buffers from the just-finished run, consuming the
-// ids the collector minted at Invoke time (the ids the model already saw):
+// enqueueSpawns drains two buffers from the just-finished run of parent,
+// consuming the ids the collector minted at Invoke time (the ids the model
+// already saw) and stamping parent linkage, depth, and the policy-derived
+// budget on every child:
 //   - same-session requests (create_task): tasks are persisted under their
 //     pre-minted ids and appended to sm.Queue so they run in the current
 //     session's FIFO after the active task terminates.
 //   - new-session requests (spawn_session): each pre-minted session/task id
-//     pair is handed to StartDetachedSession, which persists both before the
-//     session id is enqueued onto the ReadyQueue. The parent's sm.Queue is NOT
-//     touched by new-session spawns.
+//     pair is handed to StartDetachedSession (persist-before-enqueue), and the
+//     parent's meta records a ChildRef so cancellation can cascade. The
+//     parent's sm.Queue is NOT touched by new-session spawns.
 //
 // Runs under the session lock, on the orchestrator goroutine, after Advance
 // returned — never re-entering the driver. A no-op when both buffers are empty.
-func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, coll *spawnCollector) error {
+func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *task.SessionMeta, parent *task.Task, coll *spawnCollector) error {
 	for _, req := range coll.drain() {
 		nt := &task.Task{
-			ID:        req.taskID,
-			SessionID: sessionID,
-			Title:     req.title,
-			Goal:      req.goal,
-			Status:    task.TaskPending,
-			CreatedAt: time.Now().UTC(),
+			ID:              req.taskID,
+			SessionID:       sessionID,
+			Title:           req.title,
+			Goal:            req.goal,
+			Status:          task.TaskPending,
+			ParentSessionID: sessionID,
+			ParentTaskID:    parent.ID,
+			Depth:           parent.Depth + 1,
+			Budget:          m.childBudget(parent),
+			CreatedAt:       time.Now().UTC(),
 		}
 		if err := m.tasks.SaveTask(ctx, nt); err != nil {
 			return err
@@ -525,9 +531,18 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		sm.Queue = append(sm.Queue, nt.ID)
 	}
 	for _, req := range coll.drainSessions() {
-		if _, err := m.StartDetachedSession(ctx, req.goal, req.title, DetachedIDs(req.sessionID, req.taskID)); err != nil {
+		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,
+			DetachedIDs(req.sessionID, req.taskID),
+			DetachedParent(sessionID, parent.ID, parent.Depth+1, m.childBudget(parent)),
+		)
+		if err != nil {
 			return err
 		}
+		sm.ChildRefs = append(sm.ChildRefs, task.ChildRef{
+			SessionID: nt.SessionID,
+			TaskID:    nt.ID,
+			Title:     nt.Title,
+		})
 	}
 	return nil
 }
