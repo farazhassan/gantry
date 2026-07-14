@@ -2256,3 +2256,124 @@ func TestRunNextReadyAcksSkippedAwaitingInputSession(t *testing.T) {
 		t.Errorf("queue not empty; the skip must ACK, not redeliver")
 	}
 }
+
+// countingCompleteRunner completes every run and counts Resume calls.
+type countingCompleteRunner struct{ calls int }
+
+func (r *countingCompleteRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.calls++
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestRecoverReenqueuesOnlyDrivableSessions(t *testing.T) {
+	tm, tasks, meta, ready := newDepManager(&alwaysComplete{}, nil)
+	ctx := context.Background()
+	seed := func(sid, tid string, status task.TaskStatus) {
+		t.Helper()
+		if err := tasks.SaveTask(ctx, &task.Task{ID: tid, SessionID: sid, Goal: "g", Status: status}); err != nil {
+			t.Fatalf("SaveTask %q: %v", tid, err)
+		}
+		if err := meta.SaveMeta(ctx, sid, &task.SessionMeta{
+			ActiveTaskID: tid,
+			TaskRefs:     []task.TaskRef{{ID: tid, Status: status}},
+		}); err != nil {
+			t.Fatalf("SaveMeta %q: %v", sid, err)
+		}
+	}
+	seed("s-active", "t-a", task.TaskActive)       // crashed mid-run -> recovered
+	seed("s-await", "t-w", task.TaskAwaitingInput) // parked for a human -> skipped
+	seed("s-done", "t-d", task.TaskDone)           // crash between task save and meta clear -> skipped
+	seed("s-pending", "t-p", task.TaskPending)     // never started -> recovered
+	if err := meta.SaveMeta(ctx, "s-idle", &task.SessionMeta{}); err != nil { // no active task -> skipped
+		t.Fatalf("SaveMeta s-idle: %v", err)
+	}
+	if err := meta.SaveMeta(ctx, "s-ghost", &task.SessionMeta{ActiveTaskID: "t-missing"}); err != nil { // dangling id -> skipped
+		t.Fatalf("SaveMeta s-ghost: %v", err)
+	}
+
+	n, err := tm.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("Recover = %d, want 2 (s-active and s-pending only)", n)
+	}
+	// ListSessions is sorted, so the enqueue order is deterministic.
+	first, ok1, _ := ready.Dequeue(ctx)
+	second, ok2, _ := ready.Dequeue(ctx)
+	if !ok1 || !ok2 || first != "s-active" || second != "s-pending" {
+		t.Errorf("recovered = (%q, %q), want (s-active, s-pending)", first, second)
+	}
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("extra session enqueued; awaiting/terminal/idle/ghost must be skipped")
+	}
+}
+
+func TestRecoverThenRunNextReadyDrivesRecoveredWork(t *testing.T) {
+	// Simulates restart-after-crash: the durable stores hold a session whose
+	// active task is still pending, but the in-memory ready queue (and its
+	// claimed set) is empty. Recover re-enqueues it; RunNextReady drives it.
+	tm, tasks, meta, _ := newDepManager(&alwaysComplete{}, nil)
+	ctx := context.Background()
+	if err := tasks.SaveTask(ctx, &task.Task{ID: "task-c", SessionID: "s1", Goal: "crashed work", Status: task.TaskPending}); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	if err := meta.SaveMeta(ctx, "s1", &task.SessionMeta{
+		ActiveTaskID: "task-c",
+		TaskRefs:     []task.TaskRef{{ID: "task-c", Status: task.TaskPending}},
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	n, err := tm.Recover(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("Recover = (%d, %v), want (1, nil)", n, err)
+	}
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || driven == nil || driven.Status != task.TaskDone {
+		t.Fatalf("RunNextReady = (%+v, %v, %v), want the recovered task driven to done", driven, ok, err)
+	}
+}
+
+func TestRecoverDoubleDeliveryIsNoOp(t *testing.T) {
+	// Recover is at-least-once: calling it twice double-enqueues the session.
+	// The under-lock status check in RunNextReady makes the duplicate delivery
+	// a no-op — the task runs exactly once.
+	r := &countingCompleteRunner{}
+	tm, tasks, meta, ready := newDepManager(r, nil)
+	ctx := context.Background()
+	if err := tasks.SaveTask(ctx, &task.Task{ID: "task-c", SessionID: "s1", Goal: "g", Status: task.TaskPending}); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	if err := meta.SaveMeta(ctx, "s1", &task.SessionMeta{
+		ActiveTaskID: "task-c",
+		TaskRefs:     []task.TaskRef{{ID: "task-c", Status: task.TaskPending}},
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	if _, err := tm.Recover(ctx); err != nil {
+		t.Fatalf("Recover #1: %v", err)
+	}
+	if _, err := tm.Recover(ctx); err != nil {
+		t.Fatalf("Recover #2: %v", err)
+	}
+
+	first, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || first == nil || first.Status != task.TaskDone {
+		t.Fatalf("first delivery = (%+v, %v, %v), want driven to done", first, ok, err)
+	}
+	second, ok, err := tm.RunNextReady(ctx)
+	if err != nil || !ok || second != nil {
+		t.Fatalf("duplicate delivery = (%+v, %v, %v), want (nil, true, nil) no-op", second, ok, err)
+	}
+	if _, ok, _ := ready.Dequeue(ctx); ok {
+		t.Errorf("queue not empty after both deliveries settled")
+	}
+	if r.calls != 1 {
+		t.Errorf("runner calls = %d, want exactly 1 (the duplicate must not re-drive)", r.calls)
+	}
+}

@@ -94,3 +94,35 @@ func TestInMemoryMetaChildRefsRoundTripAndDeepCopy(t *testing.T) {
 		t.Errorf("store corrupted by mutating a returned ChildRef: %q", again.ChildRefs[0].TaskID)
 	}
 }
+
+func TestInMemoryMetaListSessions(t *testing.T) {
+	store := NewInMemoryMetaStore()
+	ctx := context.Background()
+
+	got, err := store.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions (empty): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListSessions on empty store = %v, want empty", got)
+	}
+
+	for _, sid := range []string{"s-b", "s-a", "s-c"} {
+		if err := store.SaveMeta(ctx, sid, &task.SessionMeta{}); err != nil {
+			t.Fatalf("SaveMeta %q: %v", sid, err)
+		}
+	}
+	got, err = store.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	want := []string{"s-a", "s-b", "s-c"}
+	if len(got) != len(want) {
+		t.Fatalf("ListSessions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListSessions = %v, want %v (sorted)", got, want)
+		}
+	}
+}

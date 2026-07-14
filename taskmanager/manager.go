@@ -566,6 +566,65 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 	return nt, nil
 }
 
+// Recover scans every stored session and re-enqueues each one whose active
+// task is still drivable without input — TaskPending or TaskActive (a run that
+// never started, or one interrupted mid-flight by a crash). Call it at process
+// start, after wiring the TaskManager and before starting the Dispatcher: the
+// durable stores survive a crash but the in-memory ReadyQueue (including its
+// claimed set) does not, so this scan is the durable backstop that claim/ack
+// redelivery cannot provide across processes (Decision M).
+//
+// Sessions whose active task is awaiting_input are deliberately skipped: they
+// park for a HUMAN answer (ResumeTask), and a queue delivery must not resume
+// them with the task goal as input (RunNextReady also skips them defensively).
+//
+// Recovery is at-least-once: a session already enqueued (or mid-drive) may be
+// enqueued again. That is safe because RunNextReady re-checks status under the
+// per-session lock — the duplicate arrives after the first delivery finished
+// (terminal or parked: skipped and acked) or persisted nothing (re-driving is
+// the desired retry). Caveat: a crash that persisted partial run progress
+// re-drives from the saved Working, so transcript appends and budget counts
+// can duplicate — Driver.Advance is not yet idempotent (2026-07-13 design-
+// review risk).
+//
+// Returns the number of sessions enqueued. A store error aborts the scan
+// (already-enqueued sessions stay enqueued); a session whose active task id
+// has no stored task is skipped as corrupt-but-ignorable.
+func (m *TaskManager) Recover(ctx context.Context) (int, error) {
+	ids, err := m.meta.ListSessions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
+	for _, sid := range ids {
+		sm, err := m.meta.LoadMeta(ctx, sid)
+		if errors.Is(err, ErrMetaNotFound) {
+			continue
+		}
+		if err != nil {
+			return recovered, err
+		}
+		if sm.ActiveTaskID == "" {
+			continue
+		}
+		t, err := m.tasks.LoadTask(ctx, sm.ActiveTaskID)
+		if errors.Is(err, task.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return recovered, err
+		}
+		if t.Status != task.TaskPending && t.Status != task.TaskActive {
+			continue // terminal, or parked awaiting a human
+		}
+		if err := m.ready.Enqueue(ctx, sid); err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
 // StartTaskAsync creates a task for the session WITHOUT driving it: the task is
 // persisted, appended to the session's meta (active if the session has no
 // active task, queued behind it otherwise), and the session id is enqueued on
