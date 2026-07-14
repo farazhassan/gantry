@@ -2,6 +2,9 @@ package taskmanager
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -205,5 +208,187 @@ func TestRunNextReadySkipsAwaitingInputSession(t *testing.T) {
 	m, _ := meta.LoadMeta(ctx, "s1")
 	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
 		t.Errorf("meta dirty: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+// erroringRunner fails every Resume with a runner error (an infrastructure
+// failure, not a DoneError terminal): Advance marks the task TaskFailed AND
+// returns the error, so drive returns early WITHOUT clearing ActiveTaskID.
+type erroringRunner struct{}
+
+func (erroringRunner) Resume(_ context.Context, _ *gantry.State) (*gantry.State, error) {
+	return nil, errors.New("boom")
+}
+
+// gatedRunner blocks its FIRST Resume until released, then completes; every
+// later Resume completes immediately. It signals when the first Resume starts
+// so tests can act while a drive is provably in flight.
+type gatedRunner struct {
+	started chan struct{}
+	release chan struct{}
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *gatedRunner) Resume(_ context.Context, st *gantry.State) (*gantry.State, error) {
+	r.mu.Lock()
+	r.calls++
+	first := r.calls == 1
+	r.mu.Unlock()
+	if first {
+		close(r.started)
+		<-r.release
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestReadyEntryStaleAfterInlineDriveIsSkipped(t *testing.T) {
+	// t1 suspends inline; the async t2 queues behind it AND enqueues s1 on the
+	// ready queue. ResumeTask then drives t1 -> done and drains t2 inline. The
+	// ready entry is now stale: RunNextReady must dequeue it and skip
+	// (Decision H, empty ActiveTaskID), never re-driving either task.
+	r := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		suspend(),           // t1 run -> awaiting_input
+		complete("t1 done"), // t1 resume -> done
+		complete("t2 done"), // t2 drained inline -> done
+	}}
+	tm, tasks, meta, _ := newAsyncManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "g1"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := tm.StartTaskAsync(ctx, "s1", "g2"); err != nil {
+		t.Fatalf("StartTaskAsync: %v", err)
+	}
+	if _, err := tm.ResumeTask(ctx, "s1", "answer"); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	// Both tasks finished inline; the ready entry for s1 is stale.
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if !ok {
+		t.Errorf("ok = false, want true (the stale entry was dequeued)")
+	}
+	if driven != nil {
+		t.Errorf("driven = %+v, want nil (Decision-H skip)", driven)
+	}
+	if r.calls != 3 {
+		t.Errorf("runner calls = %d, want 3 (no double drive)", r.calls)
+	}
+	for _, id := range []string{"task-1", "task-2"} {
+		tk, _ := tasks.LoadTask(ctx, id)
+		if tk.Status != task.TaskDone {
+			t.Errorf("task %q = %v, want TaskDone", id, tk.Status)
+		}
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta dirty: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+}
+
+func TestReadyEntryWithTerminalActiveTaskIsSkipped(t *testing.T) {
+	// An errored inline drive leaves ActiveTaskID pointing at a TaskFailed task
+	// (drive returns the runner error before clearing meta). An async start then
+	// queues behind that dead task and re-enqueues s1: RunNextReady must hit the
+	// terminal branch of Decision H and skip — never attempt a drive.
+	tm, tasks, meta, _ := newAsyncManager(erroringRunner{})
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "g1"); err == nil {
+		t.Fatal("StartTask err = nil, want the runner error")
+	}
+	t1, _ := tasks.LoadTask(ctx, "task-1")
+	if t1.Status != task.TaskFailed {
+		t.Fatalf("t1 = %v, want TaskFailed", t1.Status)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "task-1" {
+		t.Fatalf("ActiveTaskID = %q, want task-1 (errored drive leaves it set)", m.ActiveTaskID)
+	}
+
+	if _, err := tm.StartTaskAsync(ctx, "s1", "g2"); err != nil {
+		t.Fatalf("StartTaskAsync: %v", err)
+	}
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if !ok || driven != nil {
+		t.Errorf("RunNextReady = (%+v,%v), want (nil,true) — Decision-H terminal skip", driven, ok)
+	}
+	t2, _ := tasks.LoadTask(ctx, "task-2")
+	if t2.Status != task.TaskPending {
+		t.Errorf("t2 = %v, want TaskPending (still queued; unwedging a dead active task is out of scope)", t2.Status)
+	}
+}
+
+func TestStartTaskAsyncWhileDriveInFlight(t *testing.T) {
+	// A drive holds the per-session lock. StartTaskAsync from another goroutine
+	// must not drive inline and must not deadlock: it waits for the meta lock,
+	// lands the task, and the ready entry hands it to RunNextReady.
+	tasks := task.NewInMemory()
+	r := &gatedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	var idMu sync.Mutex
+	idN := 0
+	tm := NewTaskManager(driver, tasks, meta, ready, WithIDFunc(func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		idN++
+		return fmt.Sprintf("task-%d", idN)
+	}))
+	ctx := context.Background()
+
+	inlineDone := make(chan error, 1)
+	go func() {
+		_, err := tm.StartTask(ctx, "s1", "inline goal")
+		inlineDone <- err
+	}()
+	<-r.started // the inline drive is now in flight, holding the session lock
+
+	asyncTask := make(chan *task.Task, 1)
+	asyncDone := make(chan error, 1)
+	go func() {
+		nt, err := tm.StartTaskAsync(ctx, "s1", "async goal")
+		asyncTask <- nt
+		asyncDone <- err
+	}()
+
+	close(r.release) // let the inline drive finish and release the lock
+	if err := <-inlineDone; err != nil {
+		t.Fatalf("inline StartTask: %v", err)
+	}
+	if err := <-asyncDone; err != nil {
+		t.Fatalf("StartTaskAsync: %v", err)
+	}
+	nt := <-asyncTask
+	if nt.Status != task.TaskPending {
+		t.Errorf("async task status = %v, want TaskPending (the caller never drives)", nt.Status)
+	}
+
+	// The async task landed after the inline drive; the ready entry drives it.
+	driven, ok, err := tm.RunNextReady(ctx)
+	if err != nil {
+		t.Fatalf("RunNextReady: %v", err)
+	}
+	if !ok || driven == nil || driven.ID != nt.ID || driven.Status != task.TaskDone {
+		t.Fatalf("RunNextReady = (%+v,%v), want %q TaskDone", driven, ok, nt.ID)
+	}
+	m, _ := meta.LoadMeta(ctx, "s1")
+	if m.ActiveTaskID != "" || len(m.Queue) != 0 {
+		t.Errorf("meta dirty: active=%q queue=%v", m.ActiveTaskID, m.Queue)
+	}
+	if len(m.TaskRefs) != 2 {
+		t.Errorf("TaskRefs len = %d, want 2 (inline + async)", len(m.TaskRefs))
 	}
 }
