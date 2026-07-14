@@ -7,9 +7,12 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// LLMPlanner generates a Plan by prompting an LLM with a rubric.
-// It splits the response into newline-separated steps and trims any
-// leading list markers ("1.", "1)", "- ", "* ").
+// LLMPlanner generates a Plan by forcing the model to call the propose_plan
+// tool (gantry.ToolChoiceTool), so steps and acceptance criteria arrive as
+// schema-validated JSON. When the configured client cannot honor the forced
+// ToolChoice — Generate returns an error, e.g. the Ollama adapter rejects
+// forced modes client-side — Plan falls back to ONE legacy plain-text request
+// parsed line-by-line (" :: " splits acceptance criteria from a description).
 type LLMPlanner struct {
 	client gantry.LLMClient
 	rubric string
@@ -20,7 +23,40 @@ func NewLLM(client gantry.LLMClient, rubric string) *LLMPlanner {
 	return &LLMPlanner{client: client, rubric: rubric}
 }
 
+// Plan asks the model for a structured plan via a forced propose_plan call.
+// Step IDs are left empty — the task ledger mints them at adoption, as today.
+//
+// Fallback decision (explicit): adapters return plain errors for unsupported
+// ToolChoice modes (no sentinel exists), so "unsupported" cannot be told apart
+// from a transient failure. Therefore ANY Generate error on the forced request
+// triggers exactly one legacy retry without tools. A transient failure fails
+// the legacy attempt too and that error is returned; the extra round-trip
+// happens only on error paths, never on the happy path. A SUCCESSFUL response
+// missing the forced call does NOT fall back — that is a misbehaving client
+// and is surfaced as an error.
 func (p *LLMPlanner) Plan(ctx context.Context, task string) (*gantry.Plan, error) {
+	req := gantry.LLMRequest{
+		System:     p.rubric,
+		Messages:   []gantry.Message{{Role: gantry.RoleUser, Content: task}},
+		Tools:      []gantry.ToolDef{proposePlanDef()},
+		ToolChoice: &gantry.ToolChoice{Mode: gantry.ToolChoiceTool, Name: proposePlanName},
+	}
+	resp, err := p.client.Generate(ctx, req)
+	if err != nil {
+		return p.planLegacy(ctx, task)
+	}
+	steps, err := parseProposedSteps(resp)
+	if err != nil {
+		return nil, err
+	}
+	return &gantry.Plan{Goal: task, Steps: steps}, nil
+}
+
+// planLegacy is the pre-ToolChoice path: prompt without tools, split the text
+// reply into newline-separated steps, trim list markers, and cut each line on
+// " :: " into description and acceptance criteria. Kept ONLY as the fallback
+// for clients that error on a forced ToolChoice.
+func (p *LLMPlanner) planLegacy(ctx context.Context, task string) (*gantry.Plan, error) {
 	req := gantry.LLMRequest{
 		System: p.rubric,
 		Messages: []gantry.Message{
