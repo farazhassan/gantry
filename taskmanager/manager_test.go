@@ -1145,3 +1145,67 @@ func TestCancelSessionRaceWithCompletion(t *testing.T) {
 		}
 	}
 }
+
+func TestStartDetachedSessionWithPresetIDs(t *testing.T) {
+	// DetachedIDs wins over the manager's minters.
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { return "task-minted" }),
+		WithSessionIDFunc(func() string { return "sess-minted" }),
+	)
+	ctx := context.Background()
+
+	nt, err := tm.StartDetachedSession(ctx, "g", "t", DetachedIDs("sess-pre", "task-pre"))
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if nt.ID != "task-pre" || nt.SessionID != "sess-pre" {
+		t.Errorf("ids = (%q,%q), want (task-pre, sess-pre)", nt.ID, nt.SessionID)
+	}
+	if _, err := tasks.LoadTask(ctx, "task-pre"); err != nil {
+		t.Errorf("LoadTask(task-pre): %v, want persisted under the preset id", err)
+	}
+	sm, err := meta.LoadMeta(ctx, "sess-pre")
+	if err != nil {
+		t.Fatalf("LoadMeta(sess-pre): %v", err)
+	}
+	if sm.ActiveTaskID != "task-pre" {
+		t.Errorf("ActiveTaskID = %q, want task-pre", sm.ActiveTaskID)
+	}
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok || sid != "sess-pre" {
+		t.Errorf("Dequeue = (%q,%v,%v), want (sess-pre, true, nil)", sid, ok, err)
+	}
+}
+
+func TestStartDetachedSessionWithParent(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	tm := NewTaskManager(driver, tasks, NewInMemoryMetaStore(), NewInMemoryReadyQueue(),
+		WithIDFunc(func() string { return "task-x" }),
+		WithSessionIDFunc(func() string { return "sess-x" }),
+	)
+	ctx := context.Background()
+
+	nt, err := tm.StartDetachedSession(ctx, "g", "t",
+		DetachedParent("sess-p", "task-p", 2, task.TaskBudget{MaxRuns: 4}))
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if nt.ParentSessionID != "sess-p" || nt.ParentTaskID != "task-p" || nt.Depth != 2 {
+		t.Errorf("linkage = (%q,%q,%d), want (sess-p, task-p, 2)", nt.ParentSessionID, nt.ParentTaskID, nt.Depth)
+	}
+	if nt.Budget.MaxRuns != 4 {
+		t.Errorf("Budget.MaxRuns = %d, want 4", nt.Budget.MaxRuns)
+	}
+	persisted, err := tasks.LoadTask(ctx, "task-x")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if persisted.ParentTaskID != "task-p" || persisted.Depth != 2 || persisted.Budget.MaxRuns != 4 {
+		t.Errorf("persisted linkage lost: %+v", persisted)
+	}
+}

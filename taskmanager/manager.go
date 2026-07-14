@@ -322,6 +322,42 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 	return driven, true, err
 }
 
+// detachedSpec collects the optional overrides for StartDetachedSession.
+type detachedSpec struct {
+	sessionID       string
+	taskID          string
+	parentSessionID string
+	parentTaskID    string
+	depth           int
+	budget          task.TaskBudget
+	hasParent       bool
+}
+
+// DetachedOption customizes StartDetachedSession.
+type DetachedOption func(*detachedSpec)
+
+// DetachedIDs presets the spawned session and task ids instead of minting fresh
+// ones (eager minting: a spawn tool already returned these ids to the model).
+// Empty strings fall back to fresh minting for that id.
+func DetachedIDs(sessionID, taskID string) DetachedOption {
+	return func(s *detachedSpec) {
+		s.sessionID = sessionID
+		s.taskID = taskID
+	}
+}
+
+// DetachedParent records the spawning parent on the new task: parent linkage,
+// the child's spawn-tree depth, and the child's cross-run budget.
+func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task.TaskBudget) DetachedOption {
+	return func(s *detachedSpec) {
+		s.parentSessionID = parentSessionID
+		s.parentTaskID = parentTaskID
+		s.depth = depth
+		s.budget = budget
+		s.hasParent = true
+	}
+}
+
 // StartDetachedSession mints a new session, creates a pending task in it,
 // persists both (the task, then the session meta with that task active plus a
 // TaskRef), and enqueues the session on the ReadyQueue — WITHOUT driving it. The
@@ -329,19 +365,40 @@ func (m *TaskManager) RunNextReady(ctx context.Context) (*task.Task, bool, error
 // goroutine, so the TaskManager stays synchronous. Returns the created pending
 // task, which carries its id and the new session id.
 //
+// Options: DetachedIDs consumes ids pre-minted by a spawn tool; DetachedParent
+// stamps parent linkage, depth, and budget on the child. With no options the
+// behavior is unchanged from before (fresh ids, no parent, zero budget).
+//
 // This is the single source of truth for the persist-before-enqueue +
 // new-session invariant: a successfully-enqueued id always points at a real,
 // drivable session. Both enqueueSpawns (spawn_session tool) and the Scheduler
 // call it.
-func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title string) (*task.Task, error) {
-	newSID := m.newSessionID()
+func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title string, opts ...DetachedOption) (*task.Task, error) {
+	var spec detachedSpec
+	for _, opt := range opts {
+		opt(&spec)
+	}
+	newSID := spec.sessionID
+	if newSID == "" {
+		newSID = m.newSessionID()
+	}
+	newTID := spec.taskID
+	if newTID == "" {
+		newTID = m.newID()
+	}
 	nt := &task.Task{
-		ID:        m.newID(),
+		ID:        newTID,
 		SessionID: newSID,
 		Title:     title,
 		Goal:      goal,
 		Status:    task.TaskPending,
 		CreatedAt: time.Now().UTC(),
+	}
+	if spec.hasParent {
+		nt.ParentSessionID = spec.parentSessionID
+		nt.ParentTaskID = spec.parentTaskID
+		nt.Depth = spec.depth
+		nt.Budget = spec.budget
 	}
 	if err := m.tasks.SaveTask(ctx, nt); err != nil {
 		return nil, err
