@@ -1,6 +1,9 @@
 package gantry
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
 // carries a text delta, and/or the terminal StopReason + Usage on the final
@@ -120,4 +123,118 @@ func emit(ctx context.Context, ev Event) error {
 		ev.Agent = id.agent
 	}
 	return s(ev)
+}
+
+// NewBufferedSink wraps sink so event production is decoupled from consumption:
+// the returned EventSink enqueues onto a bounded buffer and NEVER blocks, while
+// a single consumer goroutine delivers to the wrapped sink in FIFO order. Use it
+// wherever the emitting goroutine must not stall on a slow consumer — e.g. a
+// task Driver's WithEventSink, where the raw sink runs synchronously on the run
+// goroutine and would otherwise stall the Dispatcher.
+//
+// When the buffer is full the OLDEST queued event is dropped to admit the
+// newest (fresh progress beats a stale backlog; the durable record lives in the
+// stores, not the stream). The number of events dropped since the previous
+// delivery is surfaced on the next delivered event's Dropped field.
+//
+// size is the buffer capacity; size <= 0 defaults to 64. The returned stop
+// function drains remaining buffered events, waits for the consumer goroutine
+// to exit, and is idempotent; events sent after stop returns are silently
+// discarded. Because delivery is asynchronous, an error returned by the wrapped
+// sink cannot abort the (long-finished) emitting run and is discarded. A nil
+// sink panics.
+func NewBufferedSink(sink EventSink, size int) (EventSink, func()) {
+	if sink == nil {
+		panic("gantry: NewBufferedSink requires a non-nil sink")
+	}
+	if size <= 0 {
+		size = 64
+	}
+	b := &bufferedSink{
+		ch:   make(chan Event, size),
+		sink: sink,
+		quit: make(chan struct{}),
+		done: make(chan struct{}),
+	}
+	go b.consume()
+	return b.send, b.stop
+}
+
+// bufferedSink is the state behind NewBufferedSink. The channel is never
+// closed (producers may race stop), so every send/receive is non-blocking and
+// panic-free by construction.
+type bufferedSink struct {
+	ch      chan Event
+	sink    EventSink
+	dropped atomic.Int64
+	stopped atomic.Bool
+	quit    chan struct{}
+	done    chan struct{}
+}
+
+// send is the producer side: enqueue without ever blocking, evicting the
+// oldest queued event when full. Always returns nil — a buffered producer has
+// nothing to abort on.
+func (b *bufferedSink) send(ev Event) error {
+	if b.stopped.Load() {
+		return nil // late event after stop: discard silently
+	}
+	select {
+	case b.ch <- ev:
+		return nil
+	default:
+	}
+	// Full: evict the oldest queued event to make room for the newest.
+	select {
+	case <-b.ch:
+		b.dropped.Add(1)
+	default:
+	}
+	select {
+	case b.ch <- ev:
+	default:
+		// Lost the refill race to another producer: the incoming event is the
+		// one dropped instead.
+		b.dropped.Add(1)
+	}
+	return nil
+}
+
+// consume is the single consumer goroutine: deliver until quit, then drain
+// whatever is left and exit.
+func (b *bufferedSink) consume() {
+	defer close(b.done)
+	for {
+		select {
+		case ev := <-b.ch:
+			b.deliver(ev)
+		case <-b.quit:
+			for {
+				select {
+				case ev := <-b.ch:
+					b.deliver(ev)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// deliver stamps any pending drop count onto ev and hands it to the wrapped
+// sink. Drops can only occur while the buffer is full, so at least one queued
+// event always remains to carry the count — it is never silently lost.
+func (b *bufferedSink) deliver(ev Event) {
+	if n := b.dropped.Swap(0); n > 0 {
+		ev.Dropped = int(n)
+	}
+	_ = b.sink(ev) // async delivery: nothing left to abort; error discarded
+}
+
+// stop signals the consumer to drain and exit, then waits for it. Idempotent.
+func (b *bufferedSink) stop() {
+	if b.stopped.CompareAndSwap(false, true) {
+		close(b.quit)
+	}
+	<-b.done
 }
