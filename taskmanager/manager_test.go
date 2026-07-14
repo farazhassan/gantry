@@ -450,7 +450,7 @@ func (r *spawningRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.
 		}
 	}
 	for _, req := range r.sessionReqs {
-		in, _ := json.Marshal(map[string]string{"goal": req.goal, "title": req.title})
+		in, _ := json.Marshal(map[string]string{"goal": req.goal, "title": req.title, "agent": req.agent})
 		if _, err := r.sessionTool.Invoke(ctx, in); err != nil {
 			return nil, err
 		}
@@ -1783,5 +1783,67 @@ func TestResumeTaskWithAnswersNothingAwaiting(t *testing.T) {
 	tm.StartTask(ctx, "s1", "goal")
 	if _, err := tm.ResumeTaskWithAnswers(ctx, "s1", map[string]string{"q1": "x"}); !errors.Is(err, ErrNoTaskAwaitingInput) {
 		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (completed)", err)
+	}
+}
+
+func TestStartDetachedSessionPersistsAgentProfile(t *testing.T) {
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(completeOnceRunner{}, tasks)
+	meta := NewInMemoryMetaStore()
+	ready := NewInMemoryReadyQueue()
+	tm := NewTaskManager(driver, tasks, meta, ready,
+		WithIDFunc(func() string { return "task-x" }),
+		WithSessionIDFunc(func() string { return "sess-x" }),
+	)
+	ctx := context.Background()
+
+	nt, err := tm.StartDetachedSession(ctx, "the goal", "the title", DetachedAgent("researcher"))
+	if err != nil {
+		t.Fatalf("StartDetachedSession: %v", err)
+	}
+	if nt.AgentProfile != "researcher" {
+		t.Errorf("returned AgentProfile = %q, want researcher", nt.AgentProfile)
+	}
+	tk, err := tasks.LoadTask(ctx, "task-x")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if tk.AgentProfile != "researcher" {
+		t.Errorf("persisted AgentProfile = %q, want researcher", tk.AgentProfile)
+	}
+}
+
+func TestSpawnSessionAgentReachesSpawnedTask(t *testing.T) {
+	// Parent spawns a session with an agent profile; the profile survives the
+	// tool -> collector -> enqueueSpawns -> StartDetachedSession path onto the
+	// persisted task.
+	r := &spawningRunner{
+		tool:        NewCreateTaskTool(),
+		sessionTool: NewSpawnSessionTool(),
+		sessionReqs: []spawnReq{{goal: "spawned work", title: "S", agent: "researcher"}},
+		steps: []func(*gantry.State) *gantry.State{
+			complete("parent done"), // task-1: spawns the session, then completes
+		},
+	}
+	tm, tasks, meta, ready := newSessionSpawnManager(r)
+	ctx := context.Background()
+
+	if _, err := tm.StartTask(ctx, "s1", "parent goal"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	sid, ok, err := ready.Dequeue(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ready.Dequeue = (%q, %v, %v), want a session", sid, ok, err)
+	}
+	sm, err := meta.LoadMeta(ctx, sid)
+	if err != nil {
+		t.Fatalf("LoadMeta(%q): %v", sid, err)
+	}
+	st, err := tasks.LoadTask(ctx, sm.ActiveTaskID)
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if st.AgentProfile != "researcher" {
+		t.Errorf("spawned task AgentProfile = %q, want researcher", st.AgentProfile)
 	}
 }

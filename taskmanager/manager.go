@@ -441,6 +441,7 @@ type detachedSpec struct {
 	depth           int
 	budget          task.TaskBudget
 	hasParent       bool
+	agent           string // runner-profile registry key; "" ⇒ default runner
 }
 
 // DetachedOption customizes StartDetachedSession.
@@ -468,6 +469,14 @@ func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task
 	}
 }
 
+// DetachedAgent names the runner profile (registry key) the spawned task should
+// run under; StartDetachedSession persists it to Task.AgentProfile, and the
+// Driver resolves it via WithRunnerResolver. Empty means the default runner —
+// equivalent to omitting the option.
+func DetachedAgent(profile string) DetachedOption {
+	return func(s *detachedSpec) { s.agent = profile }
+}
+
 // StartDetachedSession mints a new session, creates a pending task in it,
 // persists both (the task, then the session meta with that task active plus a
 // TaskRef), and enqueues the session on the ReadyQueue — WITHOUT driving it. The
@@ -476,8 +485,10 @@ func DetachedParent(parentSessionID, parentTaskID string, depth int, budget task
 // task, which carries its id and the new session id.
 //
 // Options: DetachedIDs consumes ids pre-minted by a spawn tool; DetachedParent
-// stamps parent linkage, depth, and budget on the child. With no options the
-// behavior is unchanged from before (fresh ids, no parent, zero budget).
+// stamps parent linkage, depth, and budget on the child; DetachedAgent persists
+// the runner-profile registry key to Task.AgentProfile ("" ⇒ default runner).
+// With no options the behavior is unchanged from before (fresh ids, no parent,
+// zero budget, default runner).
 //
 // This is the single source of truth for the persist-before-enqueue +
 // new-session invariant: a successfully-enqueued id always points at a real,
@@ -497,12 +508,13 @@ func (m *TaskManager) StartDetachedSession(ctx context.Context, goal, title stri
 		newTID = m.newID()
 	}
 	nt := &task.Task{
-		ID:        newTID,
-		SessionID: newSID,
-		Title:     title,
-		Goal:      goal,
-		Status:    task.TaskPending,
-		CreatedAt: time.Now().UTC(),
+		ID:           newTID,
+		SessionID:    newSID,
+		Title:        title,
+		Goal:         goal,
+		AgentProfile: spec.agent,
+		Status:       task.TaskPending,
+		CreatedAt:    time.Now().UTC(),
 	}
 	if spec.hasParent {
 		nt.ParentSessionID = spec.parentSessionID
@@ -721,6 +733,7 @@ func (m *TaskManager) enqueueSpawns(ctx context.Context, sessionID string, sm *t
 		nt, err := m.StartDetachedSession(ctx, req.goal, req.title,
 			DetachedIDs(req.sessionID, req.taskID),
 			DetachedParent(sessionID, parent.ID, parent.Depth+1, m.childBudget(parent)),
+			DetachedAgent(req.agent),
 		)
 		if err != nil {
 			return err
