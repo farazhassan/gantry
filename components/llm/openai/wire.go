@@ -14,10 +14,21 @@ type chatRequest struct {
 	Model         string         `json:"model"`
 	Messages      []chatMessage  `json:"messages"`
 	Tools         []chatTool     `json:"tools,omitempty"`
+	ToolChoice    any            `json:"tool_choice,omitempty"`
 	Temperature   float64        `json:"temperature,omitempty"`
 	MaxTokens     int            `json:"max_tokens,omitempty"`
 	Stream        bool           `json:"stream"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+// forcedTool is the object form of tool_choice that forces one named function.
+type forcedTool struct {
+	Type     string         `json:"type"`
+	Function forcedToolName `json:"function"`
+}
+
+type forcedToolName struct {
+	Name string `json:"name"`
 }
 
 // streamOptions asks the API to emit a terminal chunk carrying usage when
@@ -119,6 +130,7 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 		Model:       model,
 		Messages:    msgs,
 		Tools:       toChatTools(req.Tools),
+		ToolChoice:  toWireToolChoice(req.ToolChoice),
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      stream,
@@ -145,6 +157,26 @@ func toChatTools(defs []gantry.ToolDef) []chatTool {
 		}
 	}
 	return out
+}
+
+// toWireToolChoice maps the gantry tool choice to OpenAI's polymorphic
+// tool_choice parameter: a bare mode string ("auto", "none", "required") or
+// the forced-function object. nil (and unknown future modes) return nil so
+// the field is omitted and the provider default (auto) applies. The mapping
+// is mechanical — a forced tool with an empty Name is forwarded as-is and
+// rejected loudly by the provider (HTTP 400 via checkStatus), never fixed up
+// silently.
+func toWireToolChoice(tc *gantry.ToolChoice) any {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case gantry.ToolChoiceAuto, gantry.ToolChoiceNone, gantry.ToolChoiceRequired:
+		return string(tc.Mode)
+	case gantry.ToolChoiceTool:
+		return forcedTool{Type: "function", Function: forcedToolName{Name: tc.Name}}
+	}
+	return nil
 }
 
 // assembleResponse builds the gantry response from aggregated stream/non-stream
