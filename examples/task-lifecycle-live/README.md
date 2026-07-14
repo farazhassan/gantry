@@ -47,6 +47,12 @@ Same wiring as the mock example, but live:
   If the model spawns a detached session (`spawn_session`) that later asks a
   question (`ask_user`), the task parks at `awaiting_input` and the notifier
   prints the question.
+- Every run streams whole-run events (`text_delta`, `tool_call`, `tool_result`,
+  `done`) through `task.WithEventSink`, wrapped in `gantry.NewBufferedSink` so
+  printing can never stall the Dispatcher. Lines are prefixed with the task
+  they belong to (`event  [task-1] ...`) — the sink is process-global and
+  consumers demultiplex by `Event.TaskID`. A `(N earlier events dropped)` line
+  appears if the printer ever falls behind the buffer.
 
 Output varies run to run — whether the model spawns tasks, rejects then revises,
 or parks depends entirely on the model. To see the lifecycle demonstrated

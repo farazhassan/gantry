@@ -67,7 +67,36 @@ func RunLiveExample(ctx context.Context, model, ollamaURL string, dispatchTimeou
 	metaStore := taskmanager.NewInMemoryMetaStore()
 	readyQueue := taskmanager.NewInMemoryReadyQueue()
 
-	driver := task.NewDriver(agent, taskStore, task.WithVerifier(verifier))
+	// Stream task events. The Driver is constructed once and drives EVERY task,
+	// so this sink is process-global: events from the synchronous StartTask
+	// phase and the headless Dispatcher phase interleave on it, and we
+	// demultiplex by ev.TaskID (the Driver seeds task identity into State.Meta;
+	// the agent stamps it onto each Event). The BufferedSink decouples printing
+	// from the run goroutine so a slow terminal can never stall the Dispatcher;
+	// ev.Dropped reports any gap it had to cut.
+	printSink := func(ev gantry.Event) error {
+		if ev.Dropped > 0 {
+			fmt.Printf("event  [%s] (%d earlier events dropped)\n", ev.TaskID, ev.Dropped)
+		}
+		switch ev.Type {
+		case gantry.EventTextDelta:
+			fmt.Printf("event  [%s] text: %q\n", ev.TaskID, ev.TextDelta)
+		case gantry.EventToolCall:
+			fmt.Printf("event  [%s] tool call: %s\n", ev.TaskID, ev.ToolCall.Name)
+		case gantry.EventToolResult:
+			fmt.Printf("event  [%s] tool result for %s (is_error=%v)\n", ev.TaskID, ev.ToolResult.CallID, ev.ToolResult.IsError)
+		case gantry.EventDone:
+			fmt.Printf("event  [%s] done: %s\n", ev.TaskID, ev.DoneReason)
+		}
+		return nil // phase_start/phase_end ignored to keep output readable
+	}
+	sink, stopSink := gantry.NewBufferedSink(printSink, 256)
+	defer stopSink() // drain and join the print consumer before returning
+
+	driver := task.NewDriver(agent, taskStore,
+		task.WithVerifier(verifier),
+		task.WithEventSink(sink),
+	)
 
 	// Deterministic id/session minters, kept for parity with the mock example.
 	var idCount int
