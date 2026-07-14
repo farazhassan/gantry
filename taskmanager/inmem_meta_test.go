@@ -70,3 +70,27 @@ func TestInMemoryMetaSaveIsDeepCopy(t *testing.T) {
 func TestInMemoryMetaIsMetaStore(t *testing.T) {
 	var _ MetaStore = NewInMemoryMetaStore()
 }
+
+func TestInMemoryMetaChildRefsRoundTripAndDeepCopy(t *testing.T) {
+	store := NewInMemoryMetaStore()
+	ctx := context.Background()
+	in := &task.SessionMeta{
+		ChildRefs: []task.ChildRef{{SessionID: "sess-c", TaskID: "t-c", Title: "child"}},
+	}
+	if err := store.SaveMeta(ctx, "s1", in); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	out, err := store.LoadMeta(ctx, "s1")
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if len(out.ChildRefs) != 1 || out.ChildRefs[0] != (task.ChildRef{SessionID: "sess-c", TaskID: "t-c", Title: "child"}) {
+		t.Fatalf("ChildRefs round-trip = %+v, want the saved ref", out.ChildRefs)
+	}
+	// Mutating the returned slice must not corrupt the store.
+	out.ChildRefs[0].TaskID = "mutated"
+	again, _ := store.LoadMeta(ctx, "s1")
+	if again.ChildRefs[0].TaskID != "t-c" {
+		t.Errorf("store corrupted by mutating a returned ChildRef: %q", again.ChildRefs[0].TaskID)
+	}
+}
