@@ -1785,3 +1785,47 @@ func TestResumeTaskWithAnswersNothingAwaiting(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoTaskAwaitingInput (completed)", err)
 	}
 }
+
+// identityCapturingRunner records the identity visible on the collector ctx
+// during each Resume, then completes the run.
+type identityCapturingRunner struct {
+	mu   sync.Mutex
+	seen [][2]string // {sessionID, taskID} per Resume call
+}
+
+func (r *identityCapturingRunner) Resume(ctx context.Context, st *gantry.State) (*gantry.State, error) {
+	if coll, ok := collectorFrom(ctx); ok {
+		r.mu.Lock()
+		r.seen = append(r.seen, [2]string{coll.sessionID, coll.taskID})
+		r.mu.Unlock()
+	}
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleAssistant, Content: "done"})
+	st.Done = true
+	st.DoneReason = gantry.DoneNoToolCalls
+	return st, nil
+}
+
+func TestDriveSeedsCollectorIdentity(t *testing.T) {
+	r := &identityCapturingRunner{}
+	tasks := task.NewInMemory()
+	driver := task.NewDriver(r, tasks)
+	meta := NewInMemoryMetaStore()
+	n := 0
+	tm := NewTaskManager(driver, tasks, meta, NewInMemoryReadyQueue(), WithIDFunc(func() string {
+		n++
+		return fmt.Sprintf("task-%d", n)
+	}))
+
+	if _, err := tm.StartTask(context.Background(), "s1", "goal-1"); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.seen) != 1 {
+		t.Fatalf("Resume observed %d collector identities, want 1", len(r.seen))
+	}
+	if r.seen[0] != [2]string{"s1", "task-1"} {
+		t.Errorf("identity = %v, want [s1 task-1]", r.seen[0])
+	}
+}

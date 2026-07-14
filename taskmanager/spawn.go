@@ -26,7 +26,15 @@ type spawnReq struct {
 // orchestrator drains the collector after a successful run (errored runs
 // discard the buffer, abandoning the ids). Built via TaskManager.newCollector
 // in drive; construct test instances with all four config fields set.
+//
+// sessionID/taskID identify the run the collector was built for. They are set
+// once at construction on the orchestrator goroutine and never mutated, so
+// tools may read them concurrently without holding mu. They let read-only
+// tools (list_tasks) resolve "the current session" from ctx alone.
 type spawnCollector struct {
+	sessionID string
+	taskID    string
+
 	newTaskID    func() string
 	newSessionID func() string
 	parentDepth  int
@@ -98,9 +106,12 @@ func (c *spawnCollector) drainSessions() []spawnReq {
 }
 
 // newCollector builds the per-Advance collector for a run of parent, wiring the
-// manager's id minters and resolving the spawn policy's effective max depth.
+// manager's id minters, resolving the spawn policy's effective max depth, and
+// stamping the run's identity (parent's session and task ids).
 func (m *TaskManager) newCollector(parent *task.Task) *spawnCollector {
 	return &spawnCollector{
+		sessionID:    parent.SessionID,
+		taskID:       parent.ID,
 		newTaskID:    m.newID,
 		newSessionID: m.newSessionID,
 		parentDepth:  parent.Depth,
