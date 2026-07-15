@@ -1,6 +1,9 @@
 package gantry
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
 // carries a text delta, and/or the terminal StopReason + Usage on the final
@@ -43,7 +46,9 @@ const (
 // rest are omitted. Note on ordering: EventToolCall and EventToolResult events
 // are emitted after the phase_end event of the phase that produced them,
 // because they are derived from State and only become available once that
-// phase's handler has returned.
+// phase's handler has returned. The identity fields (RunID, SessionID, TaskID,
+// Agent) are stamped by the run loop on every emitted event and are empty when
+// unknown.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
@@ -53,6 +58,20 @@ type Event struct {
 	ToolResult  *ToolResult `json:"tool_result,omitempty"`
 	DoneReason  DoneReason  `json:"done_reason,omitempty"`
 	FinalOutput string      `json:"final_output,omitempty"`
+
+	// Identity: which run, session, task, and agent produced this event.
+	// RunID is minted per run; SessionID/TaskID come from State.Meta
+	// (MetaSessionID / MetaTaskID) when a task driver seeded them; Agent is
+	// the WithName identity. All empty when unknown.
+	RunID     string `json:"run_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+
+	// Dropped counts events discarded by a buffering wrapper (see
+	// NewBufferedSink) since the previous delivered event; zero on direct,
+	// unbuffered streams. A plain int so Event stays comparable.
+	Dropped int `json:"dropped,omitempty"`
 }
 
 // EventSink receives run Events. Returning an error aborts the run and the
@@ -65,20 +84,157 @@ type EventSink func(Event) error
 // sinkKey is the context key under which the active EventSink is stored.
 type sinkKey struct{}
 
-func withSink(ctx context.Context, s EventSink) context.Context {
+// WithSink returns a ctx carrying sink as the ambient EventSink. The run loop
+// installs the RunStream sink through here; callers embedding gantry (custom
+// runners, tests) may install their own. A nil sink behaves like WithoutSink.
+func WithSink(ctx context.Context, s EventSink) context.Context {
 	return context.WithValue(ctx, sinkKey{}, s)
 }
 
-func sinkFrom(ctx context.Context) EventSink {
-	s, _ := ctx.Value(sinkKey{}).(EventSink)
-	return s
+// WithoutSink returns a ctx whose ambient EventSink is shadowed: SinkFrom
+// reports no sink and emit becomes a no-op downstream of it. Use it when
+// running a nested agent from inside a streaming parent run (e.g. a delegate
+// tool) so the child's events do not interleave into the parent's stream.
+func WithoutSink(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sinkKey{}, EventSink(nil))
 }
 
-// emit sends ev to the sink in ctx, if any. With no sink it is a no-op, which
-// is what makes the shared run() loop free for plain Run.
+// SinkFrom returns the ambient EventSink and whether one is installed. A ctx
+// shadowed by WithoutSink (or carrying a nil sink) reports (nil, false).
+func SinkFrom(ctx context.Context) (EventSink, bool) {
+	s, _ := ctx.Value(sinkKey{}).(EventSink)
+	return s, s != nil
+}
+
+// emit sends ev to the sink in ctx, if any, first stamping the run's ambient
+// identity (RunID/SessionID/TaskID/Agent) onto it. The ambient identity is
+// authoritative: internal emit sites construct events with empty identity and
+// rely on this single chokepoint. With no sink emit is a no-op, which is what
+// makes the shared run() loop free for plain Run.
 func emit(ctx context.Context, ev Event) error {
-	if s := sinkFrom(ctx); s != nil {
-		return s(ev)
+	s, ok := SinkFrom(ctx)
+	if !ok {
+		return nil
+	}
+	if id, ok := identityFrom(ctx); ok {
+		ev.RunID = id.runID
+		ev.SessionID = id.sessionID
+		ev.TaskID = id.taskID
+		ev.Agent = id.agent
+	}
+	return s(ev)
+}
+
+// NewBufferedSink wraps sink so event production is decoupled from consumption:
+// the returned EventSink enqueues onto a bounded buffer and NEVER blocks, while
+// a single consumer goroutine delivers to the wrapped sink in FIFO order. Use it
+// wherever the emitting goroutine must not stall on a slow consumer — e.g. a
+// task Driver's WithEventSink, where the raw sink runs synchronously on the run
+// goroutine and would otherwise stall the Dispatcher.
+//
+// When the buffer is full the OLDEST queued event is dropped to admit the
+// newest (fresh progress beats a stale backlog; the durable record lives in the
+// stores, not the stream). The number of events dropped since the previous
+// delivery is surfaced on the next delivered event's Dropped field.
+//
+// size is the buffer capacity; size <= 0 defaults to 64. The returned stop
+// function drains remaining buffered events, waits for the consumer goroutine
+// to exit, and is idempotent; events sent after stop returns are silently
+// discarded. Because delivery is asynchronous, an error returned by the wrapped
+// sink cannot abort the (long-finished) emitting run and is discarded. A nil
+// sink panics.
+func NewBufferedSink(sink EventSink, size int) (EventSink, func()) {
+	if sink == nil {
+		panic("gantry: NewBufferedSink requires a non-nil sink")
+	}
+	if size <= 0 {
+		size = 64
+	}
+	b := &bufferedSink{
+		ch:   make(chan Event, size),
+		sink: sink,
+		quit: make(chan struct{}),
+		done: make(chan struct{}),
+	}
+	go b.consume()
+	return b.send, b.stop
+}
+
+// bufferedSink is the state behind NewBufferedSink. The channel is never
+// closed (producers may race stop), so every send/receive is non-blocking and
+// panic-free by construction.
+type bufferedSink struct {
+	ch      chan Event
+	sink    EventSink
+	dropped atomic.Int64
+	stopped atomic.Bool
+	quit    chan struct{}
+	done    chan struct{}
+}
+
+// send is the producer side: enqueue without ever blocking, evicting the
+// oldest queued event when full. Always returns nil — a buffered producer has
+// nothing to abort on.
+func (b *bufferedSink) send(ev Event) error {
+	if b.stopped.Load() {
+		return nil // late event after stop: discard silently
+	}
+	select {
+	case b.ch <- ev:
+		return nil
+	default:
+	}
+	// Full: evict the oldest queued event to make room for the newest.
+	select {
+	case <-b.ch:
+		b.dropped.Add(1)
+	default:
+	}
+	select {
+	case b.ch <- ev:
+	default:
+		// Lost the refill race to another producer: the incoming event is the
+		// one dropped instead.
+		b.dropped.Add(1)
 	}
 	return nil
+}
+
+// consume is the single consumer goroutine: deliver until quit, then drain
+// whatever is left and exit.
+func (b *bufferedSink) consume() {
+	defer close(b.done)
+	for {
+		select {
+		case ev := <-b.ch:
+			b.deliver(ev)
+		case <-b.quit:
+			for {
+				select {
+				case ev := <-b.ch:
+					b.deliver(ev)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// deliver stamps any pending drop count onto ev and hands it to the wrapped
+// sink. Drops can only occur while the buffer is full, so at least one queued
+// event always remains to carry the count — it is never silently lost.
+func (b *bufferedSink) deliver(ev Event) {
+	if n := b.dropped.Swap(0); n > 0 {
+		ev.Dropped = int(n)
+	}
+	_ = b.sink(ev) // async delivery: nothing left to abort; error discarded
+}
+
+// stop signals the consumer to drain and exit, then waits for it. Idempotent.
+func (b *bufferedSink) stop() {
+	if b.stopped.CompareAndSwap(false, true) {
+		close(b.quit)
+	}
+	<-b.done
 }

@@ -101,7 +101,10 @@ func TestLLMCriticConformance(t *testing.T) {
 
 func TestLLMPlannerConformance(t *testing.T) {
 	conformance.PlannerSuite(t, func() planner.Planner {
-		return planner.NewLLM(eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. step"}), "")
+		return planner.NewLLM(eval.NewMockLLMClient(gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "propose_plan", Input: json.RawMessage(`{"steps":[{"description":"step"}]}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		}), "")
 	})
 }
 

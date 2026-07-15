@@ -53,3 +53,36 @@ func TestRenderPlanEmpty(t *testing.T) {
 		t.Errorf("renderPlan(nil) = %q, want empty", got)
 	}
 }
+
+func TestRenderPlanWithIDsAndCriteria(t *testing.T) {
+	// The full ledger form: "N. [status] (id) description — criteria: ...".
+	p := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Description: "design", Status: gantry.StepDone, AcceptanceCriteria: "spec approved"},
+		{ID: "s2", Description: "build", Status: gantry.StepActive, AcceptanceCriteria: "tests pass"},
+	}}
+	got := renderPlan(p)
+	want := "\n\nPlan:\n" +
+		"1. [done] (s1) design — criteria: spec approved\n" +
+		"2. [active] (s2) build — criteria: tests pass\n"
+	if got != want {
+		t.Errorf("renderPlan() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderPlanPartialLedgerFields(t *testing.T) {
+	// Each ledger field renders independently: id without status, criteria
+	// without id, bare description. Pre-ledger planners keep their old output.
+	p := &gantry.Plan{Steps: []gantry.PlanStep{
+		{ID: "s1", Description: "design"},
+		{Description: "build", AcceptanceCriteria: "tests pass"},
+		{Description: "ship"},
+	}}
+	got := renderPlan(p)
+	want := "\n\nPlan:\n" +
+		"1. (s1) design\n" +
+		"2. build — criteria: tests pass\n" +
+		"3. ship\n"
+	if got != want {
+		t.Errorf("renderPlan() =\n%q\nwant\n%q", got, want)
+	}
+}

@@ -13,11 +13,15 @@ import (
 type stubCritic struct {
 	verdict critic.Verdict
 	err     error
+	called  bool
+	gotMsgs []gantry.Message
 	gotPlan *gantry.Plan
 	gotLast *gantry.LLMResponse
 }
 
 func (s *stubCritic) Critique(_ context.Context, st *gantry.State) (critic.Verdict, error) {
+	s.called = true
+	s.gotMsgs = st.Messages
 	s.gotPlan = st.Plan
 	s.gotLast = st.LastResponse
 	return s.verdict, s.err
@@ -71,15 +75,69 @@ func TestCriticVerifierErrorIsSoftReject(t *testing.T) {
 	}
 }
 
-func TestCriticVerifierNoAssistantMessageLeavesLastResponseNil(t *testing.T) {
-	// With no assistant message in Working, LastResponse must be nil so the
-	// critic's auto-pass guard fires rather than the adapter fabricating one.
-	sc := &stubCritic{verdict: critic.Verdict{Accept: true}}
+func TestCriticVerifierNoFinalAnswerRejects(t *testing.T) {
+	// No assistant message at all: Verify must reject WITHOUT consulting the
+	// critic (the old path handed the critic a nil LastResponse, which
+	// LLMCritic auto-passes — marking a task done with no answer).
+	sc := &stubCritic{verdict: critic.Verdict{Accept: true}} // would accept if consulted
 	v := NewCriticVerifier(sc)
 	tk := &Task{Working: []gantry.Message{{Role: gantry.RoleUser, Content: "do it"}}}
 
-	if _, _ = v.Verify(context.Background(), tk); sc.gotLast != nil {
-		t.Errorf("LastResponse = %+v, want nil when no assistant message exists", sc.gotLast)
+	ok, reason := v.Verify(context.Background(), tk)
+	if ok {
+		t.Errorf("ok = true, want false when no assistant answer exists")
+	}
+	if reason != "no final answer produced" {
+		t.Errorf("reason = %q, want %q", reason, "no final answer produced")
+	}
+	if sc.called {
+		t.Errorf("critic was consulted despite there being no final answer")
+	}
+}
+
+func TestCriticVerifierEmptyAssistantContentRejects(t *testing.T) {
+	// A tool-call-only assistant turn (empty Content) is not a final answer.
+	sc := &stubCritic{verdict: critic.Verdict{Accept: true}}
+	v := NewCriticVerifier(sc)
+	tk := &Task{Working: []gantry.Message{
+		{Role: gantry.RoleUser, Content: "do it"},
+		{Role: gantry.RoleAssistant, Content: "", ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "ask_user"}}},
+	}}
+
+	ok, reason := v.Verify(context.Background(), tk)
+	if ok || reason != "no final answer produced" {
+		t.Errorf("Verify = (%v, %q), want (false, \"no final answer produced\")", ok, reason)
+	}
+	if sc.called {
+		t.Errorf("critic was consulted despite there being no final answer")
+	}
+}
+
+func TestCriticVerifierPrunesOwnFeedbackFromView(t *testing.T) {
+	// Prior critic rejections must not reach the critic again: feeding its own
+	// verdicts back snowballs the verification context run after run.
+	sc := &stubCritic{verdict: critic.Verdict{Accept: false, Reason: "still no"}}
+	v := NewCriticVerifier(sc)
+	tk := &Task{Working: []gantry.Message{
+		{Role: gantry.RoleUser, Content: "do it"},
+		{Role: gantry.RoleAssistant, Content: "attempt 1"},
+		{Role: gantry.RoleUser, Name: CriticAuthor, Content: "Completion rejected: attempt 1 was bad"},
+		{Role: gantry.RoleAssistant, Content: "attempt 2"},
+	}}
+
+	if _, _ = v.Verify(context.Background(), tk); !sc.called {
+		t.Fatalf("critic not consulted despite a final answer existing")
+	}
+	if len(sc.gotMsgs) != 3 {
+		t.Errorf("critic saw %d messages, want 3 (critic feedback pruned): %+v", len(sc.gotMsgs), sc.gotMsgs)
+	}
+	for _, m := range sc.gotMsgs {
+		if m.Name == CriticAuthor {
+			t.Errorf("critic-authored message leaked into the critic's view: %+v", m)
+		}
+	}
+	if sc.gotLast == nil || sc.gotLast.Content != "attempt 2" {
+		t.Errorf("LastResponse = %+v, want the latest assistant content", sc.gotLast)
 	}
 }
 

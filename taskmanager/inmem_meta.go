@@ -2,6 +2,7 @@ package taskmanager
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/farazhassan/gantry/task"
@@ -39,6 +40,19 @@ func (s *InMemoryMetaStore) SaveMeta(_ context.Context, sessionID string, m *tas
 	return nil
 }
 
+// ListSessions returns every stored session id, sorted lexicographically for
+// deterministic iteration.
+func (s *InMemoryMetaStore) ListSessions(_ context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.m))
+	for id := range s.m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 // cloneMeta returns a deep copy of m (nil-safe).
 func cloneMeta(m *task.SessionMeta) *task.SessionMeta {
 	if m == nil {
@@ -52,6 +66,10 @@ func cloneMeta(m *task.SessionMeta) *task.SessionMeta {
 	if m.Queue != nil {
 		cp.Queue = make([]string, len(m.Queue))
 		copy(cp.Queue, m.Queue)
+	}
+	if m.ChildRefs != nil {
+		cp.ChildRefs = make([]task.ChildRef, len(m.ChildRefs))
+		copy(cp.ChildRefs, m.ChildRefs)
 	}
 	return cp
 }

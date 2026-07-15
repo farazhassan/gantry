@@ -73,7 +73,7 @@ func (a *Agent) ResumeStream(ctx context.Context, prior *State, sink EventSink) 
 // results after PhaseToolExec (state.ToolResults, before PhaseObserve clears
 // them). It is a no-op when no sink is active.
 func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) error {
-	if sinkFrom(ctx) == nil {
+	if _, ok := SinkFrom(ctx); !ok {
 		return nil
 	}
 	switch ph {

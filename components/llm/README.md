@@ -69,6 +69,38 @@ Providers that need no key (e.g. a local Ollama server) simply omit
   place stop-reason and tool-call mapping live, shared by the streaming and
   non-streaming paths.
 
+## Tool choice
+
+`LLMRequest.ToolChoice` (`*gantry.ToolChoice`; nil means "provider default",
+i.e. auto) constrains the model's tool use. Adapters map it to the provider's
+native parameter in `wire.go`:
+
+| gantry mode                 | Anthropic `tool_choice`      | OpenAI / OpenRouter `tool_choice`             | Ollama          |
+| --------------------------- | ---------------------------- | --------------------------------------------- | --------------- |
+| `nil`                       | omitted                      | omitted                                       | no-op           |
+| `ToolChoiceAuto`            | `{"type":"auto"}`            | `"auto"`                                      | no-op (default) |
+| `ToolChoiceNone`            | `{"type":"none"}`            | `"none"`                                      | tools omitted   |
+| `ToolChoiceRequired`        | `{"type":"any"}`             | `"required"`                                  | **error**       |
+| `ToolChoiceTool` (+ `Name`) | `{"type":"tool","name":...}` | `{"type":"function","function":{"name":...}}` | **error**       |
+
+Rules for adapters whose provider lacks a native tool-choice parameter:
+
+- **Never silently drop a forced-tool request.** If the provider cannot
+  express `ToolChoiceRequired` or `ToolChoiceTool`, return a clear error
+  before sending the request (see the Ollama adapter's `validateToolChoice`).
+- **Degrade only when semantics are preserved exactly.** `ToolChoiceNone` may
+  be honored by omitting the tools from the request — the model cannot call
+  what it cannot see.
+- **Unknown future modes map to "omit the parameter"** (provider default);
+  document this in the adapter's mapping helper.
+- **Do not fix up invalid input.** A forced tool with an empty `Name` is
+  forwarded as-is; the provider rejects it loudly (surfaced via the adapter's
+  `checkStatus`).
+
+There is deliberately no response-format field on `LLMRequest`: structured
+output is achieved by forcing a single tool call (`ToolChoiceTool`), which
+every adapter that can force tools expresses uniformly.
+
 ## Tool calls
 
 - The gantry links a tool result back to its call by `ToolCall.ID`, so every

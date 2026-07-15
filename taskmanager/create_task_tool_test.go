@@ -12,8 +12,8 @@ func TestCreateTaskToolDefinition(t *testing.T) {
 	if def.Name != "create_task" {
 		t.Errorf("Name = %q, want create_task", def.Name)
 	}
-	if def.Description == "" {
-		t.Errorf("Description is empty")
+	if !strings.Contains(def.Description, "provisional") {
+		t.Errorf("Description = %q, want it to state the returned id is provisional until the run commits", def.Description)
 	}
 	var schema struct {
 		Properties map[string]any `json:"properties"`
@@ -33,8 +33,8 @@ func TestCreateTaskToolDefinition(t *testing.T) {
 	}
 }
 
-func TestCreateTaskToolInvokeBuffers(t *testing.T) {
-	coll := &spawnCollector{}
+func TestCreateTaskToolInvokeReturnsMintedID(t *testing.T) {
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 
@@ -42,12 +42,37 @@ func TestCreateTaskToolInvokeBuffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if !strings.Contains(string(out), "queued") {
-		t.Errorf("output = %s, want a queued confirmation", out)
+	var res struct {
+		Queued bool   `json:"queued"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("output not valid JSON: %v (%s)", err, out)
+	}
+	if !res.Queued || res.TaskID != "task-1" {
+		t.Errorf("res = %+v, want {Queued:true TaskID:task-1}", res)
 	}
 	reqs := coll.drain()
-	if len(reqs) != 1 || reqs[0] != (spawnReq{goal: "write docs", title: "docs"}) {
-		t.Errorf("buffered = %+v, want one {write docs, docs}", reqs)
+	if len(reqs) != 1 {
+		t.Fatalf("buffered %d reqs, want 1", len(reqs))
+	}
+	if reqs[0].goal != "write docs" || reqs[0].title != "docs" || reqs[0].taskID != "task-1" ||
+		reqs[0].sessionID != "" || reqs[0].dependsOn != nil {
+		t.Errorf("buffered = %+v, want {write docs docs task-1}", reqs[0])
+	}
+}
+
+func TestCreateTaskToolDepthExceededIsToolError(t *testing.T) {
+	coll := newTestCollector()
+	coll.parentDepth = DefaultMaxSpawnDepth
+	ctx := withCollector(context.Background(), coll)
+
+	_, err := NewCreateTaskTool().Invoke(ctx, json.RawMessage(`{"goal":"x"}`))
+	if err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Errorf("err = %v, want a depth error", err)
+	}
+	if got := coll.drain(); len(got) != 0 {
+		t.Errorf("rejected spawn buffered something: %+v", got)
 	}
 }
 
@@ -60,7 +85,7 @@ func TestCreateTaskToolNoCollectorIsError(t *testing.T) {
 }
 
 func TestCreateTaskToolEmptyGoalIsError(t *testing.T) {
-	coll := &spawnCollector{}
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 
@@ -73,11 +98,67 @@ func TestCreateTaskToolEmptyGoalIsError(t *testing.T) {
 }
 
 func TestCreateTaskToolMalformedInputIsError(t *testing.T) {
-	coll := &spawnCollector{}
+	coll := newTestCollector()
 	ctx := withCollector(context.Background(), coll)
 	tool := NewCreateTaskTool()
 
 	if _, err := tool.Invoke(ctx, json.RawMessage(`not json`)); err == nil {
 		t.Errorf("Invoke with malformed input = nil error, want an error")
+	}
+}
+
+func TestCreateTaskToolSchemaHasDependsOn(t *testing.T) {
+	def := NewCreateTaskTool().Definition()
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+		Required   []string       `json:"required"`
+	}
+	if err := json.Unmarshal(def.Schema, &schema); err != nil {
+		t.Fatalf("Schema is not valid JSON: %v", err)
+	}
+	if _, ok := schema.Properties["depends_on"]; !ok {
+		t.Errorf("schema missing 'depends_on' property")
+	}
+	if len(schema.Required) != 1 || schema.Required[0] != "goal" {
+		t.Errorf("Required = %v, want [goal] (depends_on stays optional)", schema.Required)
+	}
+}
+
+func TestCreateTaskToolInvokeCarriesDependsOn(t *testing.T) {
+	coll := &spawnCollector{newTaskID: func() string { return "task-42" }, maxDepth: DefaultMaxSpawnDepth}
+	ctx := withCollector(context.Background(), coll)
+	out, err := NewCreateTaskTool().Invoke(ctx, json.RawMessage(`{"goal":"g","depends_on":["task-1","task-2"]}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var res struct {
+		Queued bool   `json:"queued"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("output not JSON: %v", err)
+	}
+	if !res.Queued || res.TaskID != "task-42" {
+		t.Errorf("output = %+v, want queued with task_id task-42", res)
+	}
+	reqs := coll.drain()
+	if len(reqs) != 1 {
+		t.Fatalf("buffered %d reqs, want 1", len(reqs))
+	}
+	got := reqs[0]
+	if got.taskID != "task-42" || got.goal != "g" ||
+		len(got.dependsOn) != 2 || got.dependsOn[0] != "task-1" || got.dependsOn[1] != "task-2" {
+		t.Errorf("buffered = %+v, want taskID task-42, goal g, deps [task-1 task-2]", got)
+	}
+}
+
+func TestCreateTaskToolEmptyDependencyIDIsError(t *testing.T) {
+	coll := &spawnCollector{newTaskID: func() string { return "task-42" }, maxDepth: DefaultMaxSpawnDepth}
+	ctx := withCollector(context.Background(), coll)
+	if _, err := NewCreateTaskTool().Invoke(ctx, json.RawMessage(`{"goal":"g","depends_on":[""]}`)); err == nil {
+		t.Errorf("Invoke with empty depends_on entry = nil error, want an error")
+	}
+	if len(coll.drain()) != 0 {
+		t.Errorf("errored Invoke buffered something; want nothing")
 	}
 }

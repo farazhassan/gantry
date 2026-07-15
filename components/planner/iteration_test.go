@@ -15,7 +15,7 @@ import (
 // PhaseAssembleContext, which re-runs each iteration; state.System persists, so
 // a per-iteration append would stack duplicate "Plan:" blocks.
 func TestWithPlannerNoDuplicateSystemAcrossIterations(t *testing.T) {
-	plannerLLM := eval.NewMockLLMClient(gantry.LLMResponse{Content: "1. a\n2. b"})
+	plannerLLM := eval.NewMockLLMClient(proposePlanResponse(`{"steps":[{"description":"a"},{"description":"b"}]}`))
 	mainLLM := eval.NewMockLLMClient(
 		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "t1", Name: "x"}}, StopReason: gantry.StopReasonToolUse},
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
