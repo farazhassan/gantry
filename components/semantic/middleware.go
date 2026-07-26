@@ -52,8 +52,26 @@ func WithMinScore(s float64) Option {
 // that, on iteration 0, embeds the query (state.Task if set, else
 // state.Input), searches the store, and appends a "Relevant memories:" block
 // to state.System; and a PhasePostLLM "components/semantic:persist"
-// middleware that, once the run finishes (state.Done with a non-empty
-// state.FinalOutput), embeds and stores the final user/assistant turn pair.
+// middleware that, once the run finishes, embeds and stores the final
+// user/assistant turn pair.
+//
+// Middleware ordering: register semantic LAST among the PhasePostLLM
+// components (after critic.New and limiter.New). PhasePostLLM components that
+// act after next() run that work in forward registration order
+// (last-registered = outermost = runs last), so registering semantic last
+// lets persist observe the critic-finalized output — a Verdict.ModifyOutput
+// rewrite is captured, and a Verdict.Accept == false rejection (which unsets
+// Done and clears FinalOutput) is correctly skipped. If semantic is installed
+// before critic, persist would run on the pre-critic draft instead.
+//
+// persist only stores clean completions: state.Done with a non-empty
+// state.FinalOutput. Runs that end via max-iterations exhaustion
+// (DoneMaxIterations), a handoff (DoneHandoff), a guardrail or human-abort
+// termination (DoneGuardrailBlocked, DoneHumanAborted), or a critic rejection
+// are intentionally not remembered.
+//
+// persist does not deduplicate: re-running the same input stores a new turn
+// pair each time, so repeated identical runs accumulate duplicate memories.
 func New(store Store, emb embeddings.Embeddings, opts ...Option) gantry.Component {
 	c := &component{store: store, emb: emb, k: defaultK}
 	for _, opt := range opts {
