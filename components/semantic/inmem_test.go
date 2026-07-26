@@ -56,3 +56,15 @@ func TestInMemoryStoreMismatchedDimensionScoresZero(t *testing.T) {
 		t.Errorf("hits = %+v, want one hit with Score 0", hits)
 	}
 }
+
+func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
+	s := semantic.NewInMemoryStore()
+	_ = s.Add(context.Background(), semantic.Item{Text: "real", Vector: []float32{1, 0}})
+	hits, err := s.Search(context.Background(), []float32{0, 0}, 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Score != 0 {
+		t.Errorf("hits = %+v, want one hit with Score 0", hits)
+	}
+}
