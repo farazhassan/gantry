@@ -54,6 +54,26 @@ func TestRecallInjectsRelevantMemoriesIntoSystem(t *testing.T) {
 
 	a, mock := newAgent(t, semantic.New(store, emb, semantic.WithK(1)),
 		gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+
+	// Captured on PhasePostLLM rather than PhaseAssembleContext: empirically,
+	// registering "test:capture" on PhaseAssembleContext makes it the
+	// outermost middleware in that phase's chain (Compose wraps
+	// last-registered outermost), so its pre-next check runs before the
+	// semantic component's recall middleware sets the stash. PhasePostLLM
+	// runs after PhaseAssembleContext completes for the same iteration, on
+	// the same *gantry.State, so Meta is already populated by then.
+	var recalled []semantic.Hit
+	if err := a.UseNamed(gantry.PhasePostLLM, "test:capture", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			if hits, ok := s.Meta[semantic.MetaRecalled].([]semantic.Hit); ok {
+				recalled = hits
+			}
+			return next(ctx, s)
+		}
+	}); err != nil {
+		t.Fatalf("install capture middleware: %v", err)
+	}
+
 	if _, err := a.Run(ctx, "tell me a joke"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -70,6 +90,12 @@ func TestRecallInjectsRelevantMemoriesIntoSystem(t *testing.T) {
 	}
 	if strings.Contains(reqs[0].System, "unrelated fact") {
 		t.Errorf("System contains memory beyond k=1: %q", reqs[0].System)
+	}
+	if len(recalled) != 1 {
+		t.Fatalf("recalled = %d hits, want 1", len(recalled))
+	}
+	if recalled[0].Text != "user likes puns" {
+		t.Errorf("recalled[0].Text = %q, want %q", recalled[0].Text, "user likes puns")
 	}
 }
 
@@ -88,12 +114,18 @@ func TestRecallMinScoreFiltersWeakHits(t *testing.T) {
 	store := semantic.NewInMemoryStore()
 	// Orthogonal to the {1, 0} query vector: similarity 0 < 0.5 floor.
 	_ = store.Add(context.Background(), semantic.Item{Text: "weak", Vector: []float32{0, 1}})
+	// Aligned with the {1, 0} query vector: similarity 1.0 >= 0.5 floor.
+	_ = store.Add(context.Background(), semantic.Item{Text: "strong signal", Vector: []float32{1, 0}})
 	a, mock := newAgent(t, semantic.New(store, &stubEmbedder{}, semantic.WithMinScore(0.5)),
 		gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	if _, err := a.Run(context.Background(), "hi"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if sys := mock.Requests()[0].System; strings.Contains(sys, "weak") {
+	sys := mock.Requests()[0].System
+	if strings.Contains(sys, "weak") {
 		t.Errorf("System contains hit below min score: %q", sys)
+	}
+	if !strings.Contains(sys, "strong signal") {
+		t.Errorf("System missing hit above min score: %q", sys)
 	}
 }

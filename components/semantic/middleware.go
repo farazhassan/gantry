@@ -38,6 +38,8 @@ func WithK(k int) Option {
 
 // WithMinScore drops recalled hits whose Score is below s. By default no
 // floor is applied (even negative-similarity hits pass through, subject to k).
+// Passing WithMinScore(0) applies a floor at 0 (dropping negative-similarity
+// hits), which differs from leaving it unset.
 func WithMinScore(s float64) Option {
 	return func(c *component) {
 		c.minScore = s
