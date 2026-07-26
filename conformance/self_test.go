@@ -14,6 +14,7 @@ import (
 	"github.com/farazhassan/gantry/components/limiter"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/components/retriever"
+	"github.com/farazhassan/gantry/components/semantic"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/conformance"
@@ -111,5 +112,11 @@ func TestLLMPlannerConformance(t *testing.T) {
 func TestNoOpHumanInLoopConformance(t *testing.T) {
 	conformance.HumanInLoopSuite(t, func() humanloop.HumanInLoop {
 		return humanloop.NewNoOp()
+	})
+}
+
+func TestSemanticStoreSuiteSelf(t *testing.T) {
+	conformance.SemanticStoreSuite(t, func(int) semantic.Store {
+		return semantic.NewInMemoryStore()
 	})
 }

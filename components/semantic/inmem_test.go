@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry/components/semantic"
+	"github.com/farazhassan/gantry/conformance"
 )
 
 func TestInMemoryStoreSearchRanksBySimilarity(t *testing.T) {
@@ -67,4 +68,10 @@ func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
 	if len(hits) != 1 || hits[0].Score != 0 {
 		t.Errorf("hits = %+v, want one hit with Score 0", hits)
 	}
+}
+
+func TestInMemoryStoreConformance(t *testing.T) {
+	conformance.SemanticStoreSuite(t, func(int) semantic.Store {
+		return semantic.NewInMemoryStore()
+	})
 }
