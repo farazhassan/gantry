@@ -51,7 +51,9 @@ func WithMinScore(s float64) Option {
 // installs a PhaseAssembleContext "components/semantic:recall" middleware
 // that, on iteration 0, embeds the query (state.Task if set, else
 // state.Input), searches the store, and appends a "Relevant memories:" block
-// to state.System.
+// to state.System; and a PhasePostLLM "components/semantic:persist"
+// middleware that, once the run finishes (state.Done with a non-empty
+// state.FinalOutput), embeds and stores the final user/assistant turn pair.
 func New(store Store, emb embeddings.Embeddings, opts ...Option) gantry.Component {
 	c := &component{store: store, emb: emb, k: defaultK}
 	for _, opt := range opts {
@@ -62,8 +64,9 @@ func New(store Store, emb embeddings.Embeddings, opts ...Option) gantry.Componen
 
 func (c *component) Install(a *gantry.Agent) error {
 	const recallName = "components/semantic:recall"
+	const persistName = "components/semantic:persist"
 
-	return a.UseNamed(gantry.PhaseAssembleContext, recallName, func(next gantry.Handler) gantry.Handler {
+	if err := a.UseNamed(gantry.PhaseAssembleContext, recallName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			// Recall only on the first iteration: state.System persists
 			// across iterations, so appending every iteration would stack
@@ -74,6 +77,23 @@ func (c *component) Install(a *gantry.Agent) error {
 				}
 			}
 			return next(ctx, s)
+		}
+	}); err != nil {
+		return err
+	}
+
+	return a.UseNamed(gantry.PhasePostLLM, persistName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			// Run the inner handler first so the default handlers (and any
+			// critic) finalize the turn, then persist only when the run is
+			// finishing — intermediate tool-call iterations are not memories.
+			if err := next(ctx, s); err != nil {
+				return err
+			}
+			if s.Done && s.FinalOutput != "" {
+				return c.persist(ctx, s)
+			}
+			return nil
 		}
 	})
 }
@@ -117,6 +137,32 @@ func (c *component) recall(ctx context.Context, s *gantry.State) error {
 			fmt.Fprintf(&b, "[%d] %s\n", i+1, h.Text)
 		}
 		s.System += b.String()
+	}
+	return nil
+}
+
+func (c *component) persist(ctx context.Context, s *gantry.State) error {
+	texts := make([]string, 0, 2)
+	items := make([]Item, 0, 2)
+	if s.Input != "" {
+		texts = append(texts, s.Input)
+		items = append(items, Item{Text: s.Input, Metadata: map[string]any{"role": "user"}})
+	}
+	texts = append(texts, s.FinalOutput)
+	items = append(items, Item{Text: s.FinalOutput, Metadata: map[string]any{"role": "assistant"}})
+
+	vecs, err := c.emb.Embed(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("semantic: embed turn: %w", err)
+	}
+	if len(vecs) != len(texts) {
+		return fmt.Errorf("semantic: embedder returned %d vectors for %d texts", len(vecs), len(texts))
+	}
+	for i := range items {
+		items[i].Vector = vecs[i]
+	}
+	if err := c.store.Add(ctx, items...); err != nil {
+		return fmt.Errorf("semantic: add: %w", err)
 	}
 	return nil
 }

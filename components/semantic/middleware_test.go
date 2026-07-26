@@ -129,3 +129,49 @@ func TestRecallMinScoreFiltersWeakHits(t *testing.T) {
 		t.Errorf("System missing hit above min score: %q", sys)
 	}
 }
+
+func TestPersistStoresFinalTurnPair(t *testing.T) {
+	store := semantic.NewInMemoryStore()
+	emb := &stubEmbedder{}
+	a, _ := newAgent(t, semantic.New(store, emb),
+		gantry.LLMResponse{Content: "hello there", StopReason: gantry.StopReasonEnd})
+
+	if _, err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	hits, err := store.Search(context.Background(), []float32{1, 0}, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("store has %d items, want 2 (user + assistant); %+v", len(hits), hits)
+	}
+	byRole := map[string]string{}
+	for _, h := range hits {
+		role, _ := h.Metadata["role"].(string)
+		byRole[role] = h.Text
+	}
+	if byRole["user"] != "hi" {
+		t.Errorf(`user memory = %q, want "hi"`, byRole["user"])
+	}
+	if byRole["assistant"] != "hello there" {
+		t.Errorf(`assistant memory = %q, want "hello there"`, byRole["assistant"])
+	}
+}
+
+func TestPersistEmbedsTurnPairInOneBatch(t *testing.T) {
+	emb := &stubEmbedder{}
+	a, _ := newAgent(t, semantic.New(semantic.NewInMemoryStore(), emb),
+		gantry.LLMResponse{Content: "out", StopReason: gantry.StopReasonEnd})
+	if _, err := a.Run(context.Background(), "in"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Call 1: recall embeds the query. Call 2: persist embeds the turn pair.
+	if len(emb.calls) != 2 {
+		t.Fatalf("Embed called %d times, want 2; calls: %v", len(emb.calls), emb.calls)
+	}
+	if len(emb.calls[1]) != 2 || emb.calls[1][0] != "in" || emb.calls[1][1] != "out" {
+		t.Errorf("persist batch = %v, want [in out]", emb.calls[1])
+	}
+}
