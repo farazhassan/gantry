@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/farazhassan/gantry/components/semantic"
@@ -48,6 +49,12 @@ func SemanticStoreSuite(t *testing.T, factory func(dim int) semantic.Store) {
 				t.Errorf("Score not descending at %d: %v > %v", i, hits[i].Score, hits[i-1].Score)
 			}
 		}
+		if math.Abs(hits[0].Score-1.0) > 1e-4 {
+			t.Errorf("perfect-match Score = %v, want ~1.0", hits[0].Score)
+		}
+		if math.Abs(hits[2].Score-0.0) > 1e-4 {
+			t.Errorf("orthogonal Score = %v, want ~0.0", hits[2].Score)
+		}
 	})
 
 	t.Run("search_limits_to_k", func(t *testing.T) {
@@ -59,6 +66,27 @@ func SemanticStoreSuite(t *testing.T, factory func(dim int) semantic.Store) {
 		}
 		if len(hits) != 2 {
 			t.Errorf("got %d hits, want 2", len(hits))
+		}
+		if len(hits) == 2 && hits[0].Text != "east" {
+			t.Errorf("hits[0].Text = %q, want %q (top-k must keep best matches)", hits[0].Text, "east")
+		}
+	})
+
+	t.Run("search_k_exceeding_count_returns_all", func(t *testing.T) {
+		s := factory(2)
+		seed(t, s)
+		if err := s.Add(ctx, semantic.Item{Text: "southeast", Vector: []float32{0.7071, -0.7071}}); err != nil {
+			t.Fatalf("second Add: %v", err)
+		}
+		hits, err := s.Search(ctx, []float32{1, 0}, 10)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(hits) != 4 {
+			t.Fatalf("got %d hits, want all 4 (second Add must append, not replace)", len(hits))
+		}
+		if hits[0].Text != "east" {
+			t.Errorf("hits[0].Text = %q, want %q", hits[0].Text, "east")
 		}
 	})
 
@@ -123,6 +151,9 @@ func SemanticStoreSuite(t *testing.T, factory func(dim int) semantic.Store) {
 		}
 	})
 
+	// Independence is at the struct level only: the semantic.Store contract
+	// permits Metadata maps to alias the store, so this suite intentionally
+	// does not assert deep independence.
 	t.Run("hits_are_independent_at_struct_level", func(t *testing.T) {
 		s := factory(2)
 		seed(t, s)

@@ -115,7 +115,7 @@ func TestNoOpHumanInLoopConformance(t *testing.T) {
 	})
 }
 
-func TestSemanticStoreSuiteSelf(t *testing.T) {
+func TestInMemorySemanticStoreConformance(t *testing.T) {
 	conformance.SemanticStoreSuite(t, func(int) semantic.Store {
 		return semantic.NewInMemoryStore()
 	})
