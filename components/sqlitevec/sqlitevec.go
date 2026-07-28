@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	// NOTE: go-sqlite3 is version-pinned to match the bindings' embedded WASM build; see go.mod.
 	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces" // WASM SQLite build with vec0 compiled in
 	_ "github.com/ncruces/go-sqlite3/driver"             // database/sql driver named "sqlite3"
 )
