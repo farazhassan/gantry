@@ -3,9 +3,12 @@ package sqlitevec
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/farazhassan/gantry/components/semantic"
 
 	// NOTE: go-sqlite3 is version-pinned to match the bindings' embedded WASM build; see go.mod.
 	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces" // WASM SQLite build with vec0 compiled in
@@ -104,3 +107,104 @@ func (s *Store) init(ctx context.Context) error {
 
 // Close releases the underlying connection pool.
 func (s *Store) Close() error { return s.db.Close() }
+
+// Add stores items in one transaction: the text row and its vector are
+// inserted with the same rowid, so either both land or neither does.
+// Vectors are serialized as JSON, which sqlite-vec accepts for float columns.
+func (s *Store) Add(ctx context.Context, items ...semantic.Item) error {
+	if len(items) == 0 {
+		return nil
+	}
+	for i, it := range items {
+		if len(it.Vector) != s.dim {
+			return fmt.Errorf("sqlitevec: item %d has dimension %d, want %d", i, len(it.Vector), s.dim)
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlitevec: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	insText := fmt.Sprintf(`INSERT INTO %s (text, metadata) VALUES (?, ?)`, s.table)
+	insVec := fmt.Sprintf(`INSERT INTO %s_vec (rowid, embedding) VALUES (?, ?)`, s.table)
+	for _, it := range items {
+		var meta any // stays NULL when there is no metadata
+		if len(it.Metadata) > 0 {
+			b, err := json.Marshal(it.Metadata)
+			if err != nil {
+				return fmt.Errorf("sqlitevec: marshal metadata: %w", err)
+			}
+			meta = string(b)
+		}
+		res, err := tx.ExecContext(ctx, insText, it.Text, meta)
+		if err != nil {
+			return fmt.Errorf("sqlitevec: insert text: %w", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("sqlitevec: last insert id: %w", err)
+		}
+		vec, err := json.Marshal(it.Vector)
+		if err != nil {
+			return fmt.Errorf("sqlitevec: marshal vector: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, insVec, id, string(vec)); err != nil {
+			return fmt.Errorf("sqlitevec: insert vector: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlitevec: commit: %w", err)
+	}
+	return nil
+}
+
+// Search returns the k nearest items by cosine similarity. Score is
+// 1 - cosine distance (higher = more similar). Hit.Vector is left nil.
+func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]semantic.Hit, error) {
+	if k <= 0 {
+		return nil, nil
+	}
+	if len(vector) != s.dim {
+		return nil, fmt.Errorf("sqlitevec: query has dimension %d, want %d", len(vector), s.dim)
+	}
+	vec, err := json.Marshal(vector)
+	if err != nil {
+		return nil, fmt.Errorf("sqlitevec: marshal vector: %w", err)
+	}
+	q := fmt.Sprintf(`
+		SELECT m.text, m.metadata, v.distance
+		FROM %s_vec v
+		JOIN %s m ON m.id = v.rowid
+		WHERE v.embedding MATCH ? AND v.k = ?
+		ORDER BY v.distance`, s.table, s.table)
+	rows, err := s.db.QueryContext(ctx, q, string(vec), k)
+	if err != nil {
+		return nil, fmt.Errorf("sqlitevec: search: %w", err)
+	}
+	defer rows.Close()
+
+	var hits []semantic.Hit
+	for rows.Next() {
+		var text string
+		var meta sql.NullString
+		var distance float64
+		if err := rows.Scan(&text, &meta, &distance); err != nil {
+			return nil, fmt.Errorf("sqlitevec: scan: %w", err)
+		}
+		var md map[string]any
+		if meta.Valid {
+			if err := json.Unmarshal([]byte(meta.String), &md); err != nil {
+				return nil, fmt.Errorf("sqlitevec: unmarshal metadata: %w", err)
+			}
+		}
+		hits = append(hits, semantic.Hit{
+			Item:  semantic.Item{Text: text, Metadata: md},
+			Score: 1 - distance,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlitevec: rows: %w", err)
+	}
+	return hits, nil
+}

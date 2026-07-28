@@ -4,8 +4,19 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/farazhassan/gantry/components/semantic"
 	"github.com/farazhassan/gantry/components/sqlitevec"
+	"github.com/farazhassan/gantry/conformance"
 )
+
+// Compile-time guarantee the backend satisfies semantic.Store.
+var _ semantic.Store = (*sqlitevec.Store)(nil)
+
+func TestConformance(t *testing.T) {
+	conformance.SemanticStoreSuite(t, func(dim int) semantic.Store {
+		return newStore(t, dim)
+	})
+}
 
 func newStore(t *testing.T, dim int) *sqlitevec.Store {
 	t.Helper()

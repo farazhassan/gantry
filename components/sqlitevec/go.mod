@@ -12,6 +12,8 @@ require (
 	github.com/ncruces/go-sqlite3 v0.20.3
 )
 
+require github.com/farazhassan/gantry v0.3.0
+
 require (
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/tetratelabs/wazero v1.8.2 // indirect
