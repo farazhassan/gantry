@@ -34,7 +34,7 @@ func TestMultiIterationRunRecallsOnceAndPersistsOnce(t *testing.T) {
 		t.Fatalf("expected at least 2 LLM calls, got %d", len(reqs))
 	}
 	// The block must appear exactly once in the second request's System.
-	if n := strings.Count(reqs[1].System, "Relevant memories:"); n != 1 {
+	if n := strings.Count(reqs[1].System, "Relevant memories"); n != 1 {
 		t.Errorf("second request has %d memory blocks, want 1; System: %q", n, reqs[1].System)
 	}
 	// One recall embed + one persist embed, nothing per-iteration.

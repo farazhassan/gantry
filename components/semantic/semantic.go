@@ -24,8 +24,11 @@ type Hit struct {
 // similarity. Search returns at most k hits ordered by descending Score;
 // k <= 0 returns an empty result and no error. Hits are independent at the
 // slice/struct level, but Metadata maps may alias the store — treat returned
-// hits as read-only. Add retains the caller's Vector slices and Metadata
-// maps; callers must not mutate an Item's reference-typed fields after Add.
+// hits as read-only. Callers must not mutate an Item's Vector or Metadata
+// after passing it to Add: an implementation is permitted to retain those
+// references rather than copy them (InMemoryStore does; a serializing backend
+// such as sqlitevec does not), so post-Add mutation has implementation-defined
+// effects on stored data.
 type Store interface {
 	Add(ctx context.Context, items ...Item) error
 	Search(ctx context.Context, vector []float32, k int) ([]Hit, error)
