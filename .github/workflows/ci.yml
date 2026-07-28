@@ -72,6 +72,14 @@ jobs:
           cache: true
       - name: Test with race detector and coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test nested module — components/sqlitevec
+        if: matrix.go == 'stable'
+        working-directory: components/sqlitevec
+        run: go test -race ./...
+      - name: Test nested module — mcp
+        if: matrix.go == 'stable'
+        working-directory: mcp
+        run: go test -race ./...
       - name: Upload coverage
         if: matrix.go == 'stable'
         uses: actions/upload-artifact@v7

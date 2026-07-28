@@ -24,6 +24,8 @@ you need.
 | Component | What it does | Wire it up | Built-ins |
 |-----------|--------------|------------|-----------|
 | **transcript** | Persists & reads conversation history across runs | `transcript.New(t)` | `NewInMemoryStore()` |
+| **semantic** | Vector-backed long-term memory: recalls top-k similar past turns into context, persists the final turn pair | `semantic.New(store, emb)` | `NewInMemoryStore()` |
+| **sqlitevec** | `semantic.Store` on SQLite + sqlite-vec (pure Go, own module) | `sqlitevec.New(path, sqlitevec.WithDim(d))` | — |
 | **tool** | Capabilities the LLM can invoke, with parallel dispatch | `tool.FromTools(parallelism, tools...)` · `tool.New(reg, parallelism)` · `tool.Client(defs...)` | `NewRegistry()` |
 | **skill** | Conditional instruction/context blocks injected into the system prompt | `skill.New(s)` | `NewStatic(name, prompt)` |
 | **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.New(r, k)` | `NewStatic(docs)` |
