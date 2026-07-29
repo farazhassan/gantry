@@ -23,7 +23,7 @@ you need.
 
 | Component | What it does | Wire it up | Built-ins |
 |-----------|--------------|------------|-----------|
-| **memory** | Persists & reads conversation history across runs | `memory.New(m)` | `NewInMemoryStore()` |
+| **transcript** | Persists & reads conversation history across runs | `transcript.New(t)` | `NewInMemoryStore()` |
 | **tool** | Capabilities the LLM can invoke, with parallel dispatch | `tool.FromTools(parallelism, tools...)` · `tool.New(reg, parallelism)` · `tool.Client(defs...)` | `NewRegistry()` |
 | **skill** | Conditional instruction/context blocks injected into the system prompt | `skill.New(s)` | `NewStatic(name, prompt)` |
 | **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.New(r, k)` | `NewStatic(docs)` |
@@ -49,7 +49,7 @@ a, _ := gantry.NewAgent(
 	gantry.WithLLM(scriptedLLM),
 	gantry.WithMaxIterations(8),
 	gantry.WithComponents(
-		memory.New(memory.NewInMemoryStore()),
+		transcript.New(transcript.NewInMemoryStore()),
 		skill.New(skill.NewStatic("careful", "Be careful with numbers and cite the tool you used.")),
 		retriever.New(retriever.NewStatic(docs), 3),
 		compactor.New(compactor.NewSlidingWindow(20), compactor.Budget{}),
@@ -79,14 +79,14 @@ reusable test suites that verify an implementation honors its contract. Drop one
 into a `_test.go` and pass a factory:
 
 ```go
-func TestMyMemory(t *testing.T) {
-	conformance.MemorySuite(t, func() memory.Memory {
-		return mypkg.NewMemory()
+func TestMyTranscript(t *testing.T) {
+	conformance.TranscriptSuite(t, func() transcript.Transcript {
+		return mypkg.NewTranscript()
 	})
 }
 ```
 
-Suites are provided for every contract: `Memory`, `Tool`, `Checkpointer`,
+Suites are provided for every contract: `Transcript`, `Tool`, `Checkpointer`,
 `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`, `Planner`,
 `Retriever`, `LLMClient`, and `Tracer`.
 
@@ -137,7 +137,7 @@ up to date.
 
 ```
 ./            Core agent loop (package gantry): phases, middleware, State, and the LLMClient interface
-components/   Drop-in capabilities (memory, tool, skill, retriever, planner, critic,
+components/   Drop-in capabilities (transcript, tool, skill, retriever, planner, critic,
               guardrail, limiter, compactor, humanloop, checkpointer)
 conformance/  Reusable test suites that verify implementations satisfy each contract
 eval/         Dataset / scorer / runner harness plus a scriptable mock LLM client

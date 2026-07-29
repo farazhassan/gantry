@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/transcript"
 )
 
-// MemorySuite verifies the contract of memory.Memory.
-func MemorySuite(t *testing.T, factory func() memory.Memory) {
+// TranscriptSuite verifies the contract of transcript.Transcript.
+func TranscriptSuite(t *testing.T, factory func() transcript.Transcript) {
 	t.Helper()
 
 	t.Run("append_then_read_returns_in_order", func(t *testing.T) {
@@ -39,7 +39,7 @@ func MemorySuite(t *testing.T, factory func() memory.Memory) {
 		}
 	})
 
-	// Independence is at the slice level only (see Memory.Read): mutating a
+	// Independence is at the slice level only (see Transcript.Read): mutating a
 	// returned element must not affect the store. The contract intentionally
 	// does NOT promise deep independence of ToolCalls/Input, so this suite does
 	// not assert it.

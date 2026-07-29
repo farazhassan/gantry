@@ -1,22 +1,22 @@
-package memory_test
+package transcript_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/eval"
 )
 
-func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
-	store := memory.NewInMemoryStore()
+func TestWithTranscriptPreloadsMessagesIntoState(t *testing.T) {
+	store := transcript.NewInMemoryStore()
 	store.Append(context.Background(), gantry.Message{Role: gantry.RoleUser, Content: "earlier turn"})
 
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	if err := a.With(memory.New(store)); err != nil {
-		t.Fatalf("install memory: %v", err)
+	if err := a.With(transcript.New(store)); err != nil {
+		t.Fatalf("install transcript: %v", err)
 	}
 
 	if _, err := a.Run(context.Background(), "now"); err != nil {
@@ -35,12 +35,12 @@ func TestWithMemoryPreloadsMessagesIntoState(t *testing.T) {
 	}
 }
 
-func TestWithMemoryAppendsAssistantResponse(t *testing.T) {
-	store := memory.NewInMemoryStore()
+func TestWithTranscriptAppendsAssistantResponse(t *testing.T) {
+	store := transcript.NewInMemoryStore()
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "hello", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	if err := a.With(memory.New(store)); err != nil {
-		t.Fatalf("install memory: %v", err)
+	if err := a.With(transcript.New(store)); err != nil {
+		t.Fatalf("install transcript: %v", err)
 	}
 
 	if _, err := a.Run(context.Background(), "hi"); err != nil {

@@ -14,11 +14,11 @@ import (
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/components/limiter"
-	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -53,8 +53,8 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 		return nil, nil, nil, err
 	}
 
-	// Memory
-	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+	// Transcript
+	if err := a.With(transcript.New(transcript.NewInMemoryStore())); err != nil {
 		return nil, nil, nil, err
 	}
 

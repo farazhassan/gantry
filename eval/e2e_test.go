@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -25,7 +25,7 @@ func TestEvalE2ESweepAcrossConfigs(t *testing.T) {
 				if err != nil {
 					return nil, err
 				}
-				if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
+				if err := a.With(transcript.New(transcript.NewInMemoryStore())); err != nil {
 					return nil, err
 				}
 				return a, nil
