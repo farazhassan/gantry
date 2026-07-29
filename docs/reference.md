@@ -44,8 +44,10 @@ the component's interface.
 ### Putting it together
 
 `examples/e2e` wires the core components onto a single agent and runs a scripted
-scenario end to end (the `memory`/`sqlitevec` and `qdrant` adapters, which need
-an embeddings client, are covered separately):
+scenario end to end. It does RAG through the `memory` component (a small
+knowledge base embedded into `memory.NewInMemoryStore()` with a deterministic
+stand-in embedder, so it runs under `go test` with no API keys); the `sqlitevec`
+and `qdrant` backends are covered separately:
 
 ```go
 a, _ := gantry.NewAgent(
@@ -54,7 +56,7 @@ a, _ := gantry.NewAgent(
 	gantry.WithComponents(
 		transcript.New(transcript.NewInMemoryStore()),
 		skill.New(skill.NewStatic("careful", "Be careful with numbers and cite the tool you used.")),
-		retriever.New(retriever.NewStatic(docs), 3),
+		memory.New(knowledgeBase, embedder, memory.WithK(1)),
 		compactor.New(compactor.NewSlidingWindow(20), compactor.Budget{}),
 		tool.FromTools(4, calcTool{}),
 		limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0})),
