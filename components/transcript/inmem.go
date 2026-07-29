@@ -1,4 +1,4 @@
-package memory
+package transcript
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// InMemoryStore is a simple slice-backed Memory. Safe for concurrent use.
+// InMemoryStore is a simple slice-backed Transcript. Safe for concurrent use.
 type InMemoryStore struct {
 	mu       sync.Mutex
 	messages []gantry.Message

@@ -12,7 +12,7 @@ type component struct {
 }
 
 // New returns a Component that wires a Compactor with the given Budget into the
-// agent. Install it AFTER memory.New and retriever.New so it is the outermost
+// agent. Install it AFTER transcript.New and retriever.New so it is the outermost
 // PhaseAssembleContext middleware; it runs the inner context-assembly middleware
 // first (via next) and then compacts the fully-assembled transcript.
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }

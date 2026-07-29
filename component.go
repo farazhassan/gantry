@@ -1,7 +1,7 @@
 package gantry
 
 // Component is anything that can wire itself into an agent. Component packages
-// (e.g. components/memory) provide constructors that return a Component; install
+// (e.g. components/transcript) provide constructors that return a Component; install
 // them with Agent.With or the WithComponents option.
 type Component interface {
 	Install(*Agent) error

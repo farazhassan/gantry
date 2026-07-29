@@ -10,10 +10,10 @@ import (
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/limiter"
-	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -32,7 +32,7 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 	return out, nil
 }
 
-// This test wires Memory, Skill, Retriever, Compactor, Tool, Limiter, and
+// This test wires Transcript, Skill, Retriever, Compactor, Tool, Limiter, and
 // Guardrail together and verifies the agent completes successfully without
 // any component interfering with another. It uses two LLM turns: first
 // requesting a tool call, second producing the final answer.
@@ -57,8 +57,8 @@ func TestComponentsInteroperate(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if err := a.With(memory.New(memory.NewInMemoryStore())); err != nil {
-		t.Fatalf("install memory: %v", err)
+	if err := a.With(transcript.New(transcript.NewInMemoryStore())); err != nil {
+		t.Fatalf("install transcript: %v", err)
 	}
 	if err := a.With(skill.New(skill.NewStatic("careful", "Be careful with numbers."))); err != nil {
 		t.Fatalf("install skill: %v", err)

@@ -11,8 +11,8 @@ type component struct{ l Limiter }
 
 // New returns a Component that installs token-budget middleware: a PhaseLLMCall
 // pre-check, a PhasePostLLM usage recorder, and a PhasePostLLM finalize that
-// terminates the loop when the limit is exceeded. Register limiter before memory
-// so memory:persist observes the finalized turn (see package doc).
+// terminates the loop when the limit is exceeded. Register limiter before
+// transcript so transcript:persist observes the finalized turn (see package doc).
 //
 // When the limit is exceeded mid-run, state.Done is set with
 // DoneBudgetExceeded. The current iteration's response is still appended.
@@ -21,8 +21,8 @@ type component struct{ l Limiter }
 // before next() (pre-next), while finalize does its work after next()
 // (post-next). Pre-next work runs in reverse registration order and post-next
 // work in forward order (last-registered = outermost = runs last). Register
-// memory.New after limiter and critic so memory:persist observes the
-// finalized turn. See the memory package's "Middleware ordering" note.
+// transcript.New after limiter and critic so transcript:persist observes the
+// finalized turn. See the transcript package's "Middleware ordering" note.
 func New(l Limiter) gantry.Component { return &component{l: l} }
 
 func (c *component) Install(a *gantry.Agent) error {

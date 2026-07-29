@@ -39,7 +39,7 @@ type Manager struct {
 
 // NewManager pairs a shared agent with a durable store. It panics if agent or
 // store is nil (programmer error), matching the lightweight constructors
-// elsewhere in the repo. The agent MUST NOT carry memory.New or
+// elsewhere in the repo. The agent MUST NOT carry transcript.New or
 // checkpointer.New (see package doc).
 func NewManager(a *gantry.Agent, store checkpointer.Checkpointer, opts ...Option) *Manager {
 	if a == nil {

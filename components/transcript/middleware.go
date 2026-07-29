@@ -1,4 +1,4 @@
-package memory
+package transcript
 
 import (
 	"context"
@@ -6,26 +6,28 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-type component struct{ m Memory }
+type component struct{ m Transcript }
 
-// New returns a Component that wires a Memory implementation into the agent.
-// It installs a PhaseAssembleContext "components/memory:read" middleware that
-// prepends stored history on iteration 0, and a PhasePostLLM
-// "components/memory:persist" middleware that appends the user input (iteration 0)
-// and the assistant response to the store. Register memory LAST among PhasePostLLM
-// components so persist captures the finalized assistant message (see package doc).
+// New returns a Component that wires a Transcript implementation into the
+// agent. It installs a PhaseAssembleContext "components/transcript:read"
+// middleware that prepends stored history on iteration 0, and a PhasePostLLM
+// "components/transcript:persist" middleware that appends the user input
+// (iteration 0) and the assistant response to the store. Register transcript
+// LAST among PhasePostLLM components so persist captures the finalized
+// assistant message (see package doc).
 //
-// Middleware ordering: register memory LAST among the PhasePostLLM components
-// (after critic.New and limiter.New). PhasePostLLM components that act after
-// next() run that work in forward registration order (last-registered = outermost
-// = runs last), so registering memory last makes memory:persist capture the
-// assistant message after the critic has finalized it (Verdict.ModifyOutput) or
-// left the rejected message in the transcript (Verdict.Accept == false).
-func New(m Memory) gantry.Component { return &component{m: m} }
+// Middleware ordering: register transcript LAST among the PhasePostLLM
+// components (after critic.New and limiter.New). PhasePostLLM components that
+// act after next() run that work in forward registration order (last-registered
+// = outermost = runs last), so registering transcript last makes
+// transcript:persist capture the assistant message after the critic has
+// finalized it (Verdict.ModifyOutput) or left the rejected message in the
+// transcript (Verdict.Accept == false).
+func New(m Transcript) gantry.Component { return &component{m: m} }
 
 func (c *component) Install(a *gantry.Agent) error {
-	const readName = "components/memory:read"
-	const persistName = "components/memory:persist"
+	const readName = "components/transcript:read"
+	const persistName = "components/transcript:persist"
 
 	if err := a.UseNamed(gantry.PhaseAssembleContext, readName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {

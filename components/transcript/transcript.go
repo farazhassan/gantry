@@ -1,13 +1,13 @@
-// Package memory defines the Memory interface for persisting conversation
-// history and provides an in-memory reference implementation.
+// Package transcript defines the Transcript interface for persisting
+// conversation history and provides an in-memory reference implementation.
 //
 // Middleware ordering: components that do work after next() on PhasePostLLM
-// (memory persist, critic, limiter finalize) run that work in forward
+// (transcript persist, critic, limiter finalize) run that work in forward
 // registration order — the last-registered middleware is the outermost and so
-// runs last. Register memory.New last so memory:persist observes the finalized
-// turn: after the critic has rewritten (Verdict.ModifyOutput) or rejected
-// (Verdict.Accept == false) the assistant message.
-package memory
+// runs last. Register transcript.New last so transcript:persist observes the
+// finalized turn: after the critic has rewritten (Verdict.ModifyOutput) or
+// rejected (Verdict.Accept == false) the assistant message.
+package transcript
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// Memory persists and reads back the conversation transcript.
-type Memory interface {
+// Transcript persists and reads back the conversation transcript.
+type Transcript interface {
 	Append(ctx context.Context, msg gantry.Message) error
 
 	// Read returns the stored transcript as a fresh slice that does not alias

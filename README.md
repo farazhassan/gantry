@@ -164,7 +164,7 @@ inspect `state.DoneReason` and the trace.
 Batteries-included, opt-in capabilities that attach as middleware via convenience
 `With…` constructors — mix and match what you need:
 
-**memory** · **tool** · **skill** · **retriever** · **planner** · **critic** ·
+**transcript** · **tool** · **skill** · **retriever** · **planner** · **critic** ·
 **guardrail** · **limiter** · **compactor** · **humanloop** · **checkpointer**
 
 Each ships a reference built-in (swap in your own by satisfying the component's

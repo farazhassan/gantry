@@ -1,15 +1,15 @@
-package memory_test
+package transcript_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/transcript"
 )
 
 func TestInMemoryStoreAppendAndRead(t *testing.T) {
-	m := memory.NewInMemoryStore()
+	m := transcript.NewInMemoryStore()
 	ctx := context.Background()
 
 	if err := m.Append(ctx, gantry.Message{Role: gantry.RoleUser, Content: "hi"}); err != nil {
@@ -32,7 +32,7 @@ func TestInMemoryStoreAppendAndRead(t *testing.T) {
 }
 
 func TestInMemoryStoreReadReturnsCopy(t *testing.T) {
-	m := memory.NewInMemoryStore()
+	m := transcript.NewInMemoryStore()
 	m.Append(context.Background(), gantry.Message{Content: "x"})
 	a, _ := m.Read(context.Background())
 	a[0].Content = "mutated"
@@ -43,5 +43,5 @@ func TestInMemoryStoreReadReturnsCopy(t *testing.T) {
 }
 
 func TestInMemoryStoreInterfaceSatisfaction(t *testing.T) {
-	var _ memory.Memory = memory.NewInMemoryStore()
+	var _ transcript.Transcript = transcript.NewInMemoryStore()
 }

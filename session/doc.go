@@ -8,15 +8,15 @@
 // streaming counterpart: same Load/Save contract, but it also emits whole-run
 // Events to an EventSink for forwarding over SSE.
 //
-// Memory vs. Session. Both carry a transcript across runs, but they are used
-// alternatively, never stacked for the same transcript:
+// Transcript vs. Session. Both carry a transcript across runs, but they are
+// used alternatively, never stacked for the same transcript:
 //
-//   - memory  — implicit, single, unkeyed transcript baked into one agent via
-//     memory.New. Best for one long-lived in-process conversation.
+//   - transcript — implicit, single, unkeyed transcript baked into one agent
+//     via transcript.New. Best for one long-lived in-process conversation.
 //   - session — explicit, keyed, durable; the transcript lives in the per-id
 //     State carried by RunFrom. Best for many conversations and/or persistence.
 //
-// The agent attached to a Manager MUST NOT also carry memory.New or
-// checkpointer.New: the Session owns load/save, and memory would double-manage
-// the transcript.
+// The agent attached to a Manager MUST NOT also carry transcript.New or
+// checkpointer.New: the Session owns load/save, and the transcript component
+// would double-manage the transcript.
 package session

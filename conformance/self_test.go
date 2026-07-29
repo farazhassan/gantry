@@ -12,10 +12,10 @@ import (
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/components/limiter"
-	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/conformance"
 	"github.com/farazhassan/gantry/eval"
 )
@@ -36,9 +36,9 @@ func TestMockStreamingLLMClientConformance(t *testing.T) {
 	})
 }
 
-func TestInMemoryMemoryConformance(t *testing.T) {
-	conformance.MemorySuite(t, func() memory.Memory {
-		return memory.NewInMemoryStore()
+func TestInMemoryTranscriptConformance(t *testing.T) {
+	conformance.TranscriptSuite(t, func() transcript.Transcript {
+		return transcript.NewInMemoryStore()
 	})
 }
 

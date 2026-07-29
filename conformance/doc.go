@@ -5,9 +5,9 @@
 //
 // Example usage (in an adapter's test file):
 //
-//	func TestMyMemoryConformance(t *testing.T) {
-//	    conformance.MemorySuite(t, func() memory.Memory {
-//	        return mypkg.NewMemory(...)
+//	func TestMyTranscriptConformance(t *testing.T) {
+//	    conformance.TranscriptSuite(t, func() transcript.Transcript {
+//	        return mypkg.NewTranscript(...)
 //	    })
 //	}
 package conformance
