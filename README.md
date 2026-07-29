@@ -164,12 +164,12 @@ inspect `state.DoneReason` and the trace.
 Batteries-included, opt-in capabilities that attach as middleware via convenience
 `With…` constructors — mix and match what you need:
 
-**transcript** · **tool** · **skill** · **retriever** · **planner** · **critic** ·
-**guardrail** · **limiter** · **compactor** · **humanloop** · **checkpointer**
+**transcript** · **memory** · **tool** · **skill** · **retriever** · **planner** ·
+**critic** · **guardrail** · **limiter** · **compactor** · **humanloop** · **checkpointer**
 
 Each ships a reference built-in (swap in your own by satisfying the component's
 interface). Full reference table, built-ins, and an end-to-end example wiring
-every component onto one agent → **[docs/reference.md](docs/reference.md#components)**.
+the core components onto one agent → **[docs/reference.md](docs/reference.md#components)**.
 
 For keyed, durable multi-turn conversations — how state is shared across every
 message in a session — see the **[sessions guide](docs/sessions.md)**.

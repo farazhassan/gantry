@@ -43,8 +43,9 @@ the component's interface.
 
 ### Putting it together
 
-`examples/e2e` wires **every** component onto a single agent and runs a scripted
-scenario end to end:
+`examples/e2e` wires the core components onto a single agent and runs a scripted
+scenario end to end (the `memory`/`sqlitevec` and `qdrant` adapters, which need
+an embeddings client, are covered separately):
 
 ```go
 a, _ := gantry.NewAgent(
