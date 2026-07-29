@@ -1,20 +1,20 @@
-package semantic_test
+package memory_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/semantic"
+	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/conformance"
 )
 
 func TestInMemoryStoreSearchRanksBySimilarity(t *testing.T) {
-	s := semantic.NewInMemoryStore()
+	s := memory.NewInMemoryStore()
 	ctx := context.Background()
 	err := s.Add(ctx,
-		semantic.Item{Text: "east", Vector: []float32{1, 0}},
-		semantic.Item{Text: "north", Vector: []float32{0, 1}},
-		semantic.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
+		memory.Item{Text: "east", Vector: []float32{1, 0}},
+		memory.Item{Text: "north", Vector: []float32{0, 1}},
+		memory.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
 	)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
@@ -35,8 +35,8 @@ func TestInMemoryStoreSearchRanksBySimilarity(t *testing.T) {
 }
 
 func TestInMemoryStoreSearchNonPositiveK(t *testing.T) {
-	s := semantic.NewInMemoryStore()
-	_ = s.Add(context.Background(), semantic.Item{Text: "x", Vector: []float32{1, 0}})
+	s := memory.NewInMemoryStore()
+	_ = s.Add(context.Background(), memory.Item{Text: "x", Vector: []float32{1, 0}})
 	hits, err := s.Search(context.Background(), []float32{1, 0}, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -47,8 +47,8 @@ func TestInMemoryStoreSearchNonPositiveK(t *testing.T) {
 }
 
 func TestInMemoryStoreMismatchedDimensionScoresZero(t *testing.T) {
-	s := semantic.NewInMemoryStore()
-	_ = s.Add(context.Background(), semantic.Item{Text: "short", Vector: []float32{1}})
+	s := memory.NewInMemoryStore()
+	_ = s.Add(context.Background(), memory.Item{Text: "short", Vector: []float32{1}})
 	hits, err := s.Search(context.Background(), []float32{1, 0}, 1)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -59,8 +59,8 @@ func TestInMemoryStoreMismatchedDimensionScoresZero(t *testing.T) {
 }
 
 func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
-	s := semantic.NewInMemoryStore()
-	_ = s.Add(context.Background(), semantic.Item{Text: "real", Vector: []float32{1, 0}})
+	s := memory.NewInMemoryStore()
+	_ = s.Add(context.Background(), memory.Item{Text: "real", Vector: []float32{1, 0}})
 	hits, err := s.Search(context.Background(), []float32{0, 0}, 1)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -71,7 +71,7 @@ func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
 }
 
 func TestInMemoryStoreConformance(t *testing.T) {
-	conformance.SemanticStoreSuite(t, func(int) semantic.Store {
-		return semantic.NewInMemoryStore()
+	conformance.MemoryStoreSuite(t, func(int) memory.Store {
+		return memory.NewInMemoryStore()
 	})
 }

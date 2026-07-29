@@ -5,16 +5,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/semantic"
+	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/sqlitevec"
 	"github.com/farazhassan/gantry/conformance"
 )
 
-// Compile-time guarantee the backend satisfies semantic.Store.
-var _ semantic.Store = (*sqlitevec.Store)(nil)
+// Compile-time guarantee the backend satisfies memory.Store.
+var _ memory.Store = (*sqlitevec.Store)(nil)
 
 func TestConformance(t *testing.T) {
-	conformance.SemanticStoreSuite(t, func(dim int) semantic.Store {
+	conformance.MemoryStoreSuite(t, func(dim int) memory.Store {
 		return newStore(t, dim)
 	})
 }
@@ -63,7 +63,7 @@ func TestReopenSameFileKeepsData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := s1.Add(ctx, semantic.Item{Text: "durable", Vector: []float32{1, 0}}); err != nil {
+	if err := s1.Add(ctx, memory.Item{Text: "durable", Vector: []float32{1, 0}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := s1.Close(); err != nil {
@@ -88,7 +88,7 @@ func TestReopenSameFileKeepsData(t *testing.T) {
 func TestDimensionMismatchErrors(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t, 2)
-	if err := s.Add(ctx, semantic.Item{Text: "x", Vector: []float32{1, 0, 0}}); err == nil {
+	if err := s.Add(ctx, memory.Item{Text: "x", Vector: []float32{1, 0, 0}}); err == nil {
 		t.Error("Add with wrong dimension did not error")
 	}
 	if _, err := s.Search(ctx, []float32{1}, 1); err == nil {
@@ -99,7 +99,7 @@ func TestDimensionMismatchErrors(t *testing.T) {
 func TestNilMetadataRoundTripsAsNil(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t, 2)
-	if err := s.Add(ctx, semantic.Item{Text: "bare", Vector: []float32{1, 0}}); err != nil {
+	if err := s.Add(ctx, memory.Item{Text: "bare", Vector: []float32{1, 0}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	hits, err := s.Search(ctx, []float32{1, 0}, 1)
@@ -121,7 +121,7 @@ func TestInMemoryPath(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer s.Close()
-	if err := s.Add(ctx, semantic.Item{Text: "ephemeral", Vector: []float32{1, 0}}); err != nil {
+	if err := s.Add(ctx, memory.Item{Text: "ephemeral", Vector: []float32{1, 0}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	hits, err := s.Search(ctx, []float32{1, 0}, 1)
@@ -141,7 +141,7 @@ func TestWithTableUsesCustomTables(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer s.Close()
-	if err := s.Add(ctx, semantic.Item{Text: "scoped", Vector: []float32{1, 0}}); err != nil {
+	if err := s.Add(ctx, memory.Item{Text: "scoped", Vector: []float32{1, 0}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	hits, err := s.Search(ctx, []float32{1, 0}, 1)
@@ -156,7 +156,7 @@ func TestWithTableUsesCustomTables(t *testing.T) {
 func TestNumericMetadataRoundTripsAsFloat64(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t, 2)
-	if err := s.Add(ctx, semantic.Item{
+	if err := s.Add(ctx, memory.Item{
 		Text:     "counted",
 		Vector:   []float32{1, 0},
 		Metadata: map[string]any{"count": 5},

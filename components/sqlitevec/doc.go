@@ -1,4 +1,4 @@
-// Package sqlitevec implements semantic.Store on SQLite with the sqlite-vec
+// Package sqlitevec implements memory.Store on SQLite with the sqlite-vec
 // extension: a local, serverless vector store in a single database file.
 //
 // The stack is pure Go — github.com/ncruces/go-sqlite3 runs SQLite compiled
@@ -6,12 +6,12 @@
 // vec0 compiled in — so there is no CGO and no C toolchain requirement.
 //
 // This package lives in its own Go module so the root gantry module stays
-// dependency-free. Wire it into an agent with components/semantic:
+// dependency-free. Wire it into an agent with components/memory:
 //
 //	store, err := sqlitevec.New("agent.db", sqlitevec.WithDim(1536))
 //	// handle err
 //	defer store.Close()
-//	err = agent.With(semantic.New(store, embeddingsClient))
+//	err = agent.With(memory.New(store, embeddingsClient))
 //
 // Item metadata is stored as JSON, so metadata values are subject to JSON
 // type normalization on read — notably, numbers come back as float64

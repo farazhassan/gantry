@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/farazhassan/gantry/components/semantic"
+	"github.com/farazhassan/gantry/components/memory"
 
 	// NOTE: go-sqlite3 is version-pinned to match the bindings' embedded WASM build; see go.mod.
 	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces" // WASM SQLite build with vec0 compiled in
@@ -22,7 +22,7 @@ const defaultTable = "memories"
 // are accepted.
 var tableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Store is a semantic.Store backed by SQLite + the sqlite-vec extension.
+// Store is a memory.Store backed by SQLite + the sqlite-vec extension.
 // Vectors live in a vec0 virtual table (cosine distance); text and metadata
 // live in a companion table linked by rowid. Safe for concurrent use.
 type Store struct {
@@ -111,7 +111,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // Add stores items in one transaction: the text row and its vector are
 // inserted with the same rowid, so either both land or neither does.
 // Vectors are serialized as JSON, which sqlite-vec accepts for float columns.
-func (s *Store) Add(ctx context.Context, items ...semantic.Item) error {
+func (s *Store) Add(ctx context.Context, items ...memory.Item) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -161,7 +161,7 @@ func (s *Store) Add(ctx context.Context, items ...semantic.Item) error {
 
 // Search returns the k nearest items by cosine similarity. Score is
 // 1 - cosine distance (higher = more similar). Hit.Vector is left nil.
-func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]semantic.Hit, error) {
+func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]memory.Hit, error) {
 	if k <= 0 {
 		return nil, nil
 	}
@@ -184,7 +184,7 @@ func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]semantic
 	}
 	defer rows.Close()
 
-	var hits []semantic.Hit
+	var hits []memory.Hit
 	for rows.Next() {
 		var text string
 		var meta sql.NullString
@@ -198,8 +198,8 @@ func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]semantic
 				return nil, fmt.Errorf("sqlitevec: unmarshal metadata: %w", err)
 			}
 		}
-		hits = append(hits, semantic.Hit{
-			Item:  semantic.Item{Text: text, Metadata: md},
+		hits = append(hits, memory.Hit{
+			Item:  memory.Item{Text: text, Metadata: md},
 			Score: 1 - distance,
 		})
 	}

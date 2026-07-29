@@ -1,4 +1,4 @@
-package semantic
+package memory
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 // MetaRecalled is the state.Meta key under which the recall middleware
 // stashes the []Hit recalled this run (for observability and tests).
-const MetaRecalled = "components/semantic:recalled"
+const MetaRecalled = "components/memory:recalled"
 
 const defaultK = 4
 
@@ -47,21 +47,21 @@ func WithMinScore(s float64) Option {
 	}
 }
 
-// New returns a Component that wires semantic memory into the agent. It
-// installs a PhaseAssembleContext "components/semantic:recall" middleware
+// New returns a Component that wires vector-backed semantic memory into the
+// agent. It installs a PhaseAssembleContext "components/memory:recall" middleware
 // that, on iteration 0, embeds the query (state.Task if set, else
 // state.Input), searches the store, and appends a "Relevant memories" block
-// to state.System; and a PhasePostLLM "components/semantic:persist"
+// to state.System; and a PhasePostLLM "components/memory:persist"
 // middleware that, once the run finishes, embeds and stores the final
 // user/assistant turn pair.
 //
-// Middleware ordering: register semantic LAST among the PhasePostLLM
+// Middleware ordering: register memory LAST among the PhasePostLLM
 // components (after critic.New and limiter.New). PhasePostLLM components that
 // act after next() run that work in forward registration order
-// (last-registered = outermost = runs last), so registering semantic last
+// (last-registered = outermost = runs last), so registering memory last
 // lets persist observe the critic-finalized output — a Verdict.ModifyOutput
 // rewrite is captured, and a Verdict.Accept == false rejection (which unsets
-// Done and clears FinalOutput) is correctly skipped. If semantic is installed
+// Done and clears FinalOutput) is correctly skipped. If memory is installed
 // before critic, persist would run on the pre-critic draft instead.
 //
 // persist only stores clean completions: state.Done with a non-empty
@@ -81,8 +81,8 @@ func New(store Store, emb embeddings.Embeddings, opts ...Option) gantry.Componen
 }
 
 func (c *component) Install(a *gantry.Agent) error {
-	const recallName = "components/semantic:recall"
-	const persistName = "components/semantic:persist"
+	const recallName = "components/memory:recall"
+	const persistName = "components/memory:persist"
 
 	if err := a.UseNamed(gantry.PhaseAssembleContext, recallName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
@@ -126,14 +126,14 @@ func (c *component) recall(ctx context.Context, s *gantry.State) error {
 	}
 	vecs, err := c.emb.Embed(ctx, []string{query})
 	if err != nil {
-		return fmt.Errorf("semantic: embed query: %w", err)
+		return fmt.Errorf("memory: embed query: %w", err)
 	}
 	if len(vecs) != 1 {
-		return fmt.Errorf("semantic: embedder returned %d vectors for 1 query", len(vecs))
+		return fmt.Errorf("memory: embedder returned %d vectors for 1 query", len(vecs))
 	}
 	hits, err := c.store.Search(ctx, vecs[0], c.k)
 	if err != nil {
-		return fmt.Errorf("semantic: search: %w", err)
+		return fmt.Errorf("memory: search: %w", err)
 	}
 	if c.minScoreSet {
 		kept := hits[:0:0]
@@ -176,16 +176,16 @@ func (c *component) persist(ctx context.Context, s *gantry.State) error {
 
 	vecs, err := c.emb.Embed(ctx, texts)
 	if err != nil {
-		return fmt.Errorf("semantic: embed turn: %w", err)
+		return fmt.Errorf("memory: embed turn: %w", err)
 	}
 	if len(vecs) != len(texts) {
-		return fmt.Errorf("semantic: embedder returned %d vectors for %d texts", len(vecs), len(texts))
+		return fmt.Errorf("memory: embedder returned %d vectors for %d texts", len(vecs), len(texts))
 	}
 	for i := range items {
 		items[i].Vector = vecs[i]
 	}
 	if err := c.store.Add(ctx, items...); err != nil {
-		return fmt.Errorf("semantic: add: %w", err)
+		return fmt.Errorf("memory: add: %w", err)
 	}
 	return nil
 }

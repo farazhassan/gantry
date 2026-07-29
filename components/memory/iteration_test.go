@@ -1,4 +1,4 @@
-package semantic_test
+package memory_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/semantic"
+	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -15,12 +15,12 @@ import (
 // (state.System persists across iterations), and persist must only store the
 // final turn pair, not one pair per iteration.
 func TestMultiIterationRunRecallsOnceAndPersistsOnce(t *testing.T) {
-	store := semantic.NewInMemoryStore()
+	store := memory.NewInMemoryStore()
 	ctx := context.Background()
-	_ = store.Add(ctx, semantic.Item{Text: "seeded memory", Vector: []float32{1, 0}})
+	_ = store.Add(ctx, memory.Item{Text: "seeded memory", Vector: []float32{1, 0}})
 	emb := &stubEmbedder{}
 
-	a, mock := newAgent(t, semantic.New(store, emb),
+	a, mock := newAgent(t, memory.New(store, emb),
 		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "t1", Name: "x"}}, StopReason: gantry.StopReasonToolUse},
 		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
 	)
@@ -69,15 +69,15 @@ func TestMultiIterationRunRecallsOnceAndPersistsOnce(t *testing.T) {
 // &&` removed from the guard.
 //
 // To actually pin the Done conjunct, this test uses a probe middleware
-// registered inner to semantic's persist (i.e. before semantic.New, so
+// registered inner to memory's persist (i.e. before memory.New, so
 // persist's post-next check observes the probe's effect): it lets the
 // default handler finish the turn normally (Done=true, FinalOutput set) and
 // then clears Done, simulating a component that leaves FinalOutput populated
 // without a clean finish. persist must still refuse to store.
 func TestPersistRequiresDoneAlongsideFinalOutput(t *testing.T) {
-	store := semantic.NewInMemoryStore()
+	store := memory.NewInMemoryStore()
 	ctx := context.Background()
-	_ = store.Add(ctx, semantic.Item{Text: "seeded memory", Vector: []float32{1, 0}})
+	_ = store.Add(ctx, memory.Item{Text: "seeded memory", Vector: []float32{1, 0}})
 	emb := &stubEmbedder{}
 
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd})
@@ -86,7 +86,7 @@ func TestPersistRequiresDoneAlongsideFinalOutput(t *testing.T) {
 		t.Fatalf("NewAgent: %v", err)
 	}
 
-	// Registered before semantic.New so it is inner to persist: registration
+	// Registered before memory.New so it is inner to persist: registration
 	// order is innermost-first (see gantry.Compose), so persist's check runs
 	// after this probe's post-next code has already cleared Done.
 	if err := a.UseNamed(gantry.PhasePostLLM, "test:clear-done-after-finish", func(next gantry.Handler) gantry.Handler {
@@ -100,8 +100,8 @@ func TestPersistRequiresDoneAlongsideFinalOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("install probe: %v", err)
 	}
-	if err := a.With(semantic.New(store, emb)); err != nil {
-		t.Fatalf("install semantic: %v", err)
+	if err := a.With(memory.New(store, emb)); err != nil {
+		t.Fatalf("install memory: %v", err)
 	}
 
 	if _, err := a.Run(ctx, "hello"); err != nil {

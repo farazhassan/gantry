@@ -1,4 +1,4 @@
-package semantic
+package memory
 
 import "context"
 
