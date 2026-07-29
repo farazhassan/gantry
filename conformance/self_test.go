@@ -16,6 +16,7 @@ import (
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/transcript"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/conformance"
 	"github.com/farazhassan/gantry/eval"
 )
@@ -111,5 +112,11 @@ func TestLLMPlannerConformance(t *testing.T) {
 func TestNoOpHumanInLoopConformance(t *testing.T) {
 	conformance.HumanInLoopSuite(t, func() humanloop.HumanInLoop {
 		return humanloop.NewNoOp()
+	})
+}
+
+func TestInMemoryVectorStoreConformance(t *testing.T) {
+	conformance.VectorStoreSuite(t, func(int) vectorstore.Store {
+		return vectorstore.NewInMemoryStore()
 	})
 }

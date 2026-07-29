@@ -24,9 +24,11 @@ you need.
 | Component | What it does | Wire it up | Built-ins |
 |-----------|--------------|------------|-----------|
 | **transcript** | Persists & reads conversation history across runs | `transcript.New(t)` | `NewInMemoryStore()` |
+| **memory** | Vector-backed long-term memory: recalls top-k similar past turns into context, persists the final turn pair | `memory.New(store, emb)` | `vectorstore.NewInMemoryStore()` |
+| **sqlitevec** | `vectorstore.Store` on SQLite + sqlite-vec (pure Go, own module) | `sqlitevec.New(path, sqlitevec.WithDim(d))` | — |
 | **tool** | Capabilities the LLM can invoke, with parallel dispatch | `tool.FromTools(parallelism, tools...)` · `tool.New(reg, parallelism)` · `tool.Client(defs...)` | `NewRegistry()` |
 | **skill** | Conditional instruction/context blocks injected into the system prompt | `skill.New(s)` | `NewStatic(name, prompt)` |
-| **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.New(r, k)` | `NewStatic(docs)` |
+| **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.New(r, k)` | `NewStatic(docs)` · `NewVectorRetriever(store, emb)` |
 | **planner** | Decomposes the task into a plan up front | `planner.New(p)` | `NewLLM(client, rubric)` |
 | **critic** | Self-reviews the last response (pass / reject) | `critic.New(c)` | `NewLLM(client, rubric)` |
 | **guardrail** | Validates inputs (pre-LLM) and outputs (post-LLM) | `guardrail.New(g)` | `NewRegex(pattern, direction)` |
@@ -39,10 +41,19 @@ Each built-in is a reference implementation — swap in your own (a Redis
 checkpointer, a vector-store retriever, a real guardrail service) by satisfying
 the component's interface.
 
+`memory` and `retriever`'s `NewVectorRetriever` are two policies — read-write
+and read-only — over one shared **`components/vectorstore`** `Store` interface
+(`Add`/`Search` over embedded items). `vectorstore.NewInMemoryStore()` is the
+built-in backend; `sqlitevec` is a durable one. Verify a backend with
+`conformance.VectorStoreSuite`.
+
 ### Putting it together
 
-`examples/e2e` wires **every** component onto a single agent and runs a scripted
-scenario end to end:
+`examples/e2e` wires the core components onto a single agent and runs a scripted
+scenario end to end. It does RAG through the `memory` component (a small
+knowledge base embedded into `vectorstore.NewInMemoryStore()` with a deterministic
+stand-in embedder, so it runs under `go test` with no API keys); the `sqlitevec`
+and `qdrant` backends are covered separately:
 
 ```go
 a, _ := gantry.NewAgent(
@@ -51,7 +62,7 @@ a, _ := gantry.NewAgent(
 	gantry.WithComponents(
 		transcript.New(transcript.NewInMemoryStore()),
 		skill.New(skill.NewStatic("careful", "Be careful with numbers and cite the tool you used.")),
-		retriever.New(retriever.NewStatic(docs), 3),
+		memory.New(knowledgeBase, embedder, memory.WithK(1)),
 		compactor.New(compactor.NewSlidingWindow(20), compactor.Budget{}),
 		tool.FromTools(4, calcTool{}),
 		limiter.New(limiter.NewBudget(limiter.Limits{MaxTokens: 10_000, MaxCostUSD: 1.0})),
@@ -86,9 +97,9 @@ func TestMyTranscript(t *testing.T) {
 }
 ```
 
-Suites are provided for every contract: `Transcript`, `Tool`, `Checkpointer`,
-`Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`, `Planner`,
-`Retriever`, `LLMClient`, and `Tracer`.
+Suites are provided for every contract: `Transcript`, `VectorStore`, `Tool`,
+`Checkpointer`, `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`,
+`Planner`, `Retriever`, `LLMClient`, and `Tracer`.
 
 ## Eval
 
@@ -137,7 +148,7 @@ up to date.
 
 ```
 ./            Core agent loop (package gantry): phases, middleware, State, and the LLMClient interface
-components/   Drop-in capabilities (transcript, tool, skill, retriever, planner, critic,
+components/   Drop-in capabilities (transcript, memory, tool, skill, retriever, planner, critic,
               guardrail, limiter, compactor, humanloop, checkpointer)
 conformance/  Reusable test suites that verify implementations satisfy each contract
 eval/         Dataset / scorer / runner harness plus a scriptable mock LLM client

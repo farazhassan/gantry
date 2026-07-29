@@ -4,21 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"math"
 	"os"
+	"strings"
+	"unicode"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
+	"github.com/farazhassan/gantry/components/embeddings"
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/components/limiter"
+	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/planner"
-	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/transcript"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -39,6 +45,69 @@ func (calcTool) Invoke(_ context.Context, in json.RawMessage) (json.RawMessage, 
 		return nil, err
 	}
 	return json.Marshal(args.A + args.B)
+}
+
+// docEmbedder is a tiny, deterministic stand-in embedder for the example. It
+// hashes each lowercased alphanumeric token into a fixed-width bag-of-words
+// vector and L2-normalizes it — no ML, no network. It exists only to show the
+// memory component's mechanism end to end (embed a query, rank stored items by
+// cosine similarity, inject the nearest into context) under `go test` with no
+// API keys. Swap in embeddings/openai or embeddings/voyage for real use.
+type docEmbedder struct{}
+
+const embedDim = 256
+
+// compile-time check that the stand-in satisfies the interface real adapters do.
+var _ embeddings.Embeddings = docEmbedder{}
+
+func (docEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		v := make([]float32, embedDim)
+		for _, tok := range strings.FieldsFunc(strings.ToLower(t), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		}) {
+			h := fnv.New32a()
+			_, _ = h.Write([]byte(tok))
+			v[h.Sum32()%embedDim]++
+		}
+		var norm float64
+		for _, x := range v {
+			norm += float64(x) * float64(x)
+		}
+		if norm > 0 {
+			norm = math.Sqrt(norm)
+			for j := range v {
+				v[j] = float32(float64(v[j]) / norm)
+			}
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// newKnowledgeBase seeds an in-memory vector store with a few facts, embedded
+// with emb. The memory component then serves these as retrieval-augmented
+// context: recall injects the fact nearest to each run's query.
+func newKnowledgeBase(emb embeddings.Embeddings) (*vectorstore.InMemoryStore, error) {
+	facts := []string{
+		"Arithmetic like 2 + 3 is handled by the calc tool.",
+		"The capital of France is Paris.",
+		"Water boils at 100 degrees Celsius at sea level.",
+	}
+	vecs, err := emb.Embed(context.Background(), facts)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]vectorstore.Item, len(facts))
+	for i, f := range facts {
+		items[i] = vectorstore.Item{Text: f, Vector: vecs[i], Metadata: map[string]any{"source": "kb"}}
+	}
+	store := vectorstore.NewInMemoryStore()
+	if err := store.Add(context.Background(), items...); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // BuildAgent constructs an Agent with every first-class component attached.
@@ -63,10 +132,17 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 		return nil, nil, nil, err
 	}
 
-	// Retriever (RAG)
-	if err := a.With(retriever.New(retriever.NewStatic([]gantry.Document{
-		{ID: "doc-arith", Content: "Arithmetic is performed by the calc tool."},
-	}), 3)); err != nil {
+	// Memory (vector RAG): a small knowledge base is embedded into an
+	// in-memory vector store; on each run the recall middleware embeds the
+	// query, finds the nearest fact by cosine similarity, and injects it into
+	// the system prompt. (persist also stores each finished turn, so the store
+	// doubles as long-term conversational memory across runs.)
+	emb := docEmbedder{}
+	kb, err := newKnowledgeBase(emb)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := a.With(memory.New(kb, emb, memory.WithK(1))); err != nil {
 		return nil, nil, nil, err
 	}
 
