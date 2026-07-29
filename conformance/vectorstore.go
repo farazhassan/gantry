@@ -5,23 +5,23 @@ import (
 	"math"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/vectorstore"
 )
 
-// MemoryStoreSuite verifies the contract of memory.Store. The factory
+// VectorStoreSuite verifies the contract of vectorstore.Store. The factory
 // receives the vector dimension the suite will use; implementations that fix
 // their dimension at construction (e.g. sqlitevec) need it, others may ignore
 // it.
-func MemoryStoreSuite(t *testing.T, factory func(dim int) memory.Store) {
+func VectorStoreSuite(t *testing.T, factory func(dim int) vectorstore.Store) {
 	t.Helper()
 	ctx := context.Background()
 
-	seed := func(t *testing.T, s memory.Store) {
+	seed := func(t *testing.T, s vectorstore.Store) {
 		t.Helper()
 		err := s.Add(ctx,
-			memory.Item{Text: "east", Vector: []float32{1, 0}},
-			memory.Item{Text: "north", Vector: []float32{0, 1}},
-			memory.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
+			vectorstore.Item{Text: "east", Vector: []float32{1, 0}},
+			vectorstore.Item{Text: "north", Vector: []float32{0, 1}},
+			vectorstore.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
 		)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
@@ -75,7 +75,7 @@ func MemoryStoreSuite(t *testing.T, factory func(dim int) memory.Store) {
 	t.Run("search_k_exceeding_count_returns_all", func(t *testing.T) {
 		s := factory(2)
 		seed(t, s)
-		if err := s.Add(ctx, memory.Item{Text: "southeast", Vector: []float32{0.7071, -0.7071}}); err != nil {
+		if err := s.Add(ctx, vectorstore.Item{Text: "southeast", Vector: []float32{0.7071, -0.7071}}); err != nil {
 			t.Fatalf("second Add: %v", err)
 		}
 		hits, err := s.Search(ctx, []float32{1, 0}, 10)
@@ -131,7 +131,7 @@ func MemoryStoreSuite(t *testing.T, factory func(dim int) memory.Store) {
 
 	t.Run("metadata_round_trip", func(t *testing.T) {
 		s := factory(2)
-		err := s.Add(ctx, memory.Item{
+		err := s.Add(ctx, vectorstore.Item{
 			Text:     "remembered",
 			Vector:   []float32{1, 0},
 			Metadata: map[string]any{"role": "user"},
@@ -151,7 +151,7 @@ func MemoryStoreSuite(t *testing.T, factory func(dim int) memory.Store) {
 		}
 	})
 
-	// Independence is at the struct level only: the memory.Store contract
+	// Independence is at the struct level only: the vectorstore.Store contract
 	// permits Metadata maps to alias the store, so this suite intentionally
 	// does not assert deep independence.
 	t.Run("hits_are_independent_at_struct_level", func(t *testing.T) {

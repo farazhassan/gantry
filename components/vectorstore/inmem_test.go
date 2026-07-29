@@ -1,20 +1,20 @@
-package memory_test
+package vectorstore_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/conformance"
 )
 
 func TestInMemoryStoreSearchRanksBySimilarity(t *testing.T) {
-	s := memory.NewInMemoryStore()
+	s := vectorstore.NewInMemoryStore()
 	ctx := context.Background()
 	err := s.Add(ctx,
-		memory.Item{Text: "east", Vector: []float32{1, 0}},
-		memory.Item{Text: "north", Vector: []float32{0, 1}},
-		memory.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
+		vectorstore.Item{Text: "east", Vector: []float32{1, 0}},
+		vectorstore.Item{Text: "north", Vector: []float32{0, 1}},
+		vectorstore.Item{Text: "northeast", Vector: []float32{0.7071, 0.7071}},
 	)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
@@ -35,8 +35,8 @@ func TestInMemoryStoreSearchRanksBySimilarity(t *testing.T) {
 }
 
 func TestInMemoryStoreSearchNonPositiveK(t *testing.T) {
-	s := memory.NewInMemoryStore()
-	_ = s.Add(context.Background(), memory.Item{Text: "x", Vector: []float32{1, 0}})
+	s := vectorstore.NewInMemoryStore()
+	_ = s.Add(context.Background(), vectorstore.Item{Text: "x", Vector: []float32{1, 0}})
 	hits, err := s.Search(context.Background(), []float32{1, 0}, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -47,8 +47,8 @@ func TestInMemoryStoreSearchNonPositiveK(t *testing.T) {
 }
 
 func TestInMemoryStoreMismatchedDimensionScoresZero(t *testing.T) {
-	s := memory.NewInMemoryStore()
-	_ = s.Add(context.Background(), memory.Item{Text: "short", Vector: []float32{1}})
+	s := vectorstore.NewInMemoryStore()
+	_ = s.Add(context.Background(), vectorstore.Item{Text: "short", Vector: []float32{1}})
 	hits, err := s.Search(context.Background(), []float32{1, 0}, 1)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -59,8 +59,8 @@ func TestInMemoryStoreMismatchedDimensionScoresZero(t *testing.T) {
 }
 
 func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
-	s := memory.NewInMemoryStore()
-	_ = s.Add(context.Background(), memory.Item{Text: "real", Vector: []float32{1, 0}})
+	s := vectorstore.NewInMemoryStore()
+	_ = s.Add(context.Background(), vectorstore.Item{Text: "real", Vector: []float32{1, 0}})
 	hits, err := s.Search(context.Background(), []float32{0, 0}, 1)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -71,7 +71,7 @@ func TestInMemoryStoreZeroMagnitudeVectorScoresZero(t *testing.T) {
 }
 
 func TestInMemoryStoreConformance(t *testing.T) {
-	conformance.MemoryStoreSuite(t, func(int) memory.Store {
-		return memory.NewInMemoryStore()
+	conformance.VectorStoreSuite(t, func(int) vectorstore.Store {
+		return vectorstore.NewInMemoryStore()
 	})
 }

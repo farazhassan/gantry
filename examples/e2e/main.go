@@ -24,6 +24,7 @@ import (
 	"github.com/farazhassan/gantry/components/skill"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/transcript"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -88,7 +89,7 @@ func (docEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error)
 // newKnowledgeBase seeds an in-memory vector store with a few facts, embedded
 // with emb. The memory component then serves these as retrieval-augmented
 // context: recall injects the fact nearest to each run's query.
-func newKnowledgeBase(emb embeddings.Embeddings) (*memory.InMemoryStore, error) {
+func newKnowledgeBase(emb embeddings.Embeddings) (*vectorstore.InMemoryStore, error) {
 	facts := []string{
 		"Arithmetic like 2 + 3 is handled by the calc tool.",
 		"The capital of France is Paris.",
@@ -98,11 +99,11 @@ func newKnowledgeBase(emb embeddings.Embeddings) (*memory.InMemoryStore, error) 
 	if err != nil {
 		return nil, err
 	}
-	items := make([]memory.Item, len(facts))
+	items := make([]vectorstore.Item, len(facts))
 	for i, f := range facts {
-		items[i] = memory.Item{Text: f, Vector: vecs[i], Metadata: map[string]any{"source": "kb"}}
+		items[i] = vectorstore.Item{Text: f, Vector: vecs[i], Metadata: map[string]any{"source": "kb"}}
 	}
-	store := memory.NewInMemoryStore()
+	store := vectorstore.NewInMemoryStore()
 	if err := store.Add(context.Background(), items...); err != nil {
 		return nil, err
 	}

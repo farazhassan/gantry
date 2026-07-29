@@ -8,10 +8,12 @@
 // recall middleware appends to state.System and does not touch
 // state.Retrieved, which stays reserved for RAG documents.
 //
-// The Store interface deals in vectors, not text; the middleware composes a
-// Store with an embeddings.Embeddings client. InMemoryStore is the reference
-// implementation; components/sqlitevec provides a durable sqlite-vec backend
-// in a separate Go module.
+// Memory is a read-write policy over a components/vectorstore Store: the
+// middleware composes that Store with an embeddings.Embeddings client (recall
+// reads, persist writes). vectorstore.NewInMemoryStore is the reference
+// backend; components/sqlitevec provides a durable sqlite-vec backend in a
+// separate Go module. A read-only policy over the same Store — retrieval
+// without the persist loop — is retriever.NewVectorRetriever.
 //
 // Middleware ordering: the persist middleware does its work after next() on
 // PhasePostLLM, so register memory.New after critic.New and limiter.New so it

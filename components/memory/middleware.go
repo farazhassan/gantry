@@ -7,16 +7,17 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/embeddings"
+	"github.com/farazhassan/gantry/components/vectorstore"
 )
 
 // MetaRecalled is the state.Meta key under which the recall middleware
-// stashes the []Hit recalled this run (for observability and tests).
+// stashes the []vectorstore.Hit recalled this run (for observability and tests).
 const MetaRecalled = "components/memory:recalled"
 
 const defaultK = 4
 
 type component struct {
-	store       Store
+	store       vectorstore.Store
 	emb         embeddings.Embeddings
 	k           int
 	minScore    float64
@@ -72,7 +73,7 @@ func WithMinScore(s float64) Option {
 //
 // persist does not deduplicate: re-running the same input stores a new turn
 // pair each time, so repeated identical runs accumulate duplicate memories.
-func New(store Store, emb embeddings.Embeddings, opts ...Option) gantry.Component {
+func New(store vectorstore.Store, emb embeddings.Embeddings, opts ...Option) gantry.Component {
 	c := &component{store: store, emb: emb, k: defaultK}
 	for _, opt := range opts {
 		opt(c)
@@ -166,13 +167,13 @@ func (c *component) recall(ctx context.Context, s *gantry.State) error {
 
 func (c *component) persist(ctx context.Context, s *gantry.State) error {
 	texts := make([]string, 0, 2)
-	items := make([]Item, 0, 2)
+	items := make([]vectorstore.Item, 0, 2)
 	if s.Input != "" {
 		texts = append(texts, s.Input)
-		items = append(items, Item{Text: s.Input, Metadata: map[string]any{"role": "user"}})
+		items = append(items, vectorstore.Item{Text: s.Input, Metadata: map[string]any{"role": "user"}})
 	}
 	texts = append(texts, s.FinalOutput)
-	items = append(items, Item{Text: s.FinalOutput, Metadata: map[string]any{"role": "assistant"}})
+	items = append(items, vectorstore.Item{Text: s.FinalOutput, Metadata: map[string]any{"role": "assistant"}})
 
 	vecs, err := c.emb.Embed(ctx, texts)
 	if err != nil {

@@ -12,11 +12,11 @@ import (
 	"github.com/farazhassan/gantry/components/guardrail"
 	"github.com/farazhassan/gantry/components/humanloop"
 	"github.com/farazhassan/gantry/components/limiter"
-	"github.com/farazhassan/gantry/components/memory"
 	"github.com/farazhassan/gantry/components/planner"
 	"github.com/farazhassan/gantry/components/retriever"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/transcript"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/conformance"
 	"github.com/farazhassan/gantry/eval"
 )
@@ -115,8 +115,8 @@ func TestNoOpHumanInLoopConformance(t *testing.T) {
 	})
 }
 
-func TestInMemoryMemoryStoreConformance(t *testing.T) {
-	conformance.MemoryStoreSuite(t, func(int) memory.Store {
-		return memory.NewInMemoryStore()
+func TestInMemoryVectorStoreConformance(t *testing.T) {
+	conformance.VectorStoreSuite(t, func(int) vectorstore.Store {
+		return vectorstore.NewInMemoryStore()
 	})
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/memory"
+	"github.com/farazhassan/gantry/components/vectorstore"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -15,9 +16,9 @@ import (
 // (state.System persists across iterations), and persist must only store the
 // final turn pair, not one pair per iteration.
 func TestMultiIterationRunRecallsOnceAndPersistsOnce(t *testing.T) {
-	store := memory.NewInMemoryStore()
+	store := vectorstore.NewInMemoryStore()
 	ctx := context.Background()
-	_ = store.Add(ctx, memory.Item{Text: "seeded memory", Vector: []float32{1, 0}})
+	_ = store.Add(ctx, vectorstore.Item{Text: "seeded memory", Vector: []float32{1, 0}})
 	emb := &stubEmbedder{}
 
 	a, mock := newAgent(t, memory.New(store, emb),
@@ -75,9 +76,9 @@ func TestMultiIterationRunRecallsOnceAndPersistsOnce(t *testing.T) {
 // then clears Done, simulating a component that leaves FinalOutput populated
 // without a clean finish. persist must still refuse to store.
 func TestPersistRequiresDoneAlongsideFinalOutput(t *testing.T) {
-	store := memory.NewInMemoryStore()
+	store := vectorstore.NewInMemoryStore()
 	ctx := context.Background()
-	_ = store.Add(ctx, memory.Item{Text: "seeded memory", Vector: []float32{1, 0}})
+	_ = store.Add(ctx, vectorstore.Item{Text: "seeded memory", Vector: []float32{1, 0}})
 	emb := &stubEmbedder{}
 
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd})

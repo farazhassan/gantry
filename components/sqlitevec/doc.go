@@ -1,4 +1,4 @@
-// Package sqlitevec implements memory.Store on SQLite with the sqlite-vec
+// Package sqlitevec implements vectorstore.Store on SQLite with the sqlite-vec
 // extension: a local, serverless vector store in a single database file.
 //
 // The stack is pure Go — github.com/ncruces/go-sqlite3 runs SQLite compiled
