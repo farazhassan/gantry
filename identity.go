@@ -15,12 +15,17 @@ const (
 
 // eventIdentity is the per-run identity minted once by a.run: emit stamps it
 // onto every Event, and the run span records it as attributes. Fields are
-// empty when unknown (no WithName, no task meta).
+// empty when unknown (no WithName, no task meta). ParentRunID/
+// ParentToolCallID are set only for a run started via WithParentLink (a
+// nested sub-agent run) — empty for a top-level run.
 type eventIdentity struct {
 	runID     string
 	sessionID string
 	taskID    string
 	agent     string
+
+	parentRunID      string
+	parentToolCallID string
 }
 
 // identityCtxKey is the context key under which the run's identity is stored.

@@ -68,6 +68,12 @@ type Event struct {
 	TaskID    string `json:"task_id,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 
+	// ParentRunID/ParentToolCallID identify the run and specific ToolCall
+	// that spawned this run as a nested sub-agent (see WithParentLink).
+	// Both empty for a top-level run.
+	ParentRunID      string `json:"parent_run_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+
 	// Dropped counts events discarded by a buffering wrapper (see
 	// NewBufferedSink) since the previous delivered event; zero on direct,
 	// unbuffered streams. A plain int so Event stays comparable.
@@ -121,6 +127,8 @@ func emit(ctx context.Context, ev Event) error {
 		ev.SessionID = id.sessionID
 		ev.TaskID = id.taskID
 		ev.Agent = id.agent
+		ev.ParentRunID = id.parentRunID
+		ev.ParentToolCallID = id.parentToolCallID
 	}
 	return s(ev)
 }
