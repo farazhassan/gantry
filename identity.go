@@ -80,6 +80,17 @@ func parentLinkFrom(ctx context.Context) (ParentLink, bool) {
 	return link, ok
 }
 
+// clearParentLink returns a ctx with any ParentLink shadowed by an empty
+// value. Called by a.run immediately after folding an ambient ParentLink
+// into this run's own identity, so a deeper nested run started from this
+// ctx -- without an explicit new WithParentLink call -- sees no link at
+// all, rather than silently inheriting this run's own (now-stale) parent
+// attribution. This is what makes WithParentLink's "read once" doc comment
+// actually true rather than aspirational.
+func clearParentLink(ctx context.Context) context.Context {
+	return context.WithValue(ctx, parentLinkKey{}, ParentLink{})
+}
+
 // CurrentIdentity reports the RunID and Agent name of the run ctx is
 // currently executing under, if any. Exported so components in other
 // packages (e.g. components/subagent) can capture the calling run's
