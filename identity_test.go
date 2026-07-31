@@ -122,6 +122,20 @@ func TestEmitStampsParentLinkFromIdentity(t *testing.T) {
 	}
 }
 
+func TestCurrentIdentityReportsAmbientRunAndAgent(t *testing.T) {
+	ctx := withIdentity(context.Background(), eventIdentity{runID: "run-x", agent: "orchestrator"})
+	runID, agent, ok := CurrentIdentity(ctx)
+	if !ok || runID != "run-x" || agent != "orchestrator" {
+		t.Errorf("CurrentIdentity = (%q, %q, %v), want (run-x, orchestrator, true)", runID, agent, ok)
+	}
+}
+
+func TestCurrentIdentityFalseWhenAbsent(t *testing.T) {
+	if _, _, ok := CurrentIdentity(context.Background()); ok {
+		t.Error("CurrentIdentity on a bare context = ok true, want false")
+	}
+}
+
 func TestWithNameSetsAgentName(t *testing.T) {
 	a, err := NewAgent(WithLLM(stubLLM{}), WithName("router"))
 	if err != nil {

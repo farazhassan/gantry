@@ -95,6 +95,53 @@ func TestRunIDDiffersAcrossRuns(t *testing.T) {
 	}
 }
 
+func TestRunFoldsParentLinkIntoNestedIdentity(t *testing.T) {
+	a, err := gantry.NewAgent(
+		gantry.WithLLM(eval.NewMockLLMClient(
+			gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+		)),
+		gantry.WithName("investigation"),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+
+	ctx := gantry.WithParentLink(context.Background(), gantry.ParentLink{
+		RunID:      "run-parent-123",
+		ToolCallID: "call-1",
+	})
+
+	events := collectEvents(t, func(sink gantry.EventSink) (*gantry.State, error) {
+		return a.RunStream(ctx, "investigate", sink)
+	})
+
+	for i, ev := range events {
+		if ev.ParentRunID != "run-parent-123" {
+			t.Errorf("event %d ParentRunID = %q, want run-parent-123", i, ev.ParentRunID)
+		}
+		if ev.ParentToolCallID != "call-1" {
+			t.Errorf("event %d ParentToolCallID = %q, want call-1", i, ev.ParentToolCallID)
+		}
+	}
+}
+
+func TestRunWithoutParentLinkLeavesParentFieldsEmpty(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	events := collectEvents(t, func(sink gantry.EventSink) (*gantry.State, error) {
+		return a.RunStream(context.Background(), "go", sink)
+	})
+	for i, ev := range events {
+		if ev.ParentRunID != "" || ev.ParentToolCallID != "" {
+			t.Errorf("event %d parent fields = %q/%q, want empty (top-level run)", i, ev.ParentRunID, ev.ParentToolCallID)
+		}
+	}
+}
+
 func TestSessionAndTaskIDStampedFromStateMeta(t *testing.T) {
 	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(
 		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},

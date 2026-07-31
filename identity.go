@@ -53,3 +53,42 @@ func identityFrom(ctx context.Context) (eventIdentity, bool) {
 func newRunID() string {
 	return "run-" + newID()
 }
+
+// ParentLink identifies the run and specific tool call that is about to
+// spawn a nested run. Set it on ctx with WithParentLink before calling
+// Agent.Run (or RunStream) for the child; the child's own a.run folds it
+// into the nested run's minted eventIdentity, so every event that run
+// emits carries ParentRunID/ParentToolCallID back to the spawning call.
+type ParentLink struct {
+	RunID      string
+	ToolCallID string
+}
+
+// parentLinkKey is the context key carrying an optional ParentLink.
+type parentLinkKey struct{}
+
+// WithParentLink returns a ctx carrying link, read once by the next
+// Agent.Run/RunStream call made with this ctx. Used by components/subagent
+// to record which run and tool call spawned a nested run.
+func WithParentLink(ctx context.Context, link ParentLink) context.Context {
+	return context.WithValue(ctx, parentLinkKey{}, link)
+}
+
+// parentLinkFrom extracts the ParentLink carried by ctx, if any.
+func parentLinkFrom(ctx context.Context) (ParentLink, bool) {
+	link, ok := ctx.Value(parentLinkKey{}).(ParentLink)
+	return link, ok
+}
+
+// CurrentIdentity reports the RunID and Agent name of the run ctx is
+// currently executing under, if any. Exported so components in other
+// packages (e.g. components/subagent) can capture the calling run's
+// identity before starting a nested run, without access to the unexported
+// eventIdentity type.
+func CurrentIdentity(ctx context.Context) (runID, agent string, ok bool) {
+	id, ok := identityFrom(ctx)
+	if !ok {
+		return "", "", false
+	}
+	return id.runID, id.agent, true
+}

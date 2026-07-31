@@ -263,6 +263,10 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	if s, ok := state.Meta[MetaTaskID].(string); ok {
 		ident.taskID = s
 	}
+	if link, ok := parentLinkFrom(ctx); ok {
+		ident.parentRunID = link.RunID
+		ident.parentToolCallID = link.ToolCallID
+	}
 	ctx = withIdentity(ctx, ident)
 
 	// Resolve tracer: prefer the configured one; otherwise build a default
