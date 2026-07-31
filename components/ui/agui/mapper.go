@@ -6,86 +6,104 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// Mapper translates Gantry's whole-run Event stream into AG-UI protocol events.
-// It is stateful and NOT safe for concurrent use: it tracks whether RUN_STARTED
-// has been emitted and whether a text message is currently open, so it can
-// bracket text correctly and close an open message before any other event.
-// Use one Mapper per run.
+// Mapper translates Gantry's whole-run Event stream into AG-UI protocol
+// events. It tracks whether RUN_STARTED has been emitted, and — per Gantry
+// RunID, not globally — whether a text message is currently open, so text
+// from an interleaved parent and sub-agent run brackets independently
+// instead of corrupting a shared "open message" slot. Use one Mapper per
+// AG-UI thread (HTTP request), not per Gantry run: with sub-agent
+// passthrough enabled, one Mapper legitimately sees events from several
+// Gantry runs (the parent's own, plus any nested sub-agent runs) on the
+// same stream. Mapper itself is not safe for concurrent Map calls — see
+// Sink, which serializes calls into Map with a mutex.
 type Mapper struct {
-	threadID     string
-	runID        string
-	started      bool   // RUN_STARTED emitted?
-	identitySent bool   // CUSTOM gantry.identity emitted?
-	openMsg      string // non-empty messageId while a text message is open
-	msgSeq       int    // monotonic counter for synthesized messageIds
+	threadID string
+	runID    string
+	started  bool // RUN_STARTED emitted?
+
+	openMsg map[string]string // gantry RunID -> open messageId, if any
+	msgSeq  map[string]int    // gantry RunID -> monotonic counter for that run
 }
 
-// NewMapper returns a Mapper for a single run identified by threadID/runID.
+// NewMapper returns a Mapper for a single AG-UI thread identified by
+// threadID/runID (the AG-UI-level ids — a different id space from any
+// Gantry-level Event.RunID).
 func NewMapper(threadID, runID string) *Mapper {
-	return &Mapper{threadID: threadID, runID: runID}
-}
-
-// identityName is the CUSTOM event name under which the Mapper forwards the
-// Gantry identity stamped on run events.
-const identityName = "gantry.identity"
-
-// runIdentity is the CUSTOM "gantry.identity" payload: the identity fields
-// Gantry stamps on its Events, in AG-UI camelCase. Empty fields are omitted so
-// the frame stays minimal.
-type runIdentity struct {
-	RunID     string `json:"runId,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
-	TaskID    string `json:"taskId,omitempty"`
-	Agent     string `json:"agent,omitempty"`
+	return &Mapper{
+		threadID: threadID,
+		runID:    runID,
+		openMsg:  map[string]string{},
+		msgSeq:   map[string]int{},
+	}
 }
 
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
-// RUN_STARTED lazily before the first translated event, forwards the run's
-// Gantry identity once as a CUSTOM "gantry.identity" event, and closes any
-// open text message (with TEXT_MESSAGE_END) before emitting a non-text event.
-// RUN_ERROR is intentionally not produced here — a Go error is not part of the
-// Event stream; the Sink emits it from RunStream's returned error.
+// RUN_STARTED lazily before the first translated event, attaches Gantry
+// identity (RunID/Agent/ParentToolCallID/...) to every translated event
+// except the three lifecycle events, and closes any of ev.RunID's open text
+// messages (with TEXT_MESSAGE_END) before emitting a non-text event for
+// that run.
+//
+// EventDone is translated based on whether it came from the top-level run
+// or a nested one: a done event with empty ParentRunID/ParentToolCallID is
+// the top-level run finishing, and maps to RUN_FINISHED (ending the whole
+// AG-UI stream); a done event WITH a parent link is a nested sub-agent run
+// finishing, and maps to a CUSTOM "gantry.subagent_done" event instead — the
+// AG-UI stream, and the parent run, may still be going.
 func (m *Mapper) Map(ev gantry.Event) []Event {
 	out := m.startFrame()
-	out = append(out, m.identityFrame(ev)...)
+	id := identity{
+		RunID:            ev.RunID,
+		SessionID:        ev.SessionID,
+		TaskID:           ev.TaskID,
+		Agent:            ev.Agent,
+		ParentRunID:      ev.ParentRunID,
+		ParentToolCallID: ev.ParentToolCallID,
+	}
 
 	switch ev.Type {
 	case gantry.EventTextDelta:
-		if m.openMsg == "" {
-			m.msgSeq++
-			m.openMsg = fmt.Sprintf("%s:msg:%d", m.runID, m.msgSeq)
-			out = append(out, newTextMessageStart(m.openMsg))
+		open, hasOpen := m.openMsg[ev.RunID]
+		if !hasOpen {
+			m.msgSeq[ev.RunID]++
+			open = fmt.Sprintf("%s:msg:%d", ev.RunID, m.msgSeq[ev.RunID])
+			m.openMsg[ev.RunID] = open
+			out = append(out, newTextMessageStart(open).withIdentity(id))
 		}
-		out = append(out, newTextMessageContent(m.openMsg, ev.TextDelta))
+		out = append(out, newTextMessageContent(open, ev.TextDelta).withIdentity(id))
 
 	case gantry.EventToolCall:
-		out = append(out, m.closeText()...)
+		out = append(out, m.closeText(ev.RunID, id)...)
 		if tc := ev.ToolCall; tc != nil {
 			out = append(out,
-				newToolCallStart(tc.ID, tc.Name),
-				newToolCallArgs(tc.ID, string(tc.Input)),
-				newToolCallEnd(tc.ID),
+				newToolCallStart(tc.ID, tc.Name).withIdentity(id),
+				newToolCallArgs(tc.ID, string(tc.Input)).withIdentity(id),
+				newToolCallEnd(tc.ID).withIdentity(id),
 			)
 		}
 
 	case gantry.EventToolResult:
-		out = append(out, m.closeText()...)
+		out = append(out, m.closeText(ev.RunID, id)...)
 		if tr := ev.ToolResult; tr != nil {
-			msgID := fmt.Sprintf("%s:toolmsg:%s", m.runID, tr.CallID)
-			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content))
+			msgID := fmt.Sprintf("%s:toolmsg:%s", ev.RunID, tr.CallID)
+			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content).withIdentity(id))
 		}
 
 	case gantry.EventPhaseStart:
-		out = append(out, m.closeText()...)
-		out = append(out, newStepStarted(string(ev.Phase)))
+		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, newStepStarted(string(ev.Phase)).withIdentity(id))
 
 	case gantry.EventPhaseEnd:
-		out = append(out, m.closeText()...)
-		out = append(out, newStepFinished(string(ev.Phase)))
+		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, newStepFinished(string(ev.Phase)).withIdentity(id))
 
 	case gantry.EventDone:
-		out = append(out, m.closeText()...)
-		out = append(out, newRunFinished(m.threadID, m.runID))
+		out = append(out, m.closeText(ev.RunID, id)...)
+		if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+			out = append(out, newRunFinished(m.threadID, m.runID))
+		} else {
+			out = append(out, newSubagentDone(id))
+		}
 	}
 
 	return out
@@ -103,33 +121,30 @@ func (m *Mapper) startFrame() []Event {
 	return []Event{newRunStarted(m.threadID, m.runID)}
 }
 
-// identityFrame forwards the Gantry identity stamped on ev as one CUSTOM
-// "gantry.identity" event, the first time any identity field is seen. Events
-// without identity (pre-identity producers, replayed streams) emit nothing,
-// so their wire output is unchanged.
-func (m *Mapper) identityFrame(ev gantry.Event) []Event {
-	if m.identitySent {
+// closeText emits TEXT_MESSAGE_END for runID's open text message, if any,
+// and clears that run's open-message state. Returns nil when no message is
+// open for runID. id is attached to the END event so its identity matches
+// the message it closes.
+func (m *Mapper) closeText(runID string, id identity) []Event {
+	open, ok := m.openMsg[runID]
+	if !ok {
 		return nil
 	}
-	if ev.RunID == "" && ev.SessionID == "" && ev.TaskID == "" && ev.Agent == "" {
-		return nil
-	}
-	m.identitySent = true
-	return []Event{newCustom(identityName, runIdentity{
-		RunID:     ev.RunID,
-		SessionID: ev.SessionID,
-		TaskID:    ev.TaskID,
-		Agent:     ev.Agent,
-	})}
+	delete(m.openMsg, runID)
+	return []Event{newTextMessageEnd(open).withIdentity(id)}
 }
 
-// closeText emits TEXT_MESSAGE_END for an open text message, if any, and clears
-// the open-message state. Returns nil when no message is open.
-func (m *Mapper) closeText() []Event {
-	if m.openMsg == "" {
-		return nil
+// closeAllText emits TEXT_MESSAGE_END for every currently-open text message,
+// across every Gantry run this Mapper has seen. Sink.EmitError uses this: a
+// fatal error ends the whole AG-UI stream, not just one run, and (unlike
+// Map) EmitError has no specific gantry.Event to scope the close to, so
+// every open run must be closed. Only RunID is known for each closed
+// message's identity — the other identity fields aren't retained once a
+// run's events stop arriving.
+func (m *Mapper) closeAllText() []Event {
+	var out []Event
+	for runID := range m.openMsg {
+		out = append(out, m.closeText(runID, identity{RunID: runID})...)
 	}
-	id := m.openMsg
-	m.openMsg = ""
-	return []Event{newTextMessageEnd(id)}
+	return out
 }

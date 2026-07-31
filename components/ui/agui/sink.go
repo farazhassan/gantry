@@ -54,7 +54,7 @@ func (s *Sink) Sink() gantry.EventSink {
 // RUN_ERROR stream.
 func (s *Sink) EmitError(err error) error {
 	frames := s.mapper.startFrame()
-	frames = append(frames, s.mapper.closeText()...)
+	frames = append(frames, s.mapper.closeAllText()...)
 	frames = append(frames, newRunError(err.Error()))
 	for _, ae := range frames {
 		if werr := WriteSSE(s.w, ae); werr != nil {

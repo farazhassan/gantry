@@ -14,15 +14,15 @@ func TestSinkWritesSSEFrames(t *testing.T) {
 	s := NewSink(&buf, "t1", "r1")
 	sink := s.Sink()
 
-	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi"}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "r1"}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	out := buf.String()
 	// First frame must be RUN_STARTED (lazy), then text start + content.
 	for _, want := range []string{
 		`data: {"type":"RUN_STARTED","threadId":"t1","runId":"r1"}` + "\n\n",
-		`data: {"type":"TEXT_MESSAGE_START","messageId":"r1:msg:1","role":"assistant"}` + "\n\n",
-		`data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"r1:msg:1","delta":"hi"}` + "\n\n",
+		`data: {"type":"TEXT_MESSAGE_START","messageId":"r1:msg:1","role":"assistant","runId":"r1"}` + "\n\n",
+		`data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"r1:msg:1","delta":"hi","runId":"r1"}` + "\n\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing frame:\n%s\nfull output:\n%s", want, out)
@@ -86,14 +86,14 @@ func TestSinkEmitErrorClosesOpenTextMessage(t *testing.T) {
 	s := NewSink(&buf, "t1", "r1")
 	sink := s.Sink()
 	// Open a text message but never let the run finish normally.
-	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "partial"}); err != nil {
+	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "partial", RunID: "r1"}); err != nil {
 		t.Fatalf("sink: %v", err)
 	}
 	if err := s.EmitError(errors.New("boom")); err != nil {
 		t.Fatalf("EmitError: %v", err)
 	}
 	out := buf.String()
-	end := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1"}` + "\n\n"
+	end := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1","runId":"r1"}` + "\n\n"
 	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
 	if !strings.Contains(out, end) {
 		t.Fatalf("expected open text message to be closed before error\nfull output:\n%s", out)
