@@ -136,11 +136,12 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 
 	runCtx := withDepth(ctx, depth+1)
 	if parentRunID, _, ok := gantry.CurrentIdentity(ctx); ok {
-		toolCallID, _ := tool.CallIDFrom(ctx)
-		runCtx = gantry.WithParentLink(runCtx, gantry.ParentLink{
-			RunID:      parentRunID,
-			ToolCallID: toolCallID,
-		})
+		if toolCallID, ok := tool.CallIDFrom(ctx); ok {
+			runCtx = gantry.WithParentLink(runCtx, gantry.ParentLink{
+				RunID:      parentRunID,
+				ToolCallID: toolCallID,
+			})
+		}
 	}
 	if !t.passSink {
 		// Child events would otherwise flow to the ambient sink and interleave
