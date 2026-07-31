@@ -223,3 +223,62 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 		t.Errorf("parent phase end TEXT_MESSAGE_END messageId = %#v, want %q", pDone[0], parentMsgID)
 	}
 }
+
+func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	// Parent's own phase, unsuffixed -- exactly as before this fix.
+	pGot := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseToolExec, RunID: "run-parent", Agent: "orchestrator"})
+	pStep, ok := pGot[0].(StepStarted)
+	if !ok {
+		t.Fatalf("parent event 0 = %#v, want StepStarted", pGot[0])
+	}
+	if pStep.StepName != "tool_exec" {
+		t.Errorf("parent StepName = %q, want bare %q (top-level run, unsuffixed)", pStep.StepName, "tool_exec")
+	}
+
+	// A NESTED run's phase of the SAME name must NOT collide on the wire --
+	// this is exactly the scenario that made @ag-ui/client's own protocol
+	// verifier throw "Step already active", since it tracks STEP_STARTED/
+	// STEP_FINISHED by stepName alone, globally, with no notion of "which run".
+	cGot := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseToolExec,
+		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	cStep, ok := cGot[0].(StepStarted)
+	if !ok {
+		t.Fatalf("child event 0 = %#v, want StepStarted", cGot[0])
+	}
+	if cStep.StepName == "tool_exec" {
+		t.Fatalf("child StepName = %q, want it namespaced by RunID (must differ from the parent's bare %q to avoid a wire collision)", cStep.StepName, "tool_exec")
+	}
+	if cStep.StepName != "tool_exec::run-child" {
+		t.Errorf("child StepName = %q, want %q", cStep.StepName, "tool_exec::run-child")
+	}
+
+	// STEP_FINISHED must use the SAME namespaced name as its matching
+	// STEP_STARTED, or a client would see an unmatched finish.
+	cFin := m.Map(gantry.Event{
+		Type: gantry.EventPhaseEnd, Phase: gantry.PhaseToolExec,
+		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	cFinStep, ok := cFin[0].(StepFinished)
+	if !ok {
+		t.Fatalf("child finish event 0 = %#v, want StepFinished", cFin[0])
+	}
+	if cFinStep.StepName != cStep.StepName {
+		t.Errorf("child StepFinished.StepName = %q, want it to match the StepStarted name %q", cFinStep.StepName, cStep.StepName)
+	}
+
+	// The parent's own STEP_FINISHED for the SAME phase must still be bare --
+	// unaffected by the child's namespacing.
+	pFin := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseToolExec, RunID: "run-parent", Agent: "orchestrator"})
+	pFinStep, ok := pFin[0].(StepFinished)
+	if !ok {
+		t.Fatalf("parent finish event 0 = %#v, want StepFinished", pFin[0])
+	}
+	if pFinStep.StepName != "tool_exec" {
+		t.Errorf("parent StepFinished.StepName = %q, want bare %q", pFinStep.StepName, "tool_exec")
+	}
+}

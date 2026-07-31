@@ -91,11 +91,11 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 
 	case gantry.EventPhaseStart:
 		out = append(out, m.closeText(ev.RunID, id)...)
-		out = append(out, newStepStarted(string(ev.Phase)).withIdentity(id))
+		out = append(out, newStepStarted(stepName(ev)).withIdentity(id))
 
 	case gantry.EventPhaseEnd:
 		out = append(out, m.closeText(ev.RunID, id)...)
-		out = append(out, newStepFinished(string(ev.Phase)).withIdentity(id))
+		out = append(out, newStepFinished(stepName(ev)).withIdentity(id))
 
 	case gantry.EventDone:
 		out = append(out, m.closeText(ev.RunID, id)...)
@@ -119,6 +119,26 @@ func (m *Mapper) startFrame() []Event {
 	}
 	m.started = true
 	return []Event{newRunStarted(m.threadID, m.runID)}
+}
+
+// stepName returns the AG-UI STEP_STARTED/STEP_FINISHED stepName for ev.
+// The top-level run's own phase names are left bare (e.g. "tool_exec") for
+// backward compatibility with clients that key off Gantry's well-known
+// phase names (e.g. a status-label lookup table). A NESTED run's phase
+// names are suffixed with its own RunID to guarantee global uniqueness
+// across the whole AG-UI stream: @ag-ui/client's own protocol verifier
+// tracks STEP_STARTED/STEP_FINISHED by stepName alone, with no notion of
+// "which run" -- without this, a nested run's phase that happens to share
+// a name with the top-level run's currently-open phase (e.g. both called
+// "tool_exec" at once, which is the common case once a delegate tool's
+// child agent starts running its own tools) makes the client throw
+// "Step ... is already active" before any application code ever sees the
+// event.
+func stepName(ev gantry.Event) string {
+	if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+		return string(ev.Phase)
+	}
+	return string(ev.Phase) + "::" + ev.RunID
 }
 
 // closeText emits TEXT_MESSAGE_END for runID's open text message, if any,
