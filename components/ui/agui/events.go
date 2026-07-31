@@ -12,6 +12,29 @@ type Event interface {
 	// eventType returns the wire "type" value; it also keeps the Event
 	// interface closed to this package.
 	eventType() string
+	// withIdentity returns a copy of the event with id attached. Lifecycle
+	// events (RunStarted/RunFinished/RunError) ignore id and return
+	// themselves unchanged — they describe the single top-level AG-UI run,
+	// not a Gantry-level run/agent.
+	withIdentity(id identity) Event
+}
+
+// identity is embedded (anonymously, so its fields flatten into the
+// containing event's JSON) into every AG-UI event EXCEPT the three
+// lifecycle events (RunStarted/RunFinished/RunError), which describe the
+// single top-level AG-UI run/thread and have their own unrelated
+// "runId"/"threadId" fields already. It carries the Gantry-level
+// attribution — which run, which agent, and (for a nested sub-agent run)
+// which parent tool call spawned it — so a client can correctly demux
+// events from concurrent/interleaved parent and sub-agent runs on one SSE
+// stream.
+type identity struct {
+	RunID            string `json:"runId,omitempty"`
+	SessionID        string `json:"sessionId,omitempty"`
+	TaskID           string `json:"taskId,omitempty"`
+	Agent            string `json:"agent,omitempty"`
+	ParentRunID      string `json:"parentRunId,omitempty"`
+	ParentToolCallID string `json:"parentToolCallId,omitempty"`
 }
 
 // AG-UI event type discriminators.
@@ -39,7 +62,8 @@ type RunStarted struct {
 	RunID    string `json:"runId"`
 }
 
-func (e RunStarted) eventType() string { return e.Type }
+func (e RunStarted) eventType() string           { return e.Type }
+func (e RunStarted) withIdentity(identity) Event { return e }
 func newRunStarted(threadID, runID string) RunStarted {
 	return RunStarted{Type: typeRunStarted, ThreadID: threadID, RunID: runID}
 }
@@ -50,7 +74,8 @@ type RunFinished struct {
 	RunID    string `json:"runId"`
 }
 
-func (e RunFinished) eventType() string { return e.Type }
+func (e RunFinished) eventType() string           { return e.Type }
+func (e RunFinished) withIdentity(identity) Event { return e }
 func newRunFinished(threadID, runID string) RunFinished {
 	return RunFinished{Type: typeRunFinished, ThreadID: threadID, RunID: runID}
 }
@@ -60,7 +85,8 @@ type RunError struct {
 	Message string `json:"message"`
 }
 
-func (e RunError) eventType() string { return e.Type }
+func (e RunError) eventType() string           { return e.Type }
+func (e RunError) withIdentity(identity) Event { return e }
 func newRunError(msg string) RunError {
 	return RunError{Type: typeRunError, Message: msg}
 }
@@ -68,9 +94,14 @@ func newRunError(msg string) RunError {
 type StepStarted struct {
 	Type     string `json:"type"`
 	StepName string `json:"stepName"`
+	identity
 }
 
 func (e StepStarted) eventType() string { return e.Type }
+func (e StepStarted) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newStepStarted(name string) StepStarted {
 	return StepStarted{Type: typeStepStarted, StepName: name}
 }
@@ -78,9 +109,14 @@ func newStepStarted(name string) StepStarted {
 type StepFinished struct {
 	Type     string `json:"type"`
 	StepName string `json:"stepName"`
+	identity
 }
 
 func (e StepFinished) eventType() string { return e.Type }
+func (e StepFinished) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newStepFinished(name string) StepFinished {
 	return StepFinished{Type: typeStepFinished, StepName: name}
 }
@@ -91,9 +127,14 @@ type TextMessageStart struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Role      string `json:"role"`
+	identity
 }
 
 func (e TextMessageStart) eventType() string { return e.Type }
+func (e TextMessageStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newTextMessageStart(msgID string) TextMessageStart {
 	return TextMessageStart{Type: typeTextMessageStart, MessageID: msgID, Role: "assistant"}
 }
@@ -102,9 +143,14 @@ type TextMessageContent struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Delta     string `json:"delta"`
+	identity
 }
 
 func (e TextMessageContent) eventType() string { return e.Type }
+func (e TextMessageContent) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newTextMessageContent(msgID, delta string) TextMessageContent {
 	return TextMessageContent{Type: typeTextMessageContent, MessageID: msgID, Delta: delta}
 }
@@ -112,9 +158,14 @@ func newTextMessageContent(msgID, delta string) TextMessageContent {
 type TextMessageEnd struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
+	identity
 }
 
 func (e TextMessageEnd) eventType() string { return e.Type }
+func (e TextMessageEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newTextMessageEnd(msgID string) TextMessageEnd {
 	return TextMessageEnd{Type: typeTextMessageEnd, MessageID: msgID}
 }
@@ -125,9 +176,14 @@ type ToolCallStart struct {
 	Type         string `json:"type"`
 	ToolCallID   string `json:"toolCallId"`
 	ToolCallName string `json:"toolCallName"`
+	identity
 }
 
 func (e ToolCallStart) eventType() string { return e.Type }
+func (e ToolCallStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newToolCallStart(id, name string) ToolCallStart {
 	return ToolCallStart{Type: typeToolCallStart, ToolCallID: id, ToolCallName: name}
 }
@@ -136,9 +192,14 @@ type ToolCallArgs struct {
 	Type       string `json:"type"`
 	ToolCallID string `json:"toolCallId"`
 	Delta      string `json:"delta"`
+	identity
 }
 
 func (e ToolCallArgs) eventType() string { return e.Type }
+func (e ToolCallArgs) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newToolCallArgs(id, delta string) ToolCallArgs {
 	return ToolCallArgs{Type: typeToolCallArgs, ToolCallID: id, Delta: delta}
 }
@@ -146,9 +207,14 @@ func newToolCallArgs(id, delta string) ToolCallArgs {
 type ToolCallEnd struct {
 	Type       string `json:"type"`
 	ToolCallID string `json:"toolCallId"`
+	identity
 }
 
 func (e ToolCallEnd) eventType() string { return e.Type }
+func (e ToolCallEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newToolCallEnd(id string) ToolCallEnd {
 	return ToolCallEnd{Type: typeToolCallEnd, ToolCallID: id}
 }
@@ -159,9 +225,14 @@ type ToolCallResult struct {
 	ToolCallID string `json:"toolCallId"`
 	Content    string `json:"content"`
 	Role       string `json:"role"`
+	identity
 }
 
 func (e ToolCallResult) eventType() string { return e.Type }
+func (e ToolCallResult) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newToolCallResult(msgID, toolCallID, content string) ToolCallResult {
 	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool"}
 }
@@ -169,17 +240,34 @@ func newToolCallResult(msgID, toolCallID, content string) ToolCallResult {
 // --- Custom ---
 
 // Custom is the AG-UI CUSTOM event: a named application-defined payload
-// carried inside an otherwise standard stream. Gantry uses it to forward run
-// identity (see mapper.go); clients that don't recognize the name ignore it.
+// carried inside an otherwise standard stream. Gantry uses it for the
+// gantry.subagent_done nested-completion signal (see mapper.go); clients
+// that don't recognize the name ignore it.
 type Custom struct {
 	Type  string `json:"type"`
 	Name  string `json:"name"`
 	Value any    `json:"value"`
+	identity
 }
 
 func (e Custom) eventType() string { return e.Type }
+func (e Custom) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
 func newCustom(name string, value any) Custom {
 	return Custom{Type: typeCustom, Name: name, Value: value}
+}
+
+// subagentDoneName is the CUSTOM event name signaling that a NESTED
+// sub-agent run finished — as opposed to RUN_FINISHED, which signals the
+// single top-level AG-UI run finishing. See Mapper's EventDone handling.
+const subagentDoneName = "gantry.subagent_done"
+
+func newSubagentDone(id identity) Custom {
+	c := newCustom(subagentDoneName, nil)
+	c.identity = id
+	return c
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:

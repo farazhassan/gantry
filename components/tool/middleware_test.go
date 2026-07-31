@@ -3,6 +3,7 @@ package tool_test
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -266,6 +267,52 @@ func TestToolDoubleInstallReturnsError(t *testing.T) {
 	}
 	if err := a.With(tool.New(reg, 1)); err == nil {
 		t.Fatal("second install: want error, got nil")
+	}
+}
+
+// callIDRecorderTool records the ToolCall.ID it observed via
+// tool.CallIDFrom(ctx) during Invoke, guarded by a mutex since dispatch may
+// run tools concurrently.
+type callIDRecorderTool struct {
+	mu   sync.Mutex
+	seen string
+	ok   bool
+}
+
+func (*callIDRecorderTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "record_call_id", Description: "records the invoking call ID", Schema: json.RawMessage(`{}`)}
+}
+
+func (r *callIDRecorderTool) Invoke(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	id, ok := tool.CallIDFrom(ctx)
+	r.mu.Lock()
+	r.seen, r.ok = id, ok
+	r.mu.Unlock()
+	return json.RawMessage(`"ok"`), nil
+}
+
+func TestWithToolDispatchSetsCallIDInContext(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "call-known-1", Name: "record_call_id", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	recorder := &callIDRecorderTool{}
+	if err := a.With(tool.FromTools(1, recorder)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if !recorder.ok || recorder.seen != "call-known-1" {
+		t.Errorf("CallIDFrom observed = (%q, %v), want (call-known-1, true)", recorder.seen, recorder.ok)
 	}
 }
 

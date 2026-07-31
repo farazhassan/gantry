@@ -47,8 +47,8 @@ const (
 // are emitted after the phase_end event of the phase that produced them,
 // because they are derived from State and only become available once that
 // phase's handler has returned. The identity fields (RunID, SessionID, TaskID,
-// Agent) are stamped by the run loop on every emitted event and are empty when
-// unknown.
+// Agent, ParentRunID, ParentToolCallID) are stamped by the run loop on every
+// emitted event and are empty when unknown.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
@@ -67,6 +67,12 @@ type Event struct {
 	SessionID string `json:"session_id,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
 	Agent     string `json:"agent,omitempty"`
+
+	// ParentRunID/ParentToolCallID identify the run and specific ToolCall
+	// that spawned this run as a nested sub-agent (see WithParentLink).
+	// Both empty for a top-level run.
+	ParentRunID      string `json:"parent_run_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
 
 	// Dropped counts events discarded by a buffering wrapper (see
 	// NewBufferedSink) since the previous delivered event; zero on direct,
@@ -107,10 +113,11 @@ func SinkFrom(ctx context.Context) (EventSink, bool) {
 }
 
 // emit sends ev to the sink in ctx, if any, first stamping the run's ambient
-// identity (RunID/SessionID/TaskID/Agent) onto it. The ambient identity is
-// authoritative: internal emit sites construct events with empty identity and
-// rely on this single chokepoint. With no sink emit is a no-op, which is what
-// makes the shared run() loop free for plain Run.
+// identity (RunID/SessionID/TaskID/Agent/ParentRunID/ParentToolCallID) onto
+// it. The ambient identity is authoritative: internal emit sites construct
+// events with empty identity and rely on this single chokepoint. With no
+// sink emit is a no-op, which is what makes the shared run() loop free for
+// plain Run.
 func emit(ctx context.Context, ev Event) error {
 	s, ok := SinkFrom(ctx)
 	if !ok {
@@ -121,6 +128,8 @@ func emit(ctx context.Context, ev Event) error {
 		ev.SessionID = id.sessionID
 		ev.TaskID = id.taskID
 		ev.Agent = id.agent
+		ev.ParentRunID = id.parentRunID
+		ev.ParentToolCallID = id.parentToolCallID
 	}
 	return s(ev)
 }

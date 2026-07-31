@@ -83,7 +83,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			for i, call := range calls {
 				i, call := i, call
 				jobs[i] = func(ctx context.Context) error {
-					out, err := c.reg.Invoke(ctx, call)
+					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
 					if err != nil {
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,
