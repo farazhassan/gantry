@@ -102,3 +102,45 @@ func TestSinkEmitErrorClosesOpenTextMessage(t *testing.T) {
 		t.Fatalf("TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
 	}
 }
+
+func TestSinkEmitErrorClosesOpenTextMessagesAcrossMultipleRuns(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "t1", "r1")
+	sink := s.Sink()
+	// Open a text message on the parent run...
+	if err := sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "parent", RunID: "r1", Agent: "orchestrator"}); err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	// ...and, before it closes, open a SECOND, independent text message on a
+	// nested sub-agent run.
+	if err := sink(gantry.Event{
+		Type: gantry.EventTextDelta, TextDelta: "child", RunID: "r2",
+		Agent: "investigation", ParentRunID: "r1", ParentToolCallID: "call-1",
+	}); err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	if err := s.EmitError(errors.New("boom")); err != nil {
+		t.Fatalf("EmitError: %v", err)
+	}
+	out := buf.String()
+	// closeAllText only retains each run's RunID (not its Agent/parent link),
+	// so the resulting END frames carry just "runId" — see closeAllText's
+	// doc comment in mapper.go.
+	endR1 := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1","runId":"r1"}` + "\n\n"
+	endR2 := `data: {"type":"TEXT_MESSAGE_END","messageId":"r2:msg:1","runId":"r2"}` + "\n\n"
+	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
+	if !strings.Contains(out, endR1) {
+		t.Fatalf("expected r1's open text message to be closed\nfull output:\n%s", out)
+	}
+	if !strings.Contains(out, endR2) {
+		t.Fatalf("expected r2's open text message to be closed\nfull output:\n%s", out)
+	}
+	// Map iteration order is unspecified, so don't assert an order between
+	// endR1 and endR2 — only that both precede RUN_ERROR.
+	if strings.Index(out, endR1) > strings.Index(out, runErr) {
+		t.Fatalf("r1's TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
+	}
+	if strings.Index(out, endR2) > strings.Index(out, runErr) {
+		t.Fatalf("r2's TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
+	}
+}

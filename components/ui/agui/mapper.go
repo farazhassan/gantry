@@ -141,6 +141,14 @@ func (m *Mapper) closeText(runID string, id identity) []Event {
 // every open run must be closed. Only RunID is known for each closed
 // message's identity — the other identity fields aren't retained once a
 // run's events stop arriving.
+//
+// Multiple simultaneously-open runs are not a rare edge case here: it's
+// exactly what happens whenever a parent run's text message is still open
+// when a nested sub-agent run opens its own (the scenario this whole
+// feature targets). Map iteration order is unspecified, so the resulting
+// END frames may come out in any relative order — that's harmless, since
+// every event self-identifies via its own messageId/RunID and a client
+// demuxes by those, not by frame order across runs.
 func (m *Mapper) closeAllText() []Event {
 	var out []Event
 	for runID := range m.openMsg {
