@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -154,5 +155,104 @@ func TestInvokeNilChildIsError(t *testing.T) {
 	tl := New("specialist", "d", nil)
 	if _, err := tl.Invoke(context.Background(), json.RawMessage(`{"goal":"g"}`)); err == nil {
 		t.Errorf("Invoke with nil child = nil error, want a configuration error")
+	}
+}
+
+func TestInvokeThreadsParentLinkWhenAmbientIdentityPresent(t *testing.T) {
+	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	tl := New("investigate", "d", child, WithEventPassthrough())
+
+	parentMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "call-9", Name: "investigate", Input: json.RawMessage(`{"goal":"g"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	parent, err := gantry.NewAgent(
+		gantry.WithLLM(parentMock),
+		gantry.WithName("orchestrator"),
+		gantry.WithComponents(tool.FromTools(1, tl)),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent(parent): %v", err)
+	}
+
+	var events []gantry.Event
+	_, err = parent.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	var childEvents []gantry.Event
+	for _, ev := range events {
+		if ev.Agent == "investigation" {
+			childEvents = append(childEvents, ev)
+		}
+	}
+	if len(childEvents) == 0 {
+		t.Fatal("passthrough enabled: expected the child's own events on the parent's stream, got none")
+	}
+
+	var parentRunID string
+	for _, ev := range events {
+		if ev.Agent == "orchestrator" {
+			parentRunID = ev.RunID
+			break
+		}
+	}
+	for i, ev := range childEvents {
+		if ev.ParentRunID != parentRunID {
+			t.Errorf("child event %d ParentRunID = %q, want %q (the orchestrator's own RunID)", i, ev.ParentRunID, parentRunID)
+		}
+		if ev.ParentToolCallID != "call-9" {
+			t.Errorf("child event %d ParentToolCallID = %q, want call-9", i, ev.ParentToolCallID)
+		}
+	}
+}
+
+func TestInvokeWithoutPassthroughStillHasNoAmbientEvents(t *testing.T) {
+	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	tl := New("investigate", "d", child) // no WithEventPassthrough
+
+	parentMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "call-9", Name: "investigate", Input: json.RawMessage(`{"goal":"g"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	parent, err := gantry.NewAgent(
+		gantry.WithLLM(parentMock),
+		gantry.WithName("orchestrator"),
+		gantry.WithComponents(tool.FromTools(1, tl)),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent(parent): %v", err)
+	}
+
+	var sawChildEvent bool
+	_, err = parent.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Agent == "investigation" {
+			sawChildEvent = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if sawChildEvent {
+		t.Error("passthrough disabled: saw a child event on the parent's stream, want none")
 	}
 }
