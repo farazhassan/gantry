@@ -47,8 +47,8 @@ const (
 // are emitted after the phase_end event of the phase that produced them,
 // because they are derived from State and only become available once that
 // phase's handler has returned. The identity fields (RunID, SessionID, TaskID,
-// Agent) are stamped by the run loop on every emitted event and are empty when
-// unknown.
+// Agent, ParentRunID, ParentToolCallID) are stamped by the run loop on every
+// emitted event and are empty when unknown.
 type Event struct {
 	Type        EventType   `json:"type"`
 	Iteration   int         `json:"iteration"`
@@ -113,10 +113,11 @@ func SinkFrom(ctx context.Context) (EventSink, bool) {
 }
 
 // emit sends ev to the sink in ctx, if any, first stamping the run's ambient
-// identity (RunID/SessionID/TaskID/Agent) onto it. The ambient identity is
-// authoritative: internal emit sites construct events with empty identity and
-// rely on this single chokepoint. With no sink emit is a no-op, which is what
-// makes the shared run() loop free for plain Run.
+// identity (RunID/SessionID/TaskID/Agent/ParentRunID/ParentToolCallID) onto
+// it. The ambient identity is authoritative: internal emit sites construct
+// events with empty identity and rely on this single chokepoint. With no
+// sink emit is a no-op, which is what makes the shared run() loop free for
+// plain Run.
 func emit(ctx context.Context, ev Event) error {
 	s, ok := SinkFrom(ctx)
 	if !ok {

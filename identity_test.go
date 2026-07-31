@@ -1,6 +1,7 @@
 package gantry
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -87,6 +88,37 @@ func TestEventParentFieldsOmittedWhenEmpty(t *testing.T) {
 		if strings.Contains(string(b), bad) {
 			t.Errorf("Event JSON %s leaked empty parent-link key %s", b, bad)
 		}
+	}
+}
+
+// TestEmitStampsParentLinkFromIdentity is a whitebox test (package gantry,
+// not gantry_test) exercising emit() directly: no WithParentLink helper
+// exists yet (that lands in Task 2), so this constructs an eventIdentity
+// with parent fields set by hand and installs it via withIdentity, the same
+// mechanism a.run uses internally.
+func TestEmitStampsParentLinkFromIdentity(t *testing.T) {
+	id := eventIdentity{
+		runID:            "run-child",
+		parentRunID:      "p",
+		parentToolCallID: "c",
+	}
+	ctx := withIdentity(context.Background(), id)
+
+	var got Event
+	ctx = WithSink(ctx, func(ev Event) error {
+		got = ev
+		return nil
+	})
+
+	if err := emit(ctx, Event{Type: EventDone}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	if got.ParentRunID != "p" || got.ParentToolCallID != "c" {
+		t.Errorf("emit() stamped ParentRunID/ParentToolCallID = %q/%q, want p/c",
+			got.ParentRunID, got.ParentToolCallID)
+	}
+	if got.RunID != "run-child" {
+		t.Errorf("emit() RunID = %q, want run-child", got.RunID)
 	}
 }
 
