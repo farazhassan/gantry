@@ -5,12 +5,40 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/ui/agui"
 	"github.com/farazhassan/gantry/eval"
 )
+
+// TestParseOriginsTrimsAndFiltersEmpty covers AGUI_ALLOWED_ORIGINS parsing: a
+// natural value like "http://a, http://b" has a leading space on the second
+// entry, and a trailing/duplicate comma is an easy typo -- neither should
+// silently produce an origin that can never match a real Origin header.
+func TestParseOriginsTrimsAndFiltersEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single", "http://localhost:3000", []string{"http://localhost:3000"}},
+		{"comma with space", "http://a, http://b", []string{"http://a", "http://b"}},
+		{"leading/trailing/double comma", ",http://a,,http://b,", []string{"http://a", "http://b"}},
+		{"all whitespace", "   ", nil},
+		{"empty", "", nil},
+		{"wildcard", "*", []string{"*"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseOrigins(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseOrigins(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestServerStreamsRunToFinish exercises the example's handler wiring with a
 // scripted mock LLM, so it stays hermetic with respect to any LLM provider: it
@@ -46,6 +74,37 @@ func TestServerStreamsRunToFinish(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("SSE stream missing %q\nfull stream:\n%s", want, got)
 		}
+	}
+}
+
+// TestNewHandlerAppliesOptions verifies newHandler forwards its opts through
+// to agui.Handler -- main() uses this to wire AGUI_ALLOWED_ORIGINS, so a
+// regression here would silently break that even though it's invisible from
+// main() itself (opts are only observable through the handler's behavior).
+func TestNewHandlerAppliesOptions(t *testing.T) {
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{Content: "hi", StopReason: gantry.StopReasonEnd})
+
+	handler, err := newHandler(llm, agui.WithAllowedOrigins("https://example.com"))
+	if err != nil {
+		t.Fatalf("newHandler: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodOptions, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want https://example.com (opts not forwarded to agui.Handler?)", got)
 	}
 }
 

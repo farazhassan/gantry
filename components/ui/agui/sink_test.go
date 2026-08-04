@@ -146,6 +146,27 @@ func TestSinkEmitErrorClosesOpenTextMessagesAcrossMultipleRuns(t *testing.T) {
 	}
 }
 
+// TestSinkHeartbeatWritesSSEComment verifies Heartbeat writes a bare SSE
+// comment line and flushes it -- the keep-alive ping the handler sends on
+// idle so proxies/load balancers with a read-timeout don't kill the
+// connection while the agent is silently thinking or mid-tool-call.
+func TestSinkHeartbeatWritesSSEComment(t *testing.T) {
+	var buf bytes.Buffer
+	flushed := 0
+	s := NewSink(&buf, "t1", "r1")
+	s.SetFlusher(func() { flushed++ })
+
+	if err := s.Heartbeat(); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if got, want := buf.String(), ": ping\n\n"; got != want {
+		t.Fatalf("Heartbeat wrote %q, want %q", got, want)
+	}
+	if flushed != 1 {
+		t.Fatalf("flushed = %d, want 1", flushed)
+	}
+}
+
 // TestSinkConcurrentEventsDoNotRace drives many goroutines calling the same
 // Sink's EventSink concurrently -- the shape components/tool's parallel
 // tool dispatch produces once two sub-agent runs have passthrough enabled

@@ -1,11 +1,16 @@
 package agui
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
+	"time"
 
 	"github.com/farazhassan/gantry"
 )
@@ -16,17 +21,44 @@ import (
 //
 // Scope (v1): the request's message history is honored; client-supplied state
 // and tools are ignored. The caller is responsible for auth/middleware around
-// this handler. Cancellation follows the request context, so a client
-// disconnect stops the run.
-func Handler(agent *gantry.Agent) http.Handler {
+// this handler (CORS is the one exception — see WithAllowedOrigins). Cancellation
+// follows the request context, so a client disconnect stops the run.
+//
+// With no opts, Handler still hardens the stream for production traffic: a
+// run's terminal error is logged server-side and streamed to the client as
+// RUN_ERROR; a panic anywhere in the run is recovered the same way instead of
+// killing the connection with no signal; and an idle SSE keep-alive keeps the
+// connection alive through reverse-proxy/load-balancer read timeouts while
+// the agent is silently thinking or mid-tool-call. See the Option functions
+// (WithLogger, WithErrorMapper, WithHeartbeatInterval, WithMaxBodyBytes,
+// WithAllowedOrigins) to tune or disable any of this.
+func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(cfg)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cfg.corsEnabled() {
+			applyCORSHeaders(w, r, cfg)
+			if r.Method == http.MethodOptions {
+				// The preflight itself always succeeds; an unlisted origin
+				// simply gets no Access-Control-Allow-Origin above, which is
+				// what makes the browser block the real request client-side.
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
 		// Cap the request body so a client cannot force unbounded allocation.
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.maxBodyBytes)
 		var in RunAgentInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, "agui: invalid request JSON: "+err.Error(), http.StatusBadRequest)
@@ -92,10 +124,107 @@ func Handler(agent *gantry.Agent) http.Handler {
 			sink.SetFlusher(f.Flush)
 		}
 
-		if _, err := run(sink.Sink()); err != nil {
-			_ = sink.EmitError(err)
+		// run executes on its own goroutine so this goroutine is free to
+		// interleave heartbeat pings on cfg.heartbeat while it waits — a
+		// silently-thinking model or a slow tool call would otherwise leave
+		// the connection with no bytes on the wire, which is exactly what
+		// idle-read-timeout proxies/load balancers treat as a dead
+		// connection. r.Context() cancellation (client disconnect) reaches
+		// run() the same way regardless of which goroutine calls it.
+		resultCh := make(chan runOutcome, 1)
+		go func() {
+			// A panic anywhere in the run (a custom tool, an LLM adapter, the
+			// mapper itself) would otherwise unwind past this goroutine and
+			// crash the process — net/http's per-connection recover only
+			// logs and drops the connection, leaving the client with an
+			// unexplained EOF instead of a clean RUN_ERROR. Recovering here
+			// and reporting it through the same channel as an ordinary error
+			// keeps that one client-visible failure mode.
+			defer func() {
+				if p := recover(); p != nil {
+					resultCh <- runOutcome{panicVal: p, stack: debug.Stack()}
+				}
+			}()
+			_, err := run(sink.Sink())
+			resultCh <- runOutcome{err: err}
+		}()
+
+		var tick <-chan time.Time
+		if cfg.heartbeat > 0 {
+			ticker := time.NewTicker(cfg.heartbeat)
+			defer ticker.Stop()
+			tick = ticker.C
+		}
+
+		var outcome runOutcome
+	waitForRun:
+		for {
+			select {
+			case outcome = <-resultCh:
+				break waitForRun
+			case <-tick:
+				if err := sink.Heartbeat(); err != nil {
+					// Write failed (client almost certainly gone): stop
+					// pinging and just wait for run() to notice ctx
+					// cancellation and return.
+					tick = nil
+				}
+			}
+		}
+
+		switch {
+		case outcome.panicVal != nil:
+			cfg.logger.Error("agui: panic during run",
+				"threadId", threadID, "runId", runID,
+				"panic", outcome.panicVal, "stack", string(outcome.stack))
+			// The recovered value can carry arbitrary internal detail (a
+			// file path, a request body, anything the panicking code had in
+			// scope), so only a generic message crosses the wire — the full
+			// value and stack are for the server-side log above only.
+			_ = sink.EmitError(errors.New("agui: internal error"))
+		case outcome.err != nil:
+			cfg.logger.Log(r.Context(), runErrorLogLevel(outcome.err), "agui: run ended with error",
+				"threadId", threadID, "runId", runID, "error", outcome.err)
+			_ = sink.EmitError(errors.New(safeMapError(cfg, outcome.err)))
 		}
 	})
+}
+
+// safeMapError applies cfg.mapError, recovering if it panics. Unlike the
+// agent/tool/LLM path, a caller-supplied mapper runs directly in the handler
+// goroutine — the run goroutine's own recover (above) does not cover it — so
+// without this, a bug in a WithErrorMapper would take the request down with
+// an unexplained EOF instead of the clean RUN_ERROR this whole file exists to
+// guarantee.
+func safeMapError(cfg *config, err error) (msg string) {
+	defer func() {
+		if p := recover(); p != nil {
+			cfg.logger.Error("agui: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
+			msg = "agui: internal error"
+		}
+	}()
+	return cfg.mapError(err)
+}
+
+// runOutcome is what the goroutine running the agent reports back to the
+// handler goroutine over resultCh. panicVal/stack are set instead of err
+// when the run goroutine recovered a panic.
+type runOutcome struct {
+	err      error
+	panicVal any
+	stack    []byte
+}
+
+// runErrorLogLevel picks the log level for a run's terminal error. A client
+// disconnect (context.Canceled, reached via r.Context()) is expected traffic
+// — logging every closed tab at ERROR would be alert-fatigue noise in
+// production — so it logs at Debug; anything else is a real failure and logs
+// at Error.
+func runErrorLogLevel(err error) slog.Level {
+	if errors.Is(err, context.Canceled) {
+		return slog.LevelDebug
+	}
+	return slog.LevelError
 }
 
 // maxRequestBytes caps the decoded RunAgentInput body (1 MiB). A replayed

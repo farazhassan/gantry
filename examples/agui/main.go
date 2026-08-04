@@ -9,13 +9,15 @@
 //	  -H 'Content-Type: application/json' \
 //	  -d '{"messages":[{"role":"user","content":"Say hello in three words."}]}'
 //
-// The model and listen address are configurable via env vars (see main).
+// The model, listen address, and agui.Handler options below are all
+// configurable via env vars (see main).
 package main
 
 import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/ask"
@@ -29,8 +31,8 @@ import (
 // suspends over AG-UI (a tool call with no result), the client collects the
 // answer and re-POSTs the history with a tool result, and the run resumes. The
 // LLM is a parameter so the hermetic test can inject a mock while main() wires
-// the real Ollama client.
-func newHandler(llm gantry.LLMClient) (http.Handler, error) {
+// the real Ollama client. opts pass straight through to agui.Handler.
+func newHandler(llm gantry.LLMClient, opts ...agui.Option) (http.Handler, error) {
 	agent, err := gantry.NewAgent(gantry.WithLLM(llm))
 	if err != nil {
 		return nil, err
@@ -38,7 +40,7 @@ func newHandler(llm gantry.LLMClient) (http.Handler, error) {
 	if err := agent.With(tool.Client(ask.Definition())); err != nil {
 		return nil, err
 	}
-	return agui.Handler(agent), nil
+	return agui.Handler(agent, opts...), nil
 }
 
 func main() {
@@ -47,13 +49,25 @@ func main() {
 	model := envOr("OLLAMA_MODEL", "llama3.2")
 	addr := envOr("AGUI_ADDR", ":8080")
 
-	opts := []ollama.Option{}
+	ollamaOpts := []ollama.Option{}
 	if base := os.Getenv("OLLAMA_HOST"); base != "" {
-		opts = append(opts, ollama.WithBaseURL(base))
+		ollamaOpts = append(ollamaOpts, ollama.WithBaseURL(base))
+	}
+
+	// agui.Handler is production-hardened by default (server-side error
+	// logging, panic recovery, SSE keep-alives — see the package README for
+	// WithLogger/WithErrorMapper/WithHeartbeatInterval/WithMaxBodyBytes).
+	// CORS is the one thing left disabled by default, since it's the one
+	// piece that's actually unsafe to assume: set AGUI_ALLOWED_ORIGINS to try
+	// this server from a browser-based AG-UI client (e.g. the AG-UI dojo or
+	// a CopilotKit dev server) running on a different origin.
+	var aguiOpts []agui.Option
+	if origins := parseOrigins(os.Getenv("AGUI_ALLOWED_ORIGINS")); len(origins) > 0 {
+		aguiOpts = append(aguiOpts, agui.WithAllowedOrigins(origins...))
 	}
 
 	// Swap ollama.New for any gantry LLM client (openai.New, anthropic.New, …).
-	handler, err := newHandler(ollama.New(model, opts...))
+	handler, err := newHandler(ollama.New(model, ollamaOpts...), aguiOpts...)
 	if err != nil {
 		log.Fatalf("build handler: %v", err)
 	}
@@ -68,4 +82,18 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseOrigins splits AGUI_ALLOWED_ORIGINS on commas, trimming whitespace and
+// dropping empty entries -- a bare comma-split would silently turn
+// "http://a, http://b" into a never-matching " http://b" (leading space) or
+// turn a trailing/doubled comma into an empty-string "origin".
+func parseOrigins(s string) []string {
+	var out []string
+	for _, o := range strings.Split(s, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
 }

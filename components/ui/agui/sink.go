@@ -55,6 +55,26 @@ func (s *Sink) Sink() gantry.EventSink {
 	}
 }
 
+// Heartbeat writes a bare SSE comment line ("keep-alive ping") and flushes
+// it, guarded by the same mutex as Sink/EmitError so it interleaves safely
+// with concurrent event writes. A line starting with ':' is a comment per
+// the SSE spec: every conforming parser (and AG-UI's fetch-based reader,
+// which only looks at "data:" lines) ignores it, so it is invisible to
+// clients. The handler calls this on an idle ticker so a slow tool call or a
+// silently-thinking model doesn't leave the connection with no bytes long
+// enough for a reverse proxy or load balancer's read-timeout to kill it.
+func (s *Sink) Heartbeat() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := io.WriteString(s.w, ": ping\n\n"); err != nil {
+		return err
+	}
+	if s.flush != nil {
+		s.flush()
+	}
+	return nil
+}
+
 // EmitError writes a RUN_ERROR frame. The HTTP handler calls this when
 // RunFromStream returns an error after the SSE response has already begun, so
 // the client learns the run failed (the status code is already committed).

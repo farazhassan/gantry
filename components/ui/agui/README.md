@@ -96,8 +96,30 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
 
 - **Before streaming starts** (bad JSON, empty `messages`, non-user last
   message, unknown role) → a plain HTTP `400`/`405`, no SSE.
-- **Mid-stream** (the agent errors after headers are sent) → a `RUN_ERROR`
-  frame, since the `200` status is already committed.
+- **Mid-stream** (the agent errors after headers are sent, or panics) → a
+  `RUN_ERROR` frame, since the `200` status is already committed. The error is
+  also logged server-side (see `WithLogger`); a panic's recovered value/stack
+  go only to that log, never to the client (see `WithErrorMapper`).
+
+## Options
+
+`Handler(agent, opts ...Option)` is production-hardened by default; every
+`Option` tunes or opts out of one piece of that:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `WithMaxBodyBytes(n)` | 1 MiB | Cap on the decoded `RunAgentInput` body. |
+| `WithHeartbeatInterval(d)` | 15s | How often an SSE keep-alive comment (`: ping`) is sent while waiting between real events, so a slow tool call or a silently-thinking model doesn't leave the connection looking dead to a reverse proxy/load balancer's idle-read timeout. `d <= 0` disables it. |
+| `WithLogger(l)` | `slog.Default()` | Where a run's terminal error (or a recovered panic, with its full value + stack) is logged server-side. |
+| `WithErrorMapper(f)` | forwards `err.Error()` verbatim | Rewrites a run error into the client-visible `RUN_ERROR` message — use this to redact anything an LLM adapter's error might carry (upstream response bodies, internal URLs, ...). Never applies to a panic, which always gets a fixed generic message client-side regardless. |
+| `WithAllowedOrigins(origins...)` | disabled | Enables CORS: answers `OPTIONS` preflight and sets `Access-Control-Allow-Origin` on both the preflight and the actual response for a listed origin. Pass `"*"` for any origin. Disabled by default — an unconfigured `Handler` behaves exactly as before this option existed (`OPTIONS` → `405`, no `Access-Control-*` headers). |
+
+```go
+http.Handle("/agui", agui.Handler(agent,
+	agui.WithAllowedOrigins("https://my-frontend.example"),
+	agui.WithErrorMapper(func(error) string { return "internal error" }),
+))
+```
 
 ## Using the mapper without HTTP
 
@@ -107,3 +129,8 @@ If you have your own HTTP stack, skip the handler and use the sink directly:
 sink := agui.NewSink(w, threadID, runID) // w is any io.Writer
 agent.RunFromStream(ctx, prior, input, sink.Sink())
 ```
+
+Handler's idle keep-alive is built on `sink.Heartbeat()`, which writes a bare
+SSE comment (`: ping`) and flushes — safe to call concurrently with `Sink()`
+(both are guarded by the same mutex). If you're driving `Sink` from your own
+HTTP stack, call it on your own idle ticker to get the same protection.

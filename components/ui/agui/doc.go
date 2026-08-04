@@ -21,4 +21,13 @@
 //		// handle error
 //	}
 //	http.Handle("/agui", agui.Handler(agent))
+//
+// Handler is production-hardened out of the box: a run's terminal error is
+// logged server-side (slog.Default() by default) as well as streamed to the
+// client, a panic anywhere in the run is recovered into a clean RUN_ERROR
+// frame instead of killing the connection, and idle periods (a slow tool
+// call, a silently-thinking model) get a periodic SSE keep-alive so
+// reverse-proxy/load-balancer idle-read timeouts don't sever the connection.
+// See the Option functions (WithLogger, WithErrorMapper, WithHeartbeatInterval,
+// WithMaxBodyBytes, WithAllowedOrigins) to tune or opt out of any of this.
 package agui
