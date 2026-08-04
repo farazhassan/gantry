@@ -185,9 +185,25 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		case outcome.err != nil:
 			cfg.logger.Log(r.Context(), runErrorLogLevel(outcome.err), "agui: run ended with error",
 				"threadId", threadID, "runId", runID, "error", outcome.err)
-			_ = sink.EmitError(errors.New(cfg.mapError(outcome.err)))
+			_ = sink.EmitError(errors.New(safeMapError(cfg, outcome.err)))
 		}
 	})
+}
+
+// safeMapError applies cfg.mapError, recovering if it panics. Unlike the
+// agent/tool/LLM path, a caller-supplied mapper runs directly in the handler
+// goroutine — the run goroutine's own recover (above) does not cover it — so
+// without this, a bug in a WithErrorMapper would take the request down with
+// an unexplained EOF instead of the clean RUN_ERROR this whole file exists to
+// guarantee.
+func safeMapError(cfg *config, err error) (msg string) {
+	defer func() {
+		if p := recover(); p != nil {
+			cfg.logger.Error("agui: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
+			msg = "agui: internal error"
+		}
+	}()
+	return cfg.mapError(err)
 }
 
 // runOutcome is what the goroutine running the agent reports back to the

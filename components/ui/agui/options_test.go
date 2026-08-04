@@ -249,6 +249,35 @@ func TestHandlerAppliesErrorMapperToClientMessage(t *testing.T) {
 	}
 }
 
+// TestHandlerRecoversPanicFromErrorMapper verifies a buggy WithErrorMapper
+// (running in the handler goroutine, NOT the run goroutine whose own
+// recover() covers the agent/tool/LLM path) can't take the request down with
+// an unexplained EOF: the handler must still emit a clean, generic RUN_ERROR.
+func TestHandlerRecoversPanicFromErrorMapper(t *testing.T) {
+	a := newErroringAgent(t)
+	srv := httptest.NewServer(Handler(a, WithErrorMapper(func(error) string {
+		panic("mapper: sensitive internal detail")
+	})))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	var sb strings.Builder
+	io.Copy(&sb, resp.Body)
+	out := sb.String()
+
+	if !strings.Contains(out, `"type":"RUN_ERROR"`) {
+		t.Fatalf("missing RUN_ERROR after mapper panic:\n%s", out)
+	}
+	if strings.Contains(out, "sensitive internal detail") {
+		t.Fatalf("mapper panic detail leaked to client:\n%s", out)
+	}
+}
+
 func newCORSPreflightRequest(t *testing.T, url, origin string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodOptions, url, nil)

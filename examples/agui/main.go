@@ -62,8 +62,8 @@ func main() {
 	// this server from a browser-based AG-UI client (e.g. the AG-UI dojo or
 	// a CopilotKit dev server) running on a different origin.
 	var aguiOpts []agui.Option
-	if origins := os.Getenv("AGUI_ALLOWED_ORIGINS"); origins != "" {
-		aguiOpts = append(aguiOpts, agui.WithAllowedOrigins(strings.Split(origins, ",")...))
+	if origins := parseOrigins(os.Getenv("AGUI_ALLOWED_ORIGINS")); len(origins) > 0 {
+		aguiOpts = append(aguiOpts, agui.WithAllowedOrigins(origins...))
 	}
 
 	// Swap ollama.New for any gantry LLM client (openai.New, anthropic.New, …).
@@ -82,4 +82,18 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseOrigins splits AGUI_ALLOWED_ORIGINS on commas, trimming whitespace and
+// dropping empty entries -- a bare comma-split would silently turn
+// "http://a, http://b" into a never-matching " http://b" (leading space) or
+// turn a trailing/doubled comma into an empty-string "origin".
+func parseOrigins(s string) []string {
+	var out []string
+	for _, o := range strings.Split(s, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
 }

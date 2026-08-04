@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,32 @@ import (
 	"github.com/farazhassan/gantry/components/ui/agui"
 	"github.com/farazhassan/gantry/eval"
 )
+
+// TestParseOriginsTrimsAndFiltersEmpty covers AGUI_ALLOWED_ORIGINS parsing: a
+// natural value like "http://a, http://b" has a leading space on the second
+// entry, and a trailing/duplicate comma is an easy typo -- neither should
+// silently produce an origin that can never match a real Origin header.
+func TestParseOriginsTrimsAndFiltersEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single", "http://localhost:3000", []string{"http://localhost:3000"}},
+		{"comma with space", "http://a, http://b", []string{"http://a", "http://b"}},
+		{"leading/trailing/double comma", ",http://a,,http://b,", []string{"http://a", "http://b"}},
+		{"all whitespace", "   ", nil},
+		{"empty", "", nil},
+		{"wildcard", "*", []string{"*"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseOrigins(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseOrigins(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestServerStreamsRunToFinish exercises the example's handler wiring with a
 // scripted mock LLM, so it stays hermetic with respect to any LLM provider: it
