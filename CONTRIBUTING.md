@@ -16,10 +16,14 @@ documentation improvements are all appreciated.
 ## Development setup
 
 Gantry needs **Go 1.22+**. Clone the repository and work from its root. The
-project is organized as three Go modules:
+project is organized as multiple Go modules — the root module plus one nested
+module per component that needs a third-party dependency, so the root module
+stays dependency-free:
 
 - the root module `github.com/farazhassan/gantry` (the core loop and components),
 - `mcp/` (the MCP client),
+- `components/sqlitevec/` (SQLite-backed vector store),
+- `components/checkpointer/redis/` (Redis-backed checkpoint store),
 - `examples/assistant/` (the personal-assistant example).
 
 Common commands (run from the repo root):
