@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 	"github.com/farazhassan/gantry/session"
 )
@@ -52,7 +52,7 @@ func RunExample(ctx context.Context) (*Result, error) {
 	// swap NewInMemory for a durable backend and mgr2 could run in a separate
 	// process. The resume works because the transcript round-trips through the
 	// store, not because the two managers happen to share an agent in-process.
-	store := checkpointer.NewInMemory()
+	store := mem.New()
 
 	mgr := session.NewManager(agent, store)
 	s := mgr.Session(sessionID)

@@ -1,14 +1,14 @@
-package checkpointer_test
+package mem_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 )
 
-func TestMemStore_PutGetRoundTrip(t *testing.T) {
-	s := checkpointer.NewMemStore()
+func TestStore_PutGetRoundTrip(t *testing.T) {
+	s := mem.NewStore()
 	if err := s.Put(context.Background(), "k", []byte("hello")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -21,15 +21,15 @@ func TestMemStore_PutGetRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMemStore_GetMissing(t *testing.T) {
-	_, found, err := checkpointer.NewMemStore().Get(context.Background(), "nope")
+func TestStore_GetMissing(t *testing.T) {
+	_, found, err := mem.NewStore().Get(context.Background(), "nope")
 	if err != nil || found {
 		t.Fatalf("missing key: found=%v err=%v", found, err)
 	}
 }
 
-func TestMemStore_CopiesOnPutAndGet(t *testing.T) {
-	s := checkpointer.NewMemStore()
+func TestStore_CopiesOnPutAndGet(t *testing.T) {
+	s := mem.NewStore()
 	in := []byte("abc")
 	_ = s.Put(context.Background(), "k", in)
 	in[0] = 'X' // mutate caller's slice after Put

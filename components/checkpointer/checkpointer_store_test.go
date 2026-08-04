@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 )
 
 func richState() *gantry.State {
@@ -19,7 +20,7 @@ func richState() *gantry.State {
 }
 
 func TestStoreCheckpointer_FullRoundTrip(t *testing.T) {
-	c, err := checkpointer.FromStore(checkpointer.NewMemStore())
+	c, err := checkpointer.FromStore(mem.NewStore())
 	if err != nil {
 		t.Fatalf("FromStore: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestStoreCheckpointer_FullRoundTrip(t *testing.T) {
 }
 
 func TestStoreCheckpointer_StoreOnlyKeepsListedFields(t *testing.T) {
-	c, _ := checkpointer.FromStore(checkpointer.NewMemStore(),
+	c, _ := checkpointer.FromStore(mem.NewStore(),
 		checkpointer.StoreOnly(checkpointer.FieldUsage, checkpointer.FieldMeta))
 	_ = c.Save(context.Background(), "id", richState())
 	got, _ := c.Load(context.Background(), "id")
@@ -49,7 +50,7 @@ func TestStoreCheckpointer_StoreOnlyKeepsListedFields(t *testing.T) {
 }
 
 func TestStoreCheckpointer_OmitDropsListedFields(t *testing.T) {
-	c, _ := checkpointer.FromStore(checkpointer.NewMemStore(),
+	c, _ := checkpointer.FromStore(mem.NewStore(),
 		checkpointer.Omit(checkpointer.FieldMessages))
 	_ = c.Save(context.Background(), "id", richState())
 	got, _ := c.Load(context.Background(), "id")
@@ -62,14 +63,14 @@ func TestStoreCheckpointer_OmitDropsListedFields(t *testing.T) {
 }
 
 func TestStoreCheckpointer_SaveNilStateErrors(t *testing.T) {
-	c, _ := checkpointer.FromStore(checkpointer.NewMemStore())
+	c, _ := checkpointer.FromStore(mem.NewStore())
 	if err := c.Save(context.Background(), "id", nil); err == nil {
 		t.Fatal("want error saving nil state")
 	}
 }
 
 func TestStoreCheckpointer_LoadMissingIsErrNotFound(t *testing.T) {
-	c, _ := checkpointer.FromStore(checkpointer.NewMemStore())
+	c, _ := checkpointer.FromStore(mem.NewStore())
 	_, err := c.Load(context.Background(), "ghost")
 	if !errors.Is(err, checkpointer.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
@@ -83,7 +84,7 @@ func TestFromStore_NilStoreErrors(t *testing.T) {
 }
 
 func TestFromStore_BothProjectionsErrors(t *testing.T) {
-	_, err := checkpointer.FromStore(checkpointer.NewMemStore(),
+	_, err := checkpointer.FromStore(mem.NewStore(),
 		checkpointer.StoreOnly(checkpointer.FieldUsage),
 		checkpointer.Omit(checkpointer.FieldMessages))
 	if err == nil {
@@ -92,6 +93,6 @@ func TestFromStore_BothProjectionsErrors(t *testing.T) {
 }
 
 func TestStoreCheckpointer_ImplementsCheckpointer(t *testing.T) {
-	c, _ := checkpointer.FromStore(checkpointer.NewMemStore())
+	c, _ := checkpointer.FromStore(mem.NewStore())
 	var _ checkpointer.Checkpointer = c
 }

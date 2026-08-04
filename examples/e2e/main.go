@@ -13,6 +13,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/components/embeddings"
@@ -183,7 +184,7 @@ func BuildAgent(scriptedLLM, helperLLM gantry.LLMClient) (*gantry.Agent, *checkp
 	}
 
 	// Checkpointer
-	cp := checkpointer.NewInMemory()
+	cp := mem.New()
 	if err := a.With(checkpointer.New(cp, "example-run")); err != nil {
 		return nil, nil, nil, err
 	}

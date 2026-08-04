@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -48,7 +49,7 @@ func (f *fakeStore) Load(_ context.Context, id string) (*gantry.State, error) {
 
 func TestSessionMultiTurnContinuity(t *testing.T) {
 	a := newTestAgent(t, resp("nice to meet you", 10, 5), resp("your name is Faraz", 10, 5))
-	mgr := session.NewManager(a, checkpointer.NewInMemory())
+	mgr := session.NewManager(a, mem.New())
 	s := mgr.Session("user-1")
 	ctx := context.Background()
 
@@ -79,7 +80,7 @@ func TestSessionMultiTurnContinuity(t *testing.T) {
 
 func TestSessionHistory(t *testing.T) {
 	a := newTestAgent(t, resp("hi there", 1, 1))
-	mgr := session.NewManager(a, checkpointer.NewInMemory())
+	mgr := session.NewManager(a, mem.New())
 	s := mgr.Session("user-1")
 	ctx := context.Background()
 
@@ -106,7 +107,7 @@ func TestSessionHistory(t *testing.T) {
 
 func TestSessionDurableResumeViaSecondManager(t *testing.T) {
 	a := newTestAgent(t, resp("turn1", 10, 5), resp("turn2", 10, 5))
-	store := checkpointer.NewInMemory()
+	store := mem.New()
 	ctx := context.Background()
 
 	mgr1 := session.NewManager(a, store)

@@ -8,7 +8,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/ask"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 	"github.com/farazhassan/gantry/session"
 )
@@ -44,7 +44,7 @@ func TestBuildAgent_FullTurnWithToolCall(t *testing.T) {
 		t.Fatalf("buildAgent: %v", err)
 	}
 
-	mgr := session.NewManager(agent, checkpointer.NewInMemory())
+	mgr := session.NewManager(agent, mem.New())
 	state, err := mgr.Session("t1").Run(context.Background(), "what do my notes say?")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -70,7 +70,7 @@ func TestBuildAgent_DenyAbortsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgent: %v", err)
 	}
-	mgr := session.NewManager(agent, checkpointer.NewInMemory())
+	mgr := session.NewManager(agent, mem.New())
 	_, err = mgr.Session("t2").Run(context.Background(), "overwrite my file")
 	if err == nil {
 		t.Fatalf("expected an error from a denied turn")
@@ -96,7 +96,7 @@ func TestBuildAgent_PersonaReachesModel(t *testing.T) {
 		t.Fatalf("buildAgent: %v", err)
 	}
 
-	mgr := session.NewManager(agent, checkpointer.NewInMemory())
+	mgr := session.NewManager(agent, mem.New())
 	if _, err := mgr.Session("persona").Run(context.Background(), "hi"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

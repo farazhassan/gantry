@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/components/guardrail"
@@ -66,7 +67,7 @@ func TestDefaultTracerConformance(t *testing.T) {
 
 func TestInMemoryCheckpointerConformance(t *testing.T) {
 	conformance.CheckpointerSuite(t, func() checkpointer.Checkpointer {
-		return checkpointer.NewInMemory()
+		return mem.New()
 	})
 }
 

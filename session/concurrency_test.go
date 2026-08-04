@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -17,7 +17,7 @@ func TestConcurrentDifferentSessions(t *testing.T) {
 	for i := range responses {
 		responses[i] = resp(fmt.Sprintf("answer-%d", i), 1, 1)
 	}
-	mgr := session.NewManager(newTestAgent(t, responses...), checkpointer.NewInMemory())
+	mgr := session.NewManager(newTestAgent(t, responses...), mem.New())
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -41,7 +41,7 @@ func TestConcurrentDifferentSessions(t *testing.T) {
 func TestConcurrentSameSessionSerializes(t *testing.T) {
 	mgr := session.NewManager(
 		newTestAgent(t, resp("a", 1, 1), resp("b", 1, 1)),
-		checkpointer.NewInMemory(),
+		mem.New(),
 	)
 	ctx := context.Background()
 	s := mgr.Session("shared")
