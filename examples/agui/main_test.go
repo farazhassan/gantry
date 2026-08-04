@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/ui/agui"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -46,6 +47,37 @@ func TestServerStreamsRunToFinish(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("SSE stream missing %q\nfull stream:\n%s", want, got)
 		}
+	}
+}
+
+// TestNewHandlerAppliesOptions verifies newHandler forwards its opts through
+// to agui.Handler -- main() uses this to wire AGUI_ALLOWED_ORIGINS, so a
+// regression here would silently break that even though it's invisible from
+// main() itself (opts are only observable through the handler's behavior).
+func TestNewHandlerAppliesOptions(t *testing.T) {
+	llm := eval.NewMockLLMClient(gantry.LLMResponse{Content: "hi", StopReason: gantry.StopReasonEnd})
+
+	handler, err := newHandler(llm, agui.WithAllowedOrigins("https://example.com"))
+	if err != nil {
+		t.Fatalf("newHandler: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodOptions, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want https://example.com (opts not forwarded to agui.Handler?)", got)
 	}
 }
 

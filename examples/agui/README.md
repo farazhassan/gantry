@@ -9,7 +9,30 @@ go run ./examples/agui
 ```
 
 Configurable via env: `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_HOST`,
-`AGUI_ADDR` (default `:8080`).
+`AGUI_ADDR` (default `:8080`), `AGUI_ALLOWED_ORIGINS` (comma-separated list,
+or `*` — unset leaves CORS disabled; see below).
+
+The handler itself is production-hardened by default: a run's terminal error
+is logged server-side as well as streamed to the client, a panic is recovered
+into a clean `RUN_ERROR` instead of killing the connection, and idle periods
+get an SSE keep-alive so a proxy/load-balancer read timeout doesn't sever the
+stream. See [the package README](../../components/ui/agui/README.md#options)
+for the full `agui.Option` list (`WithLogger`, `WithErrorMapper`,
+`WithHeartbeatInterval`, `WithMaxBodyBytes`, `WithAllowedOrigins`) if you want
+to tune any of that beyond what this example wires up.
+
+### Calling it from a browser (CORS)
+
+CORS is disabled by default, matching the package's default (the caller owns
+auth/middleware). To try this server from a browser-based AG-UI client (the
+[AG-UI dojo](https://docs.ag-ui.com), a CopilotKit dev server, or your own SPA)
+running on a different origin, set `AGUI_ALLOWED_ORIGINS` before starting it:
+
+```bash
+AGUI_ALLOWED_ORIGINS=http://localhost:3000 go run ./examples/agui
+# or, for any origin during local development:
+AGUI_ALLOWED_ORIGINS=* go run ./examples/agui
+```
 
 ## Basic run
 
