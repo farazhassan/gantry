@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -24,7 +25,7 @@ func (failingCheckpointer) Load(context.Context, string) (*gantry.State, error) 
 
 func TestWithCheckpointerSavesOnPhaseEnd(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
-	store := checkpointer.NewInMemory()
+	store := mem.New()
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	if err := a.With(checkpointer.New(store, "run-1")); err != nil {
 		t.Fatalf("install checkpointer: %v", err)

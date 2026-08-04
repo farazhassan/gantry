@@ -1,4 +1,4 @@
-package checkpointer_test
+package file_test
 
 import (
 	"context"
@@ -9,13 +9,14 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/file"
 )
 
-func TestFileCheckpointer_SaveLoadRoundTrip(t *testing.T) {
+func TestNew_SaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	fc, err := checkpointer.NewFile(dir)
+	fc, err := file.New(dir)
 	if err != nil {
-		t.Fatalf("NewFile: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	ctx := context.Background()
 	want := &gantry.State{Input: "hi", Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}
@@ -31,17 +32,17 @@ func TestFileCheckpointer_SaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileCheckpointer_LoadMissingReturnsErrNotFound(t *testing.T) {
-	fc, _ := checkpointer.NewFile(t.TempDir())
+func TestNew_LoadMissingReturnsErrNotFound(t *testing.T) {
+	fc, _ := file.New(t.TempDir())
 	_, err := fc.Load(context.Background(), "nope")
 	if !errors.Is(err, checkpointer.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 
-func TestFileCheckpointer_SaveOverwritesAtomically(t *testing.T) {
+func TestNew_SaveOverwritesAtomically(t *testing.T) {
 	dir := t.TempDir()
-	fc, _ := checkpointer.NewFile(dir)
+	fc, _ := file.New(dir)
 	ctx := context.Background()
 	if err := fc.Save(ctx, "s", &gantry.State{Input: "first"}); err != nil {
 		t.Fatalf("save1: %v", err)
@@ -61,27 +62,27 @@ func TestFileCheckpointer_SaveOverwritesAtomically(t *testing.T) {
 	}
 }
 
-func TestNewFile_CreatesDir(t *testing.T) {
+func TestNew_CreatesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "sessions")
-	if _, err := checkpointer.NewFile(dir); err != nil {
-		t.Fatalf("NewFile should create dir: %v", err)
+	if _, err := file.New(dir); err != nil {
+		t.Fatalf("New should create dir: %v", err)
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		t.Fatalf("dir not created: err=%v", err)
 	}
 }
 
-func TestFileCheckpointer_SaveNilStateErrors(t *testing.T) {
-	fc, _ := checkpointer.NewFile(t.TempDir())
+func TestNew_SaveNilStateErrors(t *testing.T) {
+	fc, _ := file.New(t.TempDir())
 	if err := fc.Save(context.Background(), "s", nil); err == nil {
 		t.Fatal("want error saving nil state, got nil")
 	}
 }
 
-func TestNewFile_DirIsOwnerOnly(t *testing.T) {
+func TestNew_DirIsOwnerOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ckpt")
-	if _, err := checkpointer.NewFile(dir); err != nil {
-		t.Fatalf("NewFile: %v", err)
+	if _, err := file.New(dir); err != nil {
+		t.Fatalf("New: %v", err)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -92,9 +93,9 @@ func TestNewFile_DirIsOwnerOnly(t *testing.T) {
 	}
 }
 
-func TestFileCheckpointer_IDSanitized(t *testing.T) {
+func TestNew_IDSanitized(t *testing.T) {
 	dir := t.TempDir()
-	fc, _ := checkpointer.NewFile(dir)
+	fc, _ := file.New(dir)
 	ctx := context.Background()
 	if err := fc.Save(ctx, "a/../b", &gantry.State{Input: "x"}); err != nil {
 		t.Fatalf("save: %v", err)

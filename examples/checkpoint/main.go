@@ -7,6 +7,7 @@ import (
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -33,7 +34,7 @@ func RunExample(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 
-	cp := checkpointer.NewInMemory()
+	cp := mem.New()
 	if err := a.With(checkpointer.New(cp, runID)); err != nil {
 		return nil, err
 	}

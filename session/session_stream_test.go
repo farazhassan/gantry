@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/session"
 )
 
 func TestSessionRunStreamStreamsAndPersists(t *testing.T) {
 	a := newTestAgent(t, resp("hello there friend", 10, 5))
-	mgr := session.NewManager(a, checkpointer.NewInMemory())
+	mgr := session.NewManager(a, mem.New())
 	s := mgr.Session("user-1")
 	ctx := context.Background()
 
@@ -53,7 +53,7 @@ func TestSessionRunStreamStreamsAndPersists(t *testing.T) {
 
 func TestSessionRunStreamContinuesPriorRun(t *testing.T) {
 	a := newTestAgent(t, resp("first answer", 10, 5), resp("second answer", 10, 5))
-	mgr := session.NewManager(a, checkpointer.NewInMemory())
+	mgr := session.NewManager(a, mem.New())
 	s := mgr.Session("user-2")
 	ctx := context.Background()
 

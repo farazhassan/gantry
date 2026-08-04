@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 	"github.com/farazhassan/gantry/session"
 )
@@ -24,7 +24,7 @@ func newTestManager(t *testing.T, turns ...gantry.LLMResponse) *session.Manager 
 	if err != nil {
 		t.Fatalf("buildAgent: %v", err)
 	}
-	return session.NewManager(agent, checkpointer.NewInMemory())
+	return session.NewManager(agent, mem.New())
 }
 
 func TestRunREPL_AnswersThenExits(t *testing.T) {
@@ -101,7 +101,7 @@ func TestRunREPL_SharedReaderFeedsConfirmer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgent: %v", err)
 	}
-	mgr := session.NewManager(agent, checkpointer.NewInMemory())
+	mgr := session.NewManager(agent, mem.New())
 
 	if err := runREPL(context.Background(), mgr, "shared", shared, &out, nil); err != nil {
 		t.Fatalf("runREPL: %v", err)

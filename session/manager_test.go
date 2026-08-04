@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 	"github.com/farazhassan/gantry/session"
 )
@@ -27,7 +27,7 @@ func TestNewManagerNilAgentPanics(t *testing.T) {
 			t.Error("NewManager(nil, store): want panic")
 		}
 	}()
-	session.NewManager(nil, checkpointer.NewInMemory())
+	session.NewManager(nil, mem.New())
 }
 
 func TestNewManagerNilStorePanics(t *testing.T) {
@@ -41,7 +41,7 @@ func TestNewManagerNilStorePanics(t *testing.T) {
 }
 
 func TestManagerSessionGetOrCreate(t *testing.T) {
-	mgr := session.NewManager(newTestAgent(t), checkpointer.NewInMemory())
+	mgr := session.NewManager(newTestAgent(t), mem.New())
 
 	s1 := mgr.Session("alice")
 	s1again := mgr.Session("alice")

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/session"
 )
 
@@ -33,7 +33,7 @@ func TestSessionTransferHandoffRunsTargetAgent(t *testing.T) {
 	withAlwaysHandoff(router, "billing")
 	billing := newTestAgent(t, resp("your invoice is fixed", 7, 3))
 
-	mgr := session.NewManager(router, checkpointer.NewInMemory(),
+	mgr := session.NewManager(router, mem.New(),
 		session.WithResolver(func(sessionID string, h *gantry.Handoff) *gantry.Agent {
 			if h.Target == "billing" {
 				return billing
@@ -74,7 +74,7 @@ func TestSessionTransferHandoffRunsTargetAgent(t *testing.T) {
 func TestSessionHandoffWithoutResolverIsReturnedAsIs(t *testing.T) {
 	router := newTestAgent(t, resp("routing you", 1, 1))
 	withAlwaysHandoff(router, "billing")
-	mgr := session.NewManager(router, checkpointer.NewInMemory())
+	mgr := session.NewManager(router, mem.New())
 	s := mgr.Session("user-1")
 
 	state, err := s.Run(context.Background(), "hello")
@@ -98,7 +98,7 @@ func TestSessionHandoffWithoutResolverIsReturnedAsIs(t *testing.T) {
 func TestSessionHandoffUnknownTargetErrors(t *testing.T) {
 	router := newTestAgent(t, resp("routing you", 1, 1))
 	withAlwaysHandoff(router, "nonexistent")
-	mgr := session.NewManager(router, checkpointer.NewInMemory(),
+	mgr := session.NewManager(router, mem.New(),
 		session.WithResolver(func(string, *gantry.Handoff) *gantry.Agent { return nil }))
 	s := mgr.Session("user-1")
 
@@ -122,7 +122,7 @@ func TestSessionHandoffLoopIsBounded(t *testing.T) {
 	looper := newTestAgent(t,
 		resp("hop 0", 1, 1), resp("hop 1", 1, 1), resp("hop 2", 1, 1), resp("hop 3", 1, 1))
 	withAlwaysHandoff(looper, "self")
-	mgr := session.NewManager(looper, checkpointer.NewInMemory(),
+	mgr := session.NewManager(looper, mem.New(),
 		session.WithResolver(func(string, *gantry.Handoff) *gantry.Agent { return looper }))
 	s := mgr.Session("user-1")
 
@@ -153,7 +153,7 @@ func TestSessionDelegateHandoffFallsThrough(t *testing.T) {
 		}
 	})
 	resolved := false
-	mgr := session.NewManager(a, checkpointer.NewInMemory(),
+	mgr := session.NewManager(a, mem.New(),
 		session.WithResolver(func(string, *gantry.Handoff) *gantry.Agent {
 			resolved = true
 			return a
@@ -176,7 +176,7 @@ func TestSessionRunStreamHandoffStreamsBothRuns(t *testing.T) {
 	router := newTestAgent(t, resp("routing you to billing", 10, 5))
 	withAlwaysHandoff(router, "billing")
 	billing := newTestAgent(t, resp("your invoice is fixed", 7, 3))
-	mgr := session.NewManager(router, checkpointer.NewInMemory(),
+	mgr := session.NewManager(router, mem.New(),
 		session.WithResolver(func(_ string, h *gantry.Handoff) *gantry.Agent { return billing }))
 	s := mgr.Session("user-1")
 

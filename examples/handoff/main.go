@@ -7,7 +7,7 @@ import (
 	"log"
 
 	"github.com/farazhassan/gantry"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/eval"
 	"github.com/farazhassan/gantry/session"
 )
@@ -127,7 +127,7 @@ func RunExample(ctx context.Context) (*gantry.State, error) {
 	}
 
 	agents := map[string]*gantry.Agent{"billing": billingAgent}
-	mgr := session.NewManager(routerAgent, checkpointer.NewInMemory(),
+	mgr := session.NewManager(routerAgent, mem.New(),
 		session.WithResolver(func(_ string, h *gantry.Handoff) *gantry.Agent {
 			return agents[h.Target] // nil for unknown targets -> ErrHandoffTargetUnknown
 		}))

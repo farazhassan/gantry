@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/farazhassan/gantry/components/ask"
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/file"
 	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/session"
 )
@@ -51,7 +51,7 @@ func run() error {
 	ctx := context.Background()
 
 	// Persistence.
-	store, err := checkpointer.NewFile(*stateDir)
+	store, err := file.New(*stateDir)
 	if err != nil {
 		return fmt.Errorf("init state dir: %w", err)
 	}

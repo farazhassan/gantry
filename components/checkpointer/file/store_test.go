@@ -1,4 +1,4 @@
-package checkpointer_test
+package file_test
 
 import (
 	"context"
@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/farazhassan/gantry/components/checkpointer"
+	"github.com/farazhassan/gantry/components/checkpointer/file"
 )
 
-func TestFileStore_PutGetRoundTrip(t *testing.T) {
-	s, err := checkpointer.NewFileStore(t.TempDir())
+func TestStore_PutGetRoundTrip(t *testing.T) {
+	s, err := file.NewStore(t.TempDir())
 	if err != nil {
-		t.Fatalf("NewFileStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	if err := s.Put(context.Background(), "id1", []byte("data")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -23,17 +23,17 @@ func TestFileStore_PutGetRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileStore_GetMissing(t *testing.T) {
-	s, _ := checkpointer.NewFileStore(t.TempDir())
+func TestStore_GetMissing(t *testing.T) {
+	s, _ := file.NewStore(t.TempDir())
 	_, found, err := s.Get(context.Background(), "ghost")
 	if err != nil || found {
 		t.Fatalf("missing: found=%v err=%v", found, err)
 	}
 }
 
-func TestFileStore_OverwritesAtomicallyNoTempLeftover(t *testing.T) {
+func TestStore_OverwritesAtomicallyNoTempLeftover(t *testing.T) {
 	dir := t.TempDir()
-	s, _ := checkpointer.NewFileStore(dir)
+	s, _ := file.NewStore(dir)
 	ctx := context.Background()
 	_ = s.Put(ctx, "k", []byte("first"))
 	_ = s.Put(ctx, "k", []byte("second"))
@@ -49,9 +49,9 @@ func TestFileStore_OverwritesAtomicallyNoTempLeftover(t *testing.T) {
 	}
 }
 
-func TestFileStore_IDHashedToOneFile(t *testing.T) {
+func TestStore_IDHashedToOneFile(t *testing.T) {
 	dir := t.TempDir()
-	s, _ := checkpointer.NewFileStore(dir)
+	s, _ := file.NewStore(dir)
 	if err := s.Put(context.Background(), "a/../b", []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -61,10 +61,10 @@ func TestFileStore_IDHashedToOneFile(t *testing.T) {
 	}
 }
 
-func TestNewFileStore_CreatesOwnerOnlyDir(t *testing.T) {
+func TestNewStore_CreatesOwnerOnlyDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "ckpt")
-	if _, err := checkpointer.NewFileStore(dir); err != nil {
-		t.Fatalf("NewFileStore: %v", err)
+	if _, err := file.NewStore(dir); err != nil {
+		t.Fatalf("NewStore: %v", err)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil || !fi.IsDir() {
@@ -75,8 +75,8 @@ func TestNewFileStore_CreatesOwnerOnlyDir(t *testing.T) {
 	}
 }
 
-func TestNewFileStore_EmptyDirErrors(t *testing.T) {
-	if _, err := checkpointer.NewFileStore(""); err == nil {
+func TestNewStore_EmptyDirErrors(t *testing.T) {
+	if _, err := file.NewStore(""); err == nil {
 		t.Fatal("want error for empty dir")
 	}
 }
