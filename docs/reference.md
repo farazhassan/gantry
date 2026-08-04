@@ -36,8 +36,8 @@ you need.
 | **compactor** | Trims history to fit a token budget before the LLM call | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
 | **checkpointer** | Saves & restores state by id for resume / replay | `checkpointer.New(c, id)` | — |
-| **checkpointer/mem** | `checkpointer.Store` in-memory (tests, examples) | `mem.New()` | — |
-| **checkpointer/file** | `checkpointer.Store` as one file per id, atomic writes | `file.New(dir)` | — |
+| **checkpointer/mem** | `checkpointer.Checkpointer` backed by an in-memory store (tests, examples) | `mem.New()` | `NewStore()` |
+| **checkpointer/file** | `checkpointer.Checkpointer` backed by a file store (one file per id, atomic writes) | `file.New(dir)` | `NewStore(dir)` |
 | **checkpointer/sql** | `checkpointer.Store` on any `database/sql` connection (SQLite, Postgres, …) | `sql.New(db)` via `checkpointer.FromStore` | — |
 | **checkpointer/redis** | `checkpointer.Store` on Redis (own module) | `redis.New(rdb)` via `checkpointer.FromStore` | — |
 
