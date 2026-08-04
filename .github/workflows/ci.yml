@@ -80,6 +80,10 @@ jobs:
         if: matrix.go == 'stable'
         working-directory: mcp
         run: go test -race ./...
+      - name: Test nested module — components/checkpointer/redis
+        if: matrix.go == 'stable'
+        working-directory: components/checkpointer/redis
+        run: go test -race ./...
       - name: Upload coverage
         if: matrix.go == 'stable'
         uses: actions/upload-artifact@v7

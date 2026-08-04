@@ -35,11 +35,11 @@ you need.
 | **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.New(l)` | `NewBudget(Limits{...})` |
 | **compactor** | Trims history to fit a token budget before the LLM call | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
-| **checkpointer** | Saves & restores state by id for resume / replay | `checkpointer.New(c, id)` | `NewInMemory()` |
+| **checkpointer** | Saves & restores state by id for resume / replay | `checkpointer.New(c, id)` | `NewInMemory()` · `NewFile(dir)` · `SQLStore` |
+| **checkpointer/redis** | `checkpointer.Store` on Redis (own module) | `redis.New(rdb)` via `checkpointer.FromStore` | — |
 
-Each built-in is a reference implementation — swap in your own (a Redis
-checkpointer, a vector-store retriever, a real guardrail service) by satisfying
-the component's interface.
+Each built-in is a reference implementation — swap in your own (a vector-store
+retriever, a real guardrail service) by satisfying the component's interface.
 
 `memory` and `retriever`'s `NewVectorRetriever` are two policies — read-write
 and read-only — over one shared **`components/vectorstore`** `Store` interface
