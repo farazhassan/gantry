@@ -58,10 +58,10 @@ const (
 // Agent, ParentRunID, ParentToolCallID) are stamped by the run loop on every
 // emitted event and are empty when unknown.
 type Event struct {
-	Type        EventType   `json:"type"`
-	Iteration   int         `json:"iteration"`
-	Phase       Phase       `json:"phase,omitempty"`
-	TextDelta   string      `json:"text_delta,omitempty"`
+	Type      EventType `json:"type"`
+	Iteration int       `json:"iteration"`
+	Phase     Phase     `json:"phase,omitempty"`
+	TextDelta string    `json:"text_delta,omitempty"`
 
 	// ReasoningDelta carries provider "extended thinking" content for
 	// EventReasoningDelta.
