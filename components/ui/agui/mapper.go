@@ -23,6 +23,8 @@ type Mapper struct {
 
 	openMsg map[string]string // gantry RunID -> open messageId, if any
 	msgSeq  map[string]int    // gantry RunID -> monotonic counter for that run
+
+	lastUsage map[string]gantry.Usage // gantry RunID -> last USAGE event emitted for it, if any
 }
 
 // NewMapper returns a Mapper for a single AG-UI thread identified by
@@ -30,10 +32,11 @@ type Mapper struct {
 // Gantry-level Event.RunID).
 func NewMapper(threadID, runID string) *Mapper {
 	return &Mapper{
-		threadID: threadID,
-		runID:    runID,
-		openMsg:  map[string]string{},
-		msgSeq:   map[string]int{},
+		threadID:  threadID,
+		runID:     runID,
+		openMsg:   map[string]string{},
+		msgSeq:    map[string]int{},
+		lastUsage: map[string]gantry.Usage{},
 	}
 }
 
@@ -61,6 +64,11 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		ParentToolCallID: ev.ParentToolCallID,
 	}
 
+	if ev.Dropped > 0 {
+		out = append(out, newEventsDropped(ev.Dropped, id))
+	}
+	out = append(out, m.usageDelta(ev, id)...)
+
 	switch ev.Type {
 	case gantry.EventTextDelta:
 		open, hasOpen := m.openMsg[ev.RunID]
@@ -86,7 +94,7 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		out = append(out, m.closeText(ev.RunID, id)...)
 		if tr := ev.ToolResult; tr != nil {
 			msgID := fmt.Sprintf("%s:toolmsg:%s", ev.RunID, tr.CallID)
-			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content).withIdentity(id))
+			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content, tr.IsError).withIdentity(id))
 		}
 
 	case gantry.EventPhaseStart:
@@ -107,6 +115,23 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	}
 
 	return out
+}
+
+// usageDelta returns a USAGE event for ev.RunID if ev carries a Usage
+// snapshot that differs from the last one emitted for that run, updating the
+// tracked value as a side effect; otherwise it returns nil. This keeps
+// phase_end/done events — which every gantry run emits, whether or not an
+// LLM call actually ran that phase — from spamming a USAGE event on the wire
+// each time, since most phases leave usage unchanged.
+func (m *Mapper) usageDelta(ev gantry.Event, id identity) []Event {
+	if ev.Usage == nil {
+		return nil
+	}
+	if last, ok := m.lastUsage[ev.RunID]; ok && last == *ev.Usage {
+		return nil
+	}
+	m.lastUsage[ev.RunID] = *ev.Usage
+	return []Event{newUsage(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.Cost).withIdentity(id)}
 }
 
 // startFrame returns a RUN_STARTED event the first time it is called, marking

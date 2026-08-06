@@ -52,6 +52,11 @@ const (
 	typeToolCallEnd        = "TOOL_CALL_END"
 	typeToolCallResult     = "TOOL_CALL_RESULT"
 	typeCustom             = "CUSTOM"
+	// typeUsage is NOT part of the AG-UI spec — it's a gantry-specific
+	// extension event carrying token/cost accounting (see the Usage type
+	// below). Clients that don't recognize it can ignore it like any other
+	// unknown event type.
+	typeUsage = "USAGE"
 )
 
 // --- Lifecycle ---
@@ -225,6 +230,7 @@ type ToolCallResult struct {
 	ToolCallID string `json:"toolCallId"`
 	Content    string `json:"content"`
 	Role       string `json:"role"`
+	IsError    bool   `json:"isError,omitempty"`
 	identity
 }
 
@@ -233,8 +239,38 @@ func (e ToolCallResult) withIdentity(id identity) Event {
 	e.identity = id
 	return e
 }
-func newToolCallResult(msgID, toolCallID, content string) ToolCallResult {
-	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool"}
+func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCallResult {
+	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool", IsError: isError}
+}
+
+// --- Usage ---
+
+// Usage is a non-standard (not part of the AG-UI spec) extension event
+// carrying gantry's cumulative token/cost accounting for a run, translated
+// from gantry.Event.Usage. Emitted only when usage changes — see
+// Mapper.usageDelta.
+type Usage struct {
+	Type         string  `json:"type"`
+	InputTokens  int     `json:"inputTokens,omitempty"`
+	OutputTokens int     `json:"outputTokens,omitempty"`
+	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
+	CostUSD      float64 `json:"costUsd,omitempty"`
+	identity
+}
+
+func (e Usage) eventType() string { return e.Type }
+func (e Usage) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newUsage(inputTokens, outputTokens int, costUSD float64) Usage {
+	return Usage{
+		Type:         typeUsage,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Tokens:       inputTokens + outputTokens,
+		CostUSD:      costUSD,
+	}
 }
 
 // --- Custom ---
@@ -266,6 +302,23 @@ const subagentDoneName = "gantry.subagent_done"
 
 func newSubagentDone(id identity) Custom {
 	c := newCustom(subagentDoneName, nil)
+	c.identity = id
+	return c
+}
+
+// eventsDroppedName is the CUSTOM event name signaling that a buffering
+// wrapper (see gantry.NewBufferedSink) discarded events since the previous
+// delivered one — i.e. this client's view of the run has a gap. See
+// Mapper's generic gantry.Event.Dropped handling.
+const eventsDroppedName = "gantry.events_dropped"
+
+// eventsDroppedValue is the Custom.Value payload shape for eventsDroppedName.
+type eventsDroppedValue struct {
+	Count int `json:"count"`
+}
+
+func newEventsDropped(count int, id identity) Custom {
+	c := newCustom(eventsDroppedName, eventsDroppedValue{Count: count})
 	c.identity = id
 	return c
 }

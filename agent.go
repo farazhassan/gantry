@@ -355,11 +355,16 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// last in-loop iteration on a normal finish (phase/tool events carry the
 	// in-loop value). It reports how many iterations ran, not the index of the
 	// last one.
+	//
+	// usage is copied out of state (rather than passing &state.Usage) so the
+	// emitted event's snapshot is immune to any further mutation of state.
+	usage := state.Usage
 	if err := emit(ctx, Event{
 		Type:        EventDone,
 		Iteration:   state.Iteration,
 		DoneReason:  state.DoneReason,
 		FinalOutput: state.FinalOutput,
+		Usage:       &usage,
 	}); err != nil {
 		return state, wrap(err)
 	}
@@ -396,7 +401,10 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 	if err != nil {
 		return err
 	}
-	return emit(ctx, Event{Type: EventPhaseEnd, Iteration: state.Iteration, Phase: phase})
+	// usage is copied out of state (see the EventDone site for why) so the
+	// snapshot on this phase_end can't be mutated by a later phase.
+	usage := state.Usage
+	return emit(ctx, Event{Type: EventPhaseEnd, Iteration: state.Iteration, Phase: phase, Usage: &usage})
 }
 
 // resolveInner returns the built-in inner handler for the given phase.

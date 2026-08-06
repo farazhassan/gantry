@@ -78,7 +78,7 @@ func TestMapperToolResultAndDone(t *testing.T) {
 	id := identity{RunID: "run-1"}
 	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
 	gotRes := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr, RunID: "run-1"})
-	wantRes := []Event{newToolCallResult("run-1:toolmsg:c1", "c1", "ok").withIdentity(id)}
+	wantRes := []Event{newToolCallResult("run-1:toolmsg:c1", "c1", "ok", false).withIdentity(id)}
 	if !reflect.DeepEqual(gotRes, wantRes) {
 		t.Fatalf("res got %#v\nwant %#v", gotRes, wantRes)
 	}
@@ -86,6 +86,64 @@ func TestMapperToolResultAndDone(t *testing.T) {
 	wantDone := []Event{newRunFinished("t1", "r1")}
 	if !reflect.DeepEqual(gotDone, wantDone) {
 		t.Fatalf("done got %#v\nwant %#v", gotDone, wantDone)
+	}
+}
+
+func TestMapperToolResultError(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "boom", IsError: true}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr, RunID: "run-1"})
+	want := []Event{newToolCallResult("run-1:toolmsg:c1", "c1", "boom", true).withIdentity(identity{RunID: "run-1"})}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperUsageEmittedOnlyWhenChanged(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	u1 := gantry.Usage{InputTokens: 10, OutputTokens: 5, Cost: 0.001}
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart, RunID: "run-1", Usage: &u1})
+	want := []Event{
+		newUsage(10, 5, 0.001).withIdentity(id),
+		newStepFinished("start").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("first: got  %#v\nwant %#v", got, want)
+	}
+
+	// Same usage value again (a phase that made no LLM call): no USAGE event.
+	got = m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseObserve, RunID: "run-1", Usage: &u1})
+	want = []Event{newStepFinished("observe").withIdentity(id)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unchanged: got  %#v\nwant %#v", got, want)
+	}
+
+	// Usage increased: a fresh USAGE event.
+	u2 := gantry.Usage{InputTokens: 20, OutputTokens: 12, Cost: 0.003}
+	got = m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseLLMCall, RunID: "run-1", Usage: &u2})
+	want = []Event{
+		newUsage(20, 12, 0.003).withIdentity(id),
+		newStepFinished("llm_call").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("changed: got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperEventsDroppedPrecedesTranslatedEvent(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseLLMCall, RunID: "run-1", Dropped: 4})
+	want := []Event{
+		newEventsDropped(4, identity{RunID: "run-1"}),
+		newStepStarted("llm_call").withIdentity(identity{RunID: "run-1"}),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
 	}
 }
 

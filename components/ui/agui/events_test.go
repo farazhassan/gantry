@@ -23,7 +23,11 @@ func TestEventJSONShape(t *testing.T) {
 		{"tool_start", newToolCallStart("c1", "search"), `{"type":"TOOL_CALL_START","toolCallId":"c1","toolCallName":"search"}`},
 		{"tool_args", newToolCallArgs("c1", `{"q":"x"}`), `{"type":"TOOL_CALL_ARGS","toolCallId":"c1","delta":"{\"q\":\"x\"}"}`},
 		{"tool_end", newToolCallEnd("c1"), `{"type":"TOOL_CALL_END","toolCallId":"c1"}`},
-		{"tool_result", newToolCallResult("m2", "c1", "ok"), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"ok","role":"tool"}`},
+		{"tool_result", newToolCallResult("m2", "c1", "ok", false), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"ok","role":"tool"}`},
+		{"tool_result_error", newToolCallResult("m2", "c1", "boom", true), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"boom","role":"tool","isError":true}`},
+		{"usage", newUsage(120, 340, 0.0041), `{"type":"USAGE","inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}`},
+		{"usage_zero_cost", newUsage(10, 0, 0), `{"type":"USAGE","inputTokens":10,"tokens":10}`},
+		{"events_dropped", newEventsDropped(3, identity{}), `{"type":"CUSTOM","name":"gantry.events_dropped","value":{"count":3}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

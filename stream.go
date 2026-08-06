@@ -59,6 +59,12 @@ type Event struct {
 	DoneReason  DoneReason  `json:"done_reason,omitempty"`
 	FinalOutput string      `json:"final_output,omitempty"`
 
+	// Usage is a snapshot of the run's cumulative token/cost accounting as of
+	// this event (see State.Usage), attached to phase_end and done events. A
+	// nil Usage means the snapshot wasn't taken for this event, not that
+	// usage is zero — check the phase_end/done events for the latest value.
+	Usage *Usage `json:"usage,omitempty"`
+
 	// Identity: which run, session, task, and agent produced this event.
 	// RunID is minted per run; SessionID/TaskID come from State.Meta
 	// (MetaSessionID / MetaTaskID) when a task driver seeded them; Agent is

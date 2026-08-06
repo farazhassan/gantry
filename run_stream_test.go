@@ -38,6 +38,50 @@ func twoTurnMock() *eval.MockLLMClient {
 	)
 }
 
+func TestRunStreamUsageAccumulatesAndSnapshotsAreIndependent(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "calc", Input: []byte(`{"a":2,"b":3}`)}},
+			StopReason: gantry.StopReasonToolUse,
+			Usage:      gantry.Usage{InputTokens: 10, OutputTokens: 5, Cost: 0.001},
+		},
+		gantry.LLMResponse{
+			Content:    "the answer is 5",
+			StopReason: gantry.StopReasonEnd,
+			Usage:      gantry.Usage{InputTokens: 20, OutputTokens: 8, Cost: 0.002},
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	fakeToolExec(a)
+
+	var usages []gantry.Usage // one snapshot per phase_end that has a non-nil Usage
+	_, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventPhaseEnd && ev.Usage != nil {
+			usages = append(usages, *ev.Usage)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	// Usage is zero until the first PhaseLLMCall completes, then accumulates
+	// across both LLM calls — 10+20 input, 5+8 output, 0.001+0.002 cost.
+	want := gantry.Usage{InputTokens: 30, OutputTokens: 13, Cost: 0.003}
+	last := usages[len(usages)-1]
+	if last != want {
+		t.Errorf("final accumulated usage = %+v, want %+v", last, want)
+	}
+
+	// An earlier snapshot must not have been retroactively mutated by the
+	// later accumulation — each phase_end's Usage is a copy, not a shared
+	// pointer into state.Usage.
+	first := usages[0]
+	if first == want {
+		t.Fatalf("first snapshot equals the final total — snapshots are aliased, not copied")
+	}
+}
+
 func TestRunStreamNilSinkErrors(t *testing.T) {
 	a, _ := gantry.NewAgent(gantry.WithLLM(twoTurnMock()))
 	state, err := a.RunStream(context.Background(), "go", nil)
@@ -106,6 +150,15 @@ func TestRunStreamEmitsPhaseToolDoneEvents(t *testing.T) {
 	}
 	if last.FinalOutput != "the answer is 5" {
 		t.Errorf("done final output = %q", last.FinalOutput)
+	}
+
+	for _, ev := range events {
+		if ev.Type == gantry.EventPhaseEnd && ev.Usage == nil {
+			t.Errorf("phase_end %q has nil Usage, want a non-nil snapshot even when zero", ev.Phase)
+		}
+	}
+	if last.Usage == nil {
+		t.Error("done event has nil Usage, want a non-nil snapshot")
 	}
 
 	var sawToolCall, sawToolResult bool
