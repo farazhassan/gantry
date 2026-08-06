@@ -497,3 +497,18 @@ func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 		t.Errorf("parent StepFinished.StepName = %q, want bare %q", pFinStep.StepName, "tool_exec")
 	}
 }
+
+func TestMapperTranslatesRawEvent(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventRaw, RunID: "run-1",
+		RawFrame: json.RawMessage(`{"type":"ping"}`), RawSource: "anthropic",
+	})
+	want := []Event{newRaw(json.RawMessage(`{"type":"ping"}`), "anthropic").withIdentity(id)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}

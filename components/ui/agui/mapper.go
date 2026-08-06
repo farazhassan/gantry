@@ -103,6 +103,9 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		}
 		out = append(out, newReasoningMessageContent(open, ev.ReasoningDelta).withIdentity(id))
 
+	case gantry.EventRaw:
+		out = append(out, newRaw(ev.RawFrame, ev.RawSource).withIdentity(id))
+
 	case gantry.EventToolCall:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
