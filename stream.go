@@ -69,7 +69,8 @@ type Event struct {
 
 	// RawFrame/RawSource carry a provider frame gantry does not otherwise
 	// model, for EventRaw. RawSource identifies the provider (e.g.
-	// "anthropic").
+	// "anthropic"). RawFrame's slice type means Event is no longer ==
+	// comparable; use reflect.DeepEqual where a whole Event must be compared.
 	RawFrame  json.RawMessage `json:"raw_frame,omitempty"`
 	RawSource string          `json:"raw_source,omitempty"`
 
@@ -101,7 +102,7 @@ type Event struct {
 
 	// Dropped counts events discarded by a buffering wrapper (see
 	// NewBufferedSink) since the previous delivered event; zero on direct,
-	// unbuffered streams. A plain int so Event stays comparable.
+	// unbuffered streams.
 	Dropped int `json:"dropped,omitempty"`
 }
 

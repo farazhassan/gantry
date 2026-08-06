@@ -21,9 +21,9 @@ func DefaultStartHandler(ctx context.Context, state *State) error {
 // by passing a custom Handler via WithInnerHandler (Plan 2).
 //
 // When a RunStream sink is active AND the client implements StreamingLLMClient,
-// the handler streams, emitting an EventTextDelta per non-empty chunk. In all
-// other cases (plain Run, or a non-streaming client) it falls back to Generate
-// — identical to the pre-streaming behavior.
+// the handler streams, emitting an event per populated StreamChunk field (see
+// invokeLLM). In all other cases (plain Run, or a non-streaming client) it
+// falls back to Generate — identical to the pre-streaming behavior.
 func DefaultLLMCallHandler(client LLMClient) Handler {
 	return func(ctx context.Context, state *State) error {
 		req := LLMRequest{

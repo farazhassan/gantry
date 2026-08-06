@@ -141,3 +141,38 @@ func TestRunStreamEmitsReasoningAndRawEvents(t *testing.T) {
 		t.Errorf("text deltas = %v, want [\"hi\"]", textDeltas)
 	}
 }
+
+// multiFieldChunkStub yields a single StreamChunk with BOTH TextDelta and
+// ReasoningDelta populated at once, the way a provider adapter could
+// plausibly report a reasoning fragment and a text fragment together.
+type multiFieldChunkStub struct{}
+
+func (multiFieldChunkStub) Generate(_ context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
+	return gantry.LLMResponse{Content: "hi", StopReason: gantry.StopReasonEnd}, nil
+}
+
+func (multiFieldChunkStub) GenerateStream(_ context.Context, _ gantry.LLMRequest, yield func(gantry.StreamChunk) error) (gantry.LLMResponse, error) {
+	if err := yield(gantry.StreamChunk{TextDelta: "hi", ReasoningDelta: "thinking"}); err != nil {
+		return gantry.LLMResponse{}, err
+	}
+	return gantry.LLMResponse{Content: "hi", StopReason: gantry.StopReasonEnd}, nil
+}
+
+func TestRunStreamChunkWithMultipleFieldsEmitsMultipleEvents(t *testing.T) {
+	a, _ := gantry.NewAgent(gantry.WithLLM(multiFieldChunkStub{}))
+
+	var types []gantry.EventType
+	_, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventTextDelta || ev.Type == gantry.EventReasoningDelta {
+			types = append(types, ev.Type)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	want := []gantry.EventType{gantry.EventTextDelta, gantry.EventReasoningDelta}
+	if len(types) != len(want) || types[0] != want[0] || types[1] != want[1] {
+		t.Errorf("event types = %v, want %v (one chunk with two populated fields must emit two events, text before reasoning)", types, want)
+	}
+}
