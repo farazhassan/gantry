@@ -282,6 +282,97 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 	}
 }
 
+func TestMapperReasoningMessageLifecycle(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	id := identity{RunID: "run-1"}
+	_ = m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseLLMCall, RunID: "run-1"}) // RunStarted + StepStarted
+
+	d1 := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "Let me ", RunID: "run-1"})
+	wantD1 := []Event{
+		newReasoningStart("run-1:reasoning:1").withIdentity(id),
+		newReasoningMessageStart("run-1:reasoning:1").withIdentity(id),
+		newReasoningMessageContent("run-1:reasoning:1", "Let me ").withIdentity(id),
+	}
+	if !reflect.DeepEqual(d1, wantD1) {
+		t.Fatalf("d1 got %#v\nwant %#v", d1, wantD1)
+	}
+
+	d2 := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "think", RunID: "run-1"})
+	wantD2 := []Event{newReasoningMessageContent("run-1:reasoning:1", "think").withIdentity(id)}
+	if !reflect.DeepEqual(d2, wantD2) {
+		t.Fatalf("d2 got %#v\nwant %#v", d2, wantD2)
+	}
+
+	// A text delta closes the open reasoning message before opening its own.
+	textStart := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "answer", RunID: "run-1"})
+	wantTextStart := []Event{
+		newReasoningMessageEnd("run-1:reasoning:1").withIdentity(id),
+		newReasoningEnd("run-1:reasoning:1").withIdentity(id),
+		newTextMessageStart("run-1:msg:2").withIdentity(id),
+		newTextMessageContent("run-1:msg:2", "answer").withIdentity(id),
+	}
+	if !reflect.DeepEqual(textStart, wantTextStart) {
+		t.Fatalf("textStart got %#v\nwant %#v", textStart, wantTextStart)
+	}
+}
+
+func TestMapperTextDeltaClosesOpenReasoning(t *testing.T) {
+	// Covered by TestMapperReasoningMessageLifecycle's third assertion; this
+	// test covers the symmetric direction: a reasoning delta closes open text.
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"}) // opens run-1:msg:1
+	got := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "wait", RunID: "run-1"})
+	want := []Event{
+		newTextMessageEnd("run-1:msg:1").withIdentity(id),
+		newReasoningStart("run-1:reasoning:2").withIdentity(id),
+		newReasoningMessageStart("run-1:reasoning:2").withIdentity(id),
+		newReasoningMessageContent("run-1:reasoning:2", "wait").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperToolCallClosesOpenReasoning(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	_ = m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "hmm", RunID: "run-1"})
+	tc := &gantry.ToolCall{ID: "c1", Name: "search", Input: json.RawMessage(`{}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolCall, ToolCall: tc, RunID: "run-1"})
+	want := []Event{
+		newReasoningMessageEnd("run-1:reasoning:1").withIdentity(id),
+		newReasoningEnd("run-1:reasoning:1").withIdentity(id),
+		newToolCallStart("c1", "search").withIdentity(id),
+		newToolCallArgs("c1", `{}`).withIdentity(id),
+		newToolCallEnd("c1").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperDoneClosesOpenReasoning(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	_ = m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "bye", RunID: "run-1"})
+	got := m.Map(gantry.Event{Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls, RunID: "run-1"})
+	want := []Event{
+		newReasoningMessageEnd("run-1:reasoning:1").withIdentity(id),
+		newReasoningEnd("run-1:reasoning:1").withIdentity(id),
+		newRunFinished("t1", "r1"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true

@@ -88,6 +88,7 @@ func (s *Sink) EmitError(err error) error {
 	defer s.mu.Unlock()
 	frames := s.mapper.startFrame()
 	frames = append(frames, s.mapper.closeAllText()...)
+	frames = append(frames, s.mapper.closeAllReasoning()...)
 	frames = append(frames, newRunError(err.Error()))
 	for _, ae := range frames {
 		if werr := WriteSSE(s.w, ae); werr != nil {
