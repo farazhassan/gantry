@@ -59,6 +59,7 @@ const (
 	typeToolCallEnd    = "TOOL_CALL_END"
 	typeToolCallResult = "TOOL_CALL_RESULT"
 	typeCustom         = "CUSTOM"
+	typeRaw            = "RAW"
 )
 
 // --- Lifecycle ---
@@ -397,6 +398,27 @@ func newUsage(inputTokens, outputTokens int, costUSD float64, id identity) Custo
 	})
 	c.identity = id
 	return c
+}
+
+// --- Raw ---
+
+// Raw is the AG-UI RAW event: a passthrough for a provider frame gantry does
+// not otherwise model (see the Anthropic adapter's default case in
+// GenerateStream). Event carries the frame verbatim, undecoded.
+type Raw struct {
+	Type   string          `json:"type"`
+	Event  json.RawMessage `json:"event"`
+	Source string          `json:"source,omitempty"`
+	identity
+}
+
+func (e Raw) eventType() string { return e.Type }
+func (e Raw) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newRaw(event json.RawMessage, source string) Raw {
+	return Raw{Type: typeRaw, Event: event, Source: source}
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:
