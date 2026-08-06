@@ -38,14 +38,15 @@ type StreamingLLMClient interface {
 type EventType string
 
 const (
-	EventPhaseStart     EventType = "phase_start"
-	EventPhaseEnd       EventType = "phase_end"
-	EventTextDelta      EventType = "text_delta"
-	EventReasoningDelta EventType = "reasoning_delta"
-	EventRaw            EventType = "raw"
-	EventToolCall       EventType = "tool_call"
-	EventToolResult     EventType = "tool_result"
-	EventDone           EventType = "done"
+	EventPhaseStart      EventType = "phase_start"
+	EventPhaseEnd        EventType = "phase_end"
+	EventTextDelta       EventType = "text_delta"
+	EventReasoningDelta  EventType = "reasoning_delta"
+	EventRaw             EventType = "raw"
+	EventToolCall        EventType = "tool_call"
+	EventToolResult      EventType = "tool_result"
+	EventPlanStepChanged EventType = "plan_step_changed"
+	EventDone            EventType = "done"
 )
 
 // Event is a single whole-run observation emitted by RunStream. It is
@@ -74,10 +75,16 @@ type Event struct {
 	RawFrame  json.RawMessage `json:"raw_frame,omitempty"`
 	RawSource string          `json:"raw_source,omitempty"`
 
-	ToolCall    *ToolCall   `json:"tool_call,omitempty"`
-	ToolResult  *ToolResult `json:"tool_result,omitempty"`
-	DoneReason  DoneReason  `json:"done_reason,omitempty"`
-	FinalOutput string      `json:"final_output,omitempty"`
+	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
+	ToolResult *ToolResult `json:"tool_result,omitempty"`
+
+	// PlanStep carries the full current state of a gantry.PlanStep that just
+	// changed, for EventPlanStepChanged. Emitted by components/planner's
+	// update_plan interception (see components/planner/update_plan_component.go).
+	PlanStep *PlanStep `json:"plan_step,omitempty"`
+
+	DoneReason  DoneReason `json:"done_reason,omitempty"`
+	FinalOutput string     `json:"final_output,omitempty"`
 
 	// Usage is a snapshot of the run's cumulative token/cost accounting as of
 	// this event (see State.Usage), attached to phase_end and done events. A
@@ -158,6 +165,16 @@ func emit(ctx context.Context, ev Event) error {
 		ev.ParentToolCallID = id.parentToolCallID
 	}
 	return s(ev)
+}
+
+// Emit sends ev to the ambient EventSink in ctx (if any), stamping the run's
+// identity onto it first — the same chokepoint the core run loop uses
+// internally (see emit). Exported so components outside the gantry package
+// (e.g. components/planner's update_plan interception) can emit
+// application-level events without reimplementing identity stamping. A no-op
+// when no sink is active.
+func Emit(ctx context.Context, ev Event) error {
+	return emit(ctx, ev)
 }
 
 // NewBufferedSink wraps sink so event production is decoupled from consumption:
