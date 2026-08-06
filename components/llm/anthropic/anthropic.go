@@ -27,10 +27,11 @@ const (
 // endpoint. It is safe for concurrent use: it holds no per-call state and the
 // underlying *http.Client is concurrency-safe.
 type Client struct {
-	model   string
-	baseURL string
-	apiKey  string
-	httpc   *http.Client
+	model          string
+	baseURL        string
+	apiKey         string
+	thinkingBudget int
+	httpc          *http.Client
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
@@ -86,6 +87,16 @@ func WithHTTPClient(h *http.Client) Option {
 			c.httpc = h
 		}
 	}
+}
+
+// WithExtendedThinking enables Claude's extended thinking, giving the model
+// up to budgetTokens tokens to reason before answering — surfaced to gantry
+// as EventReasoningDelta / StreamChunk.ReasoningDelta (see GenerateStream).
+// budgetTokens <= 0 disables it (the default); Anthropic requires MaxTokens
+// (LLMRequest.MaxTokens, or the adapter's defaultMaxTokens fallback) to
+// exceed budgetTokens.
+func WithExtendedThinking(budgetTokens int) Option {
+	return func(c *Client) { c.thinkingBudget = budgetTokens }
 }
 
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
@@ -271,7 +282,7 @@ func (a *blockAccumulator) blocks() []toolBlock {
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, stream))
+	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.thinkingBudget))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: encode request: %w", err)
 	}

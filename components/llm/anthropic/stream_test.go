@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/llm/anthropic"
 )
 
 // sse writes Anthropic-style Server-Sent Events: an "event:" line followed by a
@@ -167,5 +169,61 @@ func TestGenerateStreamPropagatesContextCancellation(t *testing.T) {
 	}, func(gantry.StreamChunk) error { return nil })
 	if err == nil {
 		t.Error("want error on canceled context, got nil")
+	}
+}
+
+func TestGenerateStreamSendsThinkingConfigWhenEnabled(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, [][2]string{
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		})
+	}))
+	defer srv.Close()
+	c := anthropic.New("test-model",
+		anthropic.WithAPIKey("test-key"),
+		anthropic.WithBaseURL(srv.URL),
+		anthropic.WithHTTPClient(srv.Client()),
+		anthropic.WithExtendedThinking(1024),
+	)
+
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+
+	thinking, ok := gotBody["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body missing \"thinking\" object: %+v", gotBody)
+	}
+	if thinking["type"] != "enabled" {
+		t.Errorf("thinking.type = %v, want %q", thinking["type"], "enabled")
+	}
+	if budget, ok := thinking["budget_tokens"].(float64); !ok || int(budget) != 1024 {
+		t.Errorf("thinking.budget_tokens = %v, want 1024", thinking["budget_tokens"])
+	}
+}
+
+func TestGenerateStreamOmitsThinkingConfigByDefault(t *testing.T) {
+	var gotBody map[string]any
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, [][2]string{
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		})
+	})
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if _, ok := gotBody["thinking"]; ok {
+		t.Errorf("request body has \"thinking\" key = %v, want omitted (extended thinking not configured)", gotBody["thinking"])
 	}
 }
