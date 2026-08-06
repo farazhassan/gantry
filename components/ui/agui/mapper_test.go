@@ -108,14 +108,14 @@ func TestMapperUsageEmittedOnlyWhenChanged(t *testing.T) {
 	u1 := gantry.Usage{InputTokens: 10, OutputTokens: 5, Cost: 0.001}
 	got := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart, RunID: "run-1", Usage: &u1})
 	want := []Event{
-		newUsage(10, 5, 0.001).withIdentity(id),
+		newUsage(10, 5, 0.001, id),
 		newStepFinished("start").withIdentity(id),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("first: got  %#v\nwant %#v", got, want)
 	}
 
-	// Same usage value again (a phase that made no LLM call): no USAGE event.
+	// Same usage value again (a phase that made no LLM call): no usage event.
 	got = m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseObserve, RunID: "run-1", Usage: &u1})
 	want = []Event{newStepFinished("observe").withIdentity(id)}
 	if !reflect.DeepEqual(got, want) {
@@ -126,7 +126,7 @@ func TestMapperUsageEmittedOnlyWhenChanged(t *testing.T) {
 	u2 := gantry.Usage{InputTokens: 20, OutputTokens: 12, Cost: 0.003}
 	got = m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseLLMCall, RunID: "run-1", Usage: &u2})
 	want = []Event{
-		newUsage(20, 12, 0.003).withIdentity(id),
+		newUsage(20, 12, 0.003, id),
 		newStepFinished("llm_call").withIdentity(id),
 	}
 	if !reflect.DeepEqual(got, want) {

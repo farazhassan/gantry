@@ -52,11 +52,6 @@ const (
 	typeToolCallEnd        = "TOOL_CALL_END"
 	typeToolCallResult     = "TOOL_CALL_RESULT"
 	typeCustom             = "CUSTOM"
-	// typeUsage is NOT part of the AG-UI spec — it's a gantry-specific
-	// extension event carrying token/cost accounting (see the Usage type
-	// below). Clients that don't recognize it can ignore it like any other
-	// unknown event type.
-	typeUsage = "USAGE"
 )
 
 // --- Lifecycle ---
@@ -243,36 +238,6 @@ func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCall
 	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool", IsError: isError}
 }
 
-// --- Usage ---
-
-// Usage is a non-standard (not part of the AG-UI spec) extension event
-// carrying gantry's cumulative token/cost accounting for a run, translated
-// from gantry.Event.Usage. Emitted only when usage changes — see
-// Mapper.usageDelta.
-type Usage struct {
-	Type         string  `json:"type"`
-	InputTokens  int     `json:"inputTokens,omitempty"`
-	OutputTokens int     `json:"outputTokens,omitempty"`
-	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
-	CostUSD      float64 `json:"costUsd,omitempty"`
-	identity
-}
-
-func (e Usage) eventType() string { return e.Type }
-func (e Usage) withIdentity(id identity) Event {
-	e.identity = id
-	return e
-}
-func newUsage(inputTokens, outputTokens int, costUSD float64) Usage {
-	return Usage{
-		Type:         typeUsage,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		Tokens:       inputTokens + outputTokens,
-		CostUSD:      costUSD,
-	}
-}
-
 // --- Custom ---
 
 // Custom is the AG-UI CUSTOM event: a named application-defined payload
@@ -319,6 +284,31 @@ type eventsDroppedValue struct {
 
 func newEventsDropped(count int, id identity) Custom {
 	c := newCustom(eventsDroppedName, eventsDroppedValue{Count: count})
+	c.identity = id
+	return c
+}
+
+// usageName is the CUSTOM event name carrying gantry's cumulative
+// token/cost accounting for a run, translated from gantry.Event.Usage.
+// Emitted only when usage changes since the last emission — see
+// Mapper.usageDelta.
+const usageName = "gantry.usage"
+
+// usageValue is the Custom.Value payload shape for usageName.
+type usageValue struct {
+	InputTokens  int     `json:"inputTokens,omitempty"`
+	OutputTokens int     `json:"outputTokens,omitempty"`
+	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
+	CostUSD      float64 `json:"costUsd,omitempty"`
+}
+
+func newUsage(inputTokens, outputTokens int, costUSD float64, id identity) Custom {
+	c := newCustom(usageName, usageValue{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Tokens:       inputTokens + outputTokens,
+		CostUSD:      costUSD,
+	})
 	c.identity = id
 	return c
 }
