@@ -92,6 +92,25 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
 - v1 honors `messages` only. Client-supplied `state` and `tools` are accepted in
   the body but ignored — Gantry tools are server-registered.
 
+### AG-UI event coverage
+
+Implemented: `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`, `STEP_STARTED`/
+`STEP_FINISHED`, `TEXT_MESSAGE_START`/`TEXT_MESSAGE_CONTENT`/
+`TEXT_MESSAGE_END`, `TOOL_CALL_START`/`TOOL_CALL_ARGS`/`TOOL_CALL_END`/
+`TOOL_CALL_RESULT`, `CUSTOM` (gantry-specific: `gantry.usage`,
+`gantry.events_dropped`, `gantry.subagent_done`), `REASONING_START`/
+`REASONING_MESSAGE_START`/`REASONING_MESSAGE_CONTENT`/
+`REASONING_MESSAGE_END`/`REASONING_END` (Anthropic extended thinking only —
+see `anthropic.WithExtendedThinking`), `RAW` (provider frames this package
+doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
+(`components/planner`'s `update_plan` plan-step progress).
+
+Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
+`MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"
+above), the `*_CHUNK` convenience events (redundant with the explicit
+Start/Content/End sequence this package always emits),
+`REASONING_ENCRYPTED_VALUE`, and `REASONING_*` for non-Anthropic providers.
+
 ### Error behavior
 
 - **Before streaming starts** (bad JSON, empty `messages`, non-user last
