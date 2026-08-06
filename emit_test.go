@@ -9,9 +9,12 @@ import (
 )
 
 // emittingMiddleware installs a PhaseObserve middleware that calls
-// gantry.Emit directly, the way components/planner's update_plan
-// interception will (a later task) — this proves Emit is usable, and stamps
-// identity correctly, from outside the gantry package.
+// gantry.Emit directly, proving Emit is usable — and stamps identity
+// correctly — from a middleware installed outside the gantry package.
+// PhaseObserve is just a convenient phase for this test; Emit's identity
+// stamping only reads ctx, not Phase, so which phase calls it doesn't
+// matter. (components/planner's real update_plan interception, a later
+// task, calls Emit from PhaseToolExec instead.)
 func emittingMiddleware(step *gantry.PlanStep) gantry.Middleware {
 	return func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
