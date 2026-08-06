@@ -60,6 +60,9 @@ const (
 	typeToolCallResult = "TOOL_CALL_RESULT"
 	typeCustom         = "CUSTOM"
 	typeRaw            = "RAW"
+
+	typeActivitySnapshot = "ACTIVITY_SNAPSHOT"
+	typeActivityDelta    = "ACTIVITY_DELTA"
 )
 
 // --- Lifecycle ---
@@ -419,6 +422,65 @@ func (e Raw) withIdentity(id identity) Event {
 }
 func newRaw(event json.RawMessage, source string) Raw {
 	return Raw{Type: typeRaw, Event: event, Source: source}
+}
+
+// --- Activity ---
+
+// activityStepType is the ACTIVITY_SNAPSHOT/ACTIVITY_DELTA activityType value
+// gantry uses for plan-step progress (see Mapper's EventPlanStepChanged
+// handling). Named like the existing gantry.* CUSTOM event names.
+const activityStepType = "gantry.plan_step"
+
+// activityStepValue is the ACTIVITY_SNAPSHOT/ACTIVITY_DELTA content shape for
+// a gantry plan step — a small client-facing projection of gantry.PlanStep,
+// deliberately excluding its free-form Meta map.
+type activityStepValue struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	Output      string `json:"output,omitempty"`
+}
+
+// jsonPatchOp is one RFC 6902 JSON Patch operation, as required by
+// ActivityDelta.Patch.
+type jsonPatchOp struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value,omitempty"`
+}
+
+type ActivitySnapshot struct {
+	Type         string `json:"type"`
+	MessageID    string `json:"messageId"`
+	ActivityType string `json:"activityType"`
+	Content      any    `json:"content"`
+	identity
+}
+
+func (e ActivitySnapshot) eventType() string { return e.Type }
+func (e ActivitySnapshot) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newActivitySnapshot(msgID string, content activityStepValue) ActivitySnapshot {
+	return ActivitySnapshot{Type: typeActivitySnapshot, MessageID: msgID, ActivityType: activityStepType, Content: content}
+}
+
+type ActivityDelta struct {
+	Type         string        `json:"type"`
+	MessageID    string        `json:"messageId"`
+	ActivityType string        `json:"activityType"`
+	Patch        []jsonPatchOp `json:"patch"`
+	identity
+}
+
+func (e ActivityDelta) eventType() string { return e.Type }
+func (e ActivityDelta) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newActivityDelta(msgID string, patch []jsonPatchOp) ActivityDelta {
+	return ActivityDelta{Type: typeActivityDelta, MessageID: msgID, ActivityType: activityStepType, Patch: patch}
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:

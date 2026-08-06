@@ -31,6 +31,16 @@ func TestEventJSONShape(t *testing.T) {
 		{"tool_result", newToolCallResult("m2", "c1", "ok", false), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"ok","role":"tool"}`},
 		{"tool_result_error", newToolCallResult("m2", "c1", "boom", true), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"boom","role":"tool","isError":true}`},
 		{"raw", newRaw(json.RawMessage(`{"type":"ping"}`), "anthropic"), `{"type":"RAW","event":{"type":"ping"},"source":"anthropic"}`},
+		{
+			"activity_snapshot",
+			newActivitySnapshot("run-1:activity:s1", activityStepValue{ID: "s1", Description: "design", Status: "active"}),
+			`{"type":"ACTIVITY_SNAPSHOT","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","content":{"id":"s1","description":"design","status":"active"}}`,
+		},
+		{
+			"activity_delta",
+			newActivityDelta("run-1:activity:s1", []jsonPatchOp{{Op: "replace", Path: "/status", Value: "done"}}),
+			`{"type":"ACTIVITY_DELTA","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","patch":[{"op":"replace","path":"/status","value":"done"}]}`,
+		},
 		{"usage", newUsage(120, 340, 0.0041, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}}`},
 		{"usage_zero_cost", newUsage(10, 0, 0, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":10,"tokens":10}}`},
 		{"events_dropped", newEventsDropped(3, identity{}), `{"type":"CUSTOM","name":"gantry.events_dropped","value":{"count":3}}`},
