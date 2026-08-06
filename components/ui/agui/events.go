@@ -47,11 +47,18 @@ const (
 	typeTextMessageStart   = "TEXT_MESSAGE_START"
 	typeTextMessageContent = "TEXT_MESSAGE_CONTENT"
 	typeTextMessageEnd     = "TEXT_MESSAGE_END"
-	typeToolCallStart      = "TOOL_CALL_START"
-	typeToolCallArgs       = "TOOL_CALL_ARGS"
-	typeToolCallEnd        = "TOOL_CALL_END"
-	typeToolCallResult     = "TOOL_CALL_RESULT"
-	typeCustom             = "CUSTOM"
+
+	typeReasoningStart          = "REASONING_START"
+	typeReasoningMessageStart   = "REASONING_MESSAGE_START"
+	typeReasoningMessageContent = "REASONING_MESSAGE_CONTENT"
+	typeReasoningMessageEnd     = "REASONING_MESSAGE_END"
+	typeReasoningEnd            = "REASONING_END"
+
+	typeToolCallStart  = "TOOL_CALL_START"
+	typeToolCallArgs   = "TOOL_CALL_ARGS"
+	typeToolCallEnd    = "TOOL_CALL_END"
+	typeToolCallResult = "TOOL_CALL_RESULT"
+	typeCustom         = "CUSTOM"
 )
 
 // --- Lifecycle ---
@@ -168,6 +175,85 @@ func (e TextMessageEnd) withIdentity(id identity) Event {
 }
 func newTextMessageEnd(msgID string) TextMessageEnd {
 	return TextMessageEnd{Type: typeTextMessageEnd, MessageID: msgID}
+}
+
+// --- Reasoning ---
+
+type ReasoningStart struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningStart) eventType() string { return e.Type }
+func (e ReasoningStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningStart(msgID string) ReasoningStart {
+	return ReasoningStart{Type: typeReasoningStart, MessageID: msgID}
+}
+
+type ReasoningMessageStart struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Role      string `json:"role"`
+	identity
+}
+
+func (e ReasoningMessageStart) eventType() string { return e.Type }
+func (e ReasoningMessageStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageStart(msgID string) ReasoningMessageStart {
+	return ReasoningMessageStart{Type: typeReasoningMessageStart, MessageID: msgID, Role: "assistant"}
+}
+
+type ReasoningMessageContent struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Delta     string `json:"delta"`
+	identity
+}
+
+func (e ReasoningMessageContent) eventType() string { return e.Type }
+func (e ReasoningMessageContent) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageContent(msgID, delta string) ReasoningMessageContent {
+	return ReasoningMessageContent{Type: typeReasoningMessageContent, MessageID: msgID, Delta: delta}
+}
+
+type ReasoningMessageEnd struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningMessageEnd) eventType() string { return e.Type }
+func (e ReasoningMessageEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageEnd(msgID string) ReasoningMessageEnd {
+	return ReasoningMessageEnd{Type: typeReasoningMessageEnd, MessageID: msgID}
+}
+
+type ReasoningEnd struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningEnd) eventType() string { return e.Type }
+func (e ReasoningEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningEnd(msgID string) ReasoningEnd {
+	return ReasoningEnd{Type: typeReasoningEnd, MessageID: msgID}
 }
 
 // --- Tool calls ---
