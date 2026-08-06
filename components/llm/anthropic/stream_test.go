@@ -70,6 +70,48 @@ func TestGenerateStreamAggregatesDeltas(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamYieldsReasoningDeltas(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w, [][2]string{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":0}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me "}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"think..."}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":1}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		})
+	})
+
+	var reasoning, text []string
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
+		if ch.ReasoningDelta != "" {
+			reasoning = append(reasoning, ch.ReasoningDelta)
+		}
+		if ch.TextDelta != "" {
+			text = append(text, ch.TextDelta)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if got := strings.Join(reasoning, ""); got != "Let me think..." {
+		t.Errorf("reasoning deltas = %q, want %q", got, "Let me think...")
+	}
+	if got := strings.Join(text, ""); got != "answer" {
+		t.Errorf("text deltas = %q, want %q", got, "answer")
+	}
+	if resp.Content != "answer" {
+		t.Errorf("resp.Content = %q, want %q (thinking block excluded from content)", resp.Content, "answer")
+	}
+}
+
 func TestGenerateStreamYieldsTerminalUsageChunk(t *testing.T) {
 	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
 		sse(w, [][2]string{

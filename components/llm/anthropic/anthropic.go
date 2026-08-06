@@ -147,6 +147,7 @@ type streamBlock struct {
 type streamDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
+	Thinking    string `json:"thinking"`
 	PartialJSON string `json:"partial_json"`
 	StopReason  string `json:"stop_reason"`
 }
@@ -205,6 +206,12 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 				if ev.Delta.Text != "" {
 					content.WriteString(ev.Delta.Text)
 					if err := yield(gantry.StreamChunk{TextDelta: ev.Delta.Text}); err != nil {
+						return gantry.LLMResponse{}, err
+					}
+				}
+			case "thinking_delta":
+				if ev.Delta.Thinking != "" {
+					if err := yield(gantry.StreamChunk{ReasoningDelta: ev.Delta.Thinking}); err != nil {
 						return gantry.LLMResponse{}, err
 					}
 				}
