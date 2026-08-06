@@ -2,7 +2,9 @@ package anthropic_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -249,6 +251,52 @@ func TestGenerateStreamYieldsRawFrameForUnhandledEventTypes(t *testing.T) {
 	}
 	if !strings.Contains(string(raw[1].RawFrame), `"content_block_stop"`) {
 		t.Errorf("raw[1] = %s, want the content_block_stop frame", raw[1].RawFrame)
+	}
+}
+
+func TestGenerateStreamRawFrameSurvivesBufferReuse(t *testing.T) {
+	// A ping frame near the start, then enough subsequent SSE traffic to force
+	// bufio.Scanner's internal buffer to grow/shift/reuse memory, proving
+	// RawFrame was copied out of the scanner's buffer rather than aliasing it
+	// (see the fix in GenerateStream's default case).
+	events := [][2]string{
+		{"ping", `{"type":"ping","marker":"original-ping-content"}`},
+	}
+	// Pad with enough large content_block_delta events to exceed the
+	// scanner's growth thresholds (64KB initial, grows toward 1MiB).
+	filler := strings.Repeat("x", 4096)
+	for i := 0; i < 40; i++ {
+		events = append(events, [2]string{
+			"content_block_delta",
+			fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}`, filler),
+		})
+	}
+	events = append(events, [2]string{"message_stop", `{"type":"message_stop"}`})
+
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w, events)
+	})
+
+	var capturedRaw json.RawMessage
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
+		if len(ch.RawFrame) > 0 && capturedRaw == nil {
+			capturedRaw = ch.RawFrame // held WITHOUT copying by the test, on purpose
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if capturedRaw == nil {
+		t.Fatal("no raw frame captured")
+	}
+	// Checked only NOW, after the scanner has processed >150KB of subsequent
+	// data — if GenerateStream aliased the scanner's buffer instead of
+	// copying, this content would now be corrupted/different.
+	if !strings.Contains(string(capturedRaw), "original-ping-content") {
+		t.Errorf("captured RawFrame corrupted after subsequent scanning: %s", capturedRaw)
 	}
 }
 

@@ -233,8 +233,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 			// verbatim rather than silently dropped, so a client can still see
 			// them via AG-UI's RAW event. Note: "error" mid-stream events also
 			// land here today; surfacing those as a proper Go error instead is
-			// a separate, not-yet-scoped correctness improvement.
-			if err := yield(gantry.StreamChunk{RawFrame: json.RawMessage(payload), RawSource: "anthropic"}); err != nil {
+			// a separate, not-yet-scoped correctness improvement. payload is
+			// copied (not aliased) because it's a subslice of bufio.Scanner's
+			// internal buffer, which Scan() is free to overwrite/reuse on a
+			// later iteration — see https://pkg.go.dev/bufio#Scanner.Bytes.
+			if err := yield(gantry.StreamChunk{RawFrame: json.RawMessage(bytes.Clone(payload)), RawSource: "anthropic"}); err != nil {
 				return gantry.LLMResponse{}, err
 			}
 		}
