@@ -513,6 +513,37 @@ func TestMapperTranslatesRawEvent(t *testing.T) {
 	}
 }
 
+func TestMapperRawDoesNotCloseOpenTextOrReasoning(t *testing.T) {
+	// Raw is metadata-like (same precedent as usage/events_dropped CUSTOM
+	// events and activity events): it must not force-close an in-progress
+	// text or reasoning message.
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"})
+	_ = m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "hmm", RunID: "run-1"})
+	got := m.Map(gantry.Event{
+		Type: gantry.EventRaw, RunID: "run-1",
+		RawFrame: json.RawMessage(`{"type":"ping"}`), RawSource: "anthropic",
+	})
+	for _, ev := range got {
+		switch ev.(type) {
+		case TextMessageEnd, ReasoningMessageEnd, ReasoningEnd:
+			t.Fatalf("raw event closed an open text/reasoning message: %#v", got)
+		}
+	}
+}
+
+func TestMapperPlanStepChangedIgnoresNilPlanStep(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: nil})
+	if len(got) != 0 {
+		t.Fatalf("got %#v, want no events for a nil PlanStep", got)
+	}
+}
+
 func TestMapperActivitySnapshotThenDelta(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true

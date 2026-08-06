@@ -21,7 +21,7 @@ func TestEventJSONShape(t *testing.T) {
 		{"text_content", newTextMessageContent("m1", "hi"), `{"type":"TEXT_MESSAGE_CONTENT","messageId":"m1","delta":"hi"}`},
 		{"text_end", newTextMessageEnd("m1"), `{"type":"TEXT_MESSAGE_END","messageId":"m1"}`},
 		{"reasoning_start", newReasoningStart("r1"), `{"type":"REASONING_START","messageId":"r1"}`},
-		{"reasoning_msg_start", newReasoningMessageStart("r1"), `{"type":"REASONING_MESSAGE_START","messageId":"r1","role":"assistant"}`},
+		{"reasoning_msg_start", newReasoningMessageStart("r1"), `{"type":"REASONING_MESSAGE_START","messageId":"r1","role":"reasoning"}`},
 		{"reasoning_msg_content", newReasoningMessageContent("r1", "hmm"), `{"type":"REASONING_MESSAGE_CONTENT","messageId":"r1","delta":"hmm"}`},
 		{"reasoning_msg_end", newReasoningMessageEnd("r1"), `{"type":"REASONING_MESSAGE_END","messageId":"r1"}`},
 		{"reasoning_end", newReasoningEnd("r1"), `{"type":"REASONING_END","messageId":"r1"}`},
@@ -34,7 +34,7 @@ func TestEventJSONShape(t *testing.T) {
 		{
 			"activity_snapshot",
 			newActivitySnapshot("run-1:activity:s1", activityStepValue{ID: "s1", Description: "design", Status: "active"}),
-			`{"type":"ACTIVITY_SNAPSHOT","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","content":{"id":"s1","description":"design","status":"active"}}`,
+			`{"type":"ACTIVITY_SNAPSHOT","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","content":{"id":"s1","description":"design","status":"active","output":""}}`,
 		},
 		{
 			"activity_delta",

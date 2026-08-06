@@ -95,6 +95,15 @@ func WithHTTPClient(h *http.Client) Option {
 // budgetTokens <= 0 disables it (the default); Anthropic requires MaxTokens
 // (LLMRequest.MaxTokens, or the adapter's defaultMaxTokens fallback) to
 // exceed budgetTokens.
+//
+// Known limitation: toMessages does not round-trip thinking blocks/
+// signatures back to Anthropic on later turns. Anthropic requires the prior
+// turn's thinking block(s) to be replayed alongside any tool_use content
+// when extended thinking is enabled, so enabling this on an agent that also
+// uses tools will fail the request (HTTP 400) as soon as a tool-call turn is
+// followed by another turn. Round-tripping thinking blocks is a separate,
+// not-yet-implemented feature (see AG-UI's REASONING_ENCRYPTED_VALUE, also
+// not implemented). Safe today only for tool-free agents.
 func WithExtendedThinking(budgetTokens int) Option {
 	return func(c *Client) { c.thinkingBudget = budgetTokens }
 }

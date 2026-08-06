@@ -211,7 +211,7 @@ func (e ReasoningMessageStart) withIdentity(id identity) Event {
 	return e
 }
 func newReasoningMessageStart(msgID string) ReasoningMessageStart {
-	return ReasoningMessageStart{Type: typeReasoningMessageStart, MessageID: msgID, Role: "assistant"}
+	return ReasoningMessageStart{Type: typeReasoningMessageStart, MessageID: msgID, Role: "reasoning"}
 }
 
 type ReasoningMessageContent struct {
@@ -433,12 +433,16 @@ const activityStepType = "gantry.plan_step"
 
 // activityStepValue is the ACTIVITY_SNAPSHOT/ACTIVITY_DELTA content shape for
 // a gantry plan step — a small client-facing projection of gantry.PlanStep,
-// deliberately excluding its free-form Meta map.
+// deliberately excluding its free-form Meta map. Output has no omitempty:
+// the ACTIVITY_SNAPSHOT must always carry an "output" key (even "") so a
+// later ACTIVITY_DELTA can validly "replace" it per RFC 6902 — a "replace"
+// against a path absent from the last snapshot is undefined behavior for a
+// JSON Patch client.
 type activityStepValue struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	Status      string `json:"status"`
-	Output      string `json:"output,omitempty"`
+	Output      string `json:"output"`
 }
 
 // jsonPatchOp is one RFC 6902 JSON Patch operation, as required by
