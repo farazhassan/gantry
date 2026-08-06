@@ -512,3 +512,49 @@ func TestMapperTranslatesRawEvent(t *testing.T) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
 	}
 }
+
+func TestMapperActivitySnapshotThenDelta(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+
+	step := gantry.PlanStep{ID: "s1", Description: "design", Status: gantry.StepActive}
+	got1 := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: &step})
+	want1 := []Event{newActivitySnapshot("run-1:activity:s1", activityStepValue{ID: "s1", Description: "design", Status: "active"}).withIdentity(id)}
+	if !reflect.DeepEqual(got1, want1) {
+		t.Fatalf("snapshot: got  %#v\nwant %#v", got1, want1)
+	}
+
+	step.Status = gantry.StepDone
+	step.Output = "spec.md"
+	got2 := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: &step})
+	want2 := []Event{newActivityDelta("run-1:activity:s1", []jsonPatchOp{
+		{Op: "replace", Path: "/status", Value: "done"},
+		{Op: "replace", Path: "/output", Value: "spec.md"},
+	}).withIdentity(id)}
+	if !reflect.DeepEqual(got2, want2) {
+		t.Fatalf("delta: got  %#v\nwant %#v", got2, want2)
+	}
+
+	// No change since the last report: no event at all.
+	got3 := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: &step})
+	if len(got3) != 0 {
+		t.Fatalf("unchanged: got %#v, want no events", got3)
+	}
+}
+
+func TestMapperActivityDoesNotCloseOpenText(t *testing.T) {
+	// Activity is metadata-like (same precedent as usage/events_dropped
+	// CUSTOM events): it must not force-close an in-progress text message.
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"}) // opens run-1:msg:1
+	step := gantry.PlanStep{ID: "s1", Status: gantry.StepDone}
+	got := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: &step})
+	for _, ev := range got {
+		if _, ok := ev.(TextMessageEnd); ok {
+			t.Fatalf("activity event closed the open text message: %#v", got)
+		}
+	}
+}

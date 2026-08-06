@@ -106,6 +106,11 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	case gantry.EventRaw:
 		out = append(out, newRaw(ev.RawFrame, ev.RawSource).withIdentity(id))
 
+	case gantry.EventPlanStepChanged:
+		if ev.PlanStep != nil {
+			out = append(out, m.activityChange(ev.RunID, *ev.PlanStep, id)...)
+		}
+
 	case gantry.EventToolCall:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
@@ -257,4 +262,44 @@ func (m *Mapper) closeAllReasoning() []Event {
 		out = append(out, m.closeReasoning(runID, identity{RunID: runID})...)
 	}
 	return out
+}
+
+// activityChange translates a changed gantry.PlanStep into an AG-UI
+// ACTIVITY_SNAPSHOT (the first time this Mapper has reported this step for
+// this run) or an ACTIVITY_DELTA (a JSON Patch against the last snapshot
+// sent for that step) — the snapshot/delta split AG-UI defines for activity
+// messages. Returns nil if the step's tracked fields haven't actually
+// changed since the last report (e.g. a redundant emit).
+func (m *Mapper) activityChange(runID string, step gantry.PlanStep, id identity) []Event {
+	key := runID + ":" + step.ID
+	msgID := runID + ":activity:" + step.ID
+	cur := activityStepValue{ID: step.ID, Description: step.Description, Status: string(step.Status), Output: step.Output}
+
+	last, seen := m.lastActivity[key]
+	m.lastActivity[key] = cur
+	if !seen {
+		return []Event{newActivitySnapshot(msgID, cur).withIdentity(id)}
+	}
+	patch := diffActivity(last, cur)
+	if len(patch) == 0 {
+		return nil
+	}
+	return []Event{newActivityDelta(msgID, patch).withIdentity(id)}
+}
+
+// diffActivity returns the RFC 6902 JSON Patch operations turning prev into
+// cur, one "replace" per changed field, in a fixed status/description/output
+// order. Nil if prev == cur.
+func diffActivity(prev, cur activityStepValue) []jsonPatchOp {
+	var ops []jsonPatchOp
+	if prev.Status != cur.Status {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/status", Value: cur.Status})
+	}
+	if prev.Description != cur.Description {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/description", Value: cur.Description})
+	}
+	if prev.Output != cur.Output {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/output", Value: cur.Output})
+	}
+	return ops
 }
