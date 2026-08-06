@@ -139,10 +139,14 @@ func emitPlanStepChanges(ctx context.Context, s *gantry.State, results []opResul
 		if step == nil {
 			continue
 		}
+		// Copy by value: step aliases live plan state (findStep returns
+		// &plan.Steps[i]), and a buffered/async sink may not read PlanStep
+		// until after a later update_plan call has mutated it further.
+		snapshot := *step
 		if err := gantry.Emit(ctx, gantry.Event{
 			Type:      gantry.EventPlanStepChanged,
 			Iteration: s.Iteration,
-			PlanStep:  step,
+			PlanStep:  &snapshot,
 		}); err != nil {
 			return err
 		}
