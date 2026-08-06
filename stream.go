@@ -2,16 +2,22 @@ package gantry
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 )
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
 // carries a text delta, and/or the terminal StopReason + Usage on the final
-// chunk. Fields are omitempty so chunks serialize compactly.
+// chunk, and/or a reasoning delta (provider "extended thinking" content) or a
+// raw provider frame gantry does not otherwise model. Fields are omitempty so
+// chunks serialize compactly.
 type StreamChunk struct {
-	TextDelta  string     `json:"text_delta,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	Usage      *Usage     `json:"usage,omitempty"`
+	TextDelta      string          `json:"text_delta,omitempty"`
+	ReasoningDelta string          `json:"reasoning_delta,omitempty"`
+	RawFrame       json.RawMessage `json:"raw_frame,omitempty"`
+	RawSource      string          `json:"raw_source,omitempty"`
+	StopReason     StopReason      `json:"stop_reason,omitempty"`
+	Usage          *Usage          `json:"usage,omitempty"`
 }
 
 // StreamingLLMClient is an OPTIONAL extension of LLMClient. Adapters that can
@@ -32,12 +38,14 @@ type StreamingLLMClient interface {
 type EventType string
 
 const (
-	EventPhaseStart EventType = "phase_start"
-	EventPhaseEnd   EventType = "phase_end"
-	EventTextDelta  EventType = "text_delta"
-	EventToolCall   EventType = "tool_call"
-	EventToolResult EventType = "tool_result"
-	EventDone       EventType = "done"
+	EventPhaseStart     EventType = "phase_start"
+	EventPhaseEnd       EventType = "phase_end"
+	EventTextDelta      EventType = "text_delta"
+	EventReasoningDelta EventType = "reasoning_delta"
+	EventRaw            EventType = "raw"
+	EventToolCall       EventType = "tool_call"
+	EventToolResult     EventType = "tool_result"
+	EventDone           EventType = "done"
 )
 
 // Event is a single whole-run observation emitted by RunStream. It is
@@ -54,6 +62,17 @@ type Event struct {
 	Iteration   int         `json:"iteration"`
 	Phase       Phase       `json:"phase,omitempty"`
 	TextDelta   string      `json:"text_delta,omitempty"`
+
+	// ReasoningDelta carries provider "extended thinking" content for
+	// EventReasoningDelta.
+	ReasoningDelta string `json:"reasoning_delta,omitempty"`
+
+	// RawFrame/RawSource carry a provider frame gantry does not otherwise
+	// model, for EventRaw. RawSource identifies the provider (e.g.
+	// "anthropic").
+	RawFrame  json.RawMessage `json:"raw_frame,omitempty"`
+	RawSource string          `json:"raw_source,omitempty"`
+
 	ToolCall    *ToolCall   `json:"tool_call,omitempty"`
 	ToolResult  *ToolResult `json:"tool_result,omitempty"`
 	DoneReason  DoneReason  `json:"done_reason,omitempty"`
