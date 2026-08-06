@@ -282,6 +282,72 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 	}
 }
 
+// TestMapperInterleavedRunsBracketReasoningIndependently mirrors
+// TestMapperInterleavedRunsBracketTextIndependently, for reasoning messages:
+// openReasoning is keyed by gantry RunID exactly like openMsg, so the same
+// per-run independence guarantee must hold for reasoning as it does for text.
+func TestMapperInterleavedRunsBracketReasoningIndependently(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	// Parent opens a reasoning message...
+	pStart := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "parent-thinking", RunID: "run-parent", Agent: "orchestrator"})
+	if len(pStart) != 3 { // REASONING_START + REASONING_MESSAGE_START + CONTENT
+		t.Fatalf("parent start: got %d events, want 3: %#v", len(pStart), pStart)
+	}
+	// ...then, before the parent's message closes, the child opens its OWN.
+	cStart := m.Map(gantry.Event{
+		Type: gantry.EventReasoningDelta, ReasoningDelta: "child-thinking",
+		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	if len(cStart) != 3 {
+		t.Fatalf("child start: got %d events, want 3: %#v", len(cStart), cStart)
+	}
+	childMsgID := cStart[0].(ReasoningStart).MessageID
+	parentMsgID := pStart[0].(ReasoningStart).MessageID
+	if childMsgID == parentMsgID {
+		t.Fatalf("child and parent reasoning messages share messageId %q, want distinct ids", childMsgID)
+	}
+
+	// More parent content must append to the PARENT's still-open message,
+	// not the child's.
+	pMore := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "parent-more", RunID: "run-parent", Agent: "orchestrator"})
+	if len(pMore) != 1 {
+		t.Fatalf("parent continuation: got %d events, want 1 (no spurious START): %#v", len(pMore), pMore)
+	}
+	if got := pMore[0].(ReasoningMessageContent).MessageID; got != parentMsgID {
+		t.Errorf("parent continuation messageId = %q, want %q", got, parentMsgID)
+	}
+
+	// Closing the child does not touch the parent's still-open reasoning message.
+	cDone := m.Map(gantry.Event{
+		Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls,
+		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	var sawChildReasoningEnd bool
+	for _, ev := range cDone {
+		if end, ok := ev.(ReasoningEnd); ok && end.MessageID == childMsgID {
+			sawChildReasoningEnd = true
+		}
+	}
+	if !sawChildReasoningEnd {
+		t.Errorf("child done: expected REASONING_END for %q, got %#v", childMsgID, cDone)
+	}
+
+	// The parent's reasoning message is STILL open — closing it independently
+	// must still work and reference the parent's own messageId.
+	pDone := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseLLMCall, RunID: "run-parent", Agent: "orchestrator"})
+	var sawParentReasoningEnd bool
+	for _, ev := range pDone {
+		if end, ok := ev.(ReasoningEnd); ok && end.MessageID == parentMsgID {
+			sawParentReasoningEnd = true
+		}
+	}
+	if !sawParentReasoningEnd {
+		t.Errorf("parent phase end: expected REASONING_END for %q, got %#v", parentMsgID, pDone)
+	}
+}
+
 func TestMapperReasoningMessageLifecycle(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	id := identity{RunID: "run-1"}

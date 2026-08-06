@@ -49,8 +49,11 @@ func NewMapper(threadID, runID string) *Mapper {
 // RUN_STARTED lazily before the first translated event, attaches Gantry
 // identity (RunID/Agent/ParentToolCallID/...) to every translated event
 // except the three lifecycle events, and closes any of ev.RunID's open text
-// messages (with TEXT_MESSAGE_END) before emitting a non-text event for
-// that run.
+// or reasoning messages (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
+// REASONING_END) before emitting a non-text, non-reasoning event for that
+// run. Text and reasoning messages are mutually exclusive per run: opening
+// one closes the other's still-open message first, so a client never sees
+// interleaved content within a single message.
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
