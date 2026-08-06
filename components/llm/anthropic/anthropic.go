@@ -227,6 +227,16 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 			}
 		case "message_stop":
 			// terminal; loop will end at EOF
+		default:
+			// Frame types this adapter doesn't otherwise model (e.g. "ping",
+			// "content_block_stop", or any future/unknown type) — forwarded
+			// verbatim rather than silently dropped, so a client can still see
+			// them via AG-UI's RAW event. Note: "error" mid-stream events also
+			// land here today; surfacing those as a proper Go error instead is
+			// a separate, not-yet-scoped correctness improvement.
+			if err := yield(gantry.StreamChunk{RawFrame: json.RawMessage(payload), RawSource: "anthropic"}); err != nil {
+				return gantry.LLMResponse{}, err
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {

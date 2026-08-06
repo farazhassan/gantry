@@ -214,6 +214,44 @@ func TestGenerateStreamPropagatesContextCancellation(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamYieldsRawFrameForUnhandledEventTypes(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w, [][2]string{
+			{"ping", `{"type":"ping"}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		})
+	})
+
+	var raw []gantry.StreamChunk
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
+		if len(ch.RawFrame) > 0 {
+			raw = append(raw, ch)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("raw frames = %d, want 2 (ping + content_block_stop): %+v", len(raw), raw)
+	}
+	for _, ch := range raw {
+		if ch.RawSource != "anthropic" {
+			t.Errorf("RawSource = %q, want %q", ch.RawSource, "anthropic")
+		}
+	}
+	if !strings.Contains(string(raw[0].RawFrame), `"type":"ping"`) {
+		t.Errorf("raw[0] = %s, want the ping frame", raw[0].RawFrame)
+	}
+	if !strings.Contains(string(raw[1].RawFrame), `"content_block_stop"`) {
+		t.Errorf("raw[1] = %s, want the content_block_stop frame", raw[1].RawFrame)
+	}
+}
+
 func TestGenerateStreamSendsThinkingConfigWhenEnabled(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
