@@ -172,7 +172,10 @@ func TestRunStreamChunkWithMultipleFieldsEmitsMultipleEvents(t *testing.T) {
 		t.Fatalf("RunStream: %v", err)
 	}
 	want := []gantry.EventType{gantry.EventTextDelta, gantry.EventReasoningDelta}
-	if len(types) != len(want) || types[0] != want[0] || types[1] != want[1] {
+	if len(types) != len(want) {
+		t.Fatalf("event types = %v, want %v (one chunk with two populated fields must emit two events, text before reasoning)", types, want)
+	}
+	if types[0] != want[0] || types[1] != want[1] {
 		t.Errorf("event types = %v, want %v (one chunk with two populated fields must emit two events, text before reasoning)", types, want)
 	}
 }

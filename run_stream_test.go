@@ -67,6 +67,9 @@ func TestRunStreamUsageAccumulatesAndSnapshotsAreIndependent(t *testing.T) {
 
 	// Usage is zero until the first PhaseLLMCall completes, then accumulates
 	// across both LLM calls — 10+20 input, 5+8 output, 0.001+0.002 cost.
+	if len(usages) < 2 {
+		t.Fatalf("got %d phase_end usage snapshots, want at least 2", len(usages))
+	}
 	want := gantry.Usage{InputTokens: 30, OutputTokens: 13, Cost: 0.003}
 	last := usages[len(usages)-1]
 	if last != want {

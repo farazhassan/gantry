@@ -48,12 +48,18 @@ func NewMapper(threadID, runID string) *Mapper {
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
 // RUN_STARTED lazily before the first translated event, attaches Gantry
 // identity (RunID/Agent/ParentToolCallID/...) to every translated event
-// except the three lifecycle events, and closes any of ev.RunID's open text
-// or reasoning messages (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
-// REASONING_END) before emitting a non-text, non-reasoning event for that
-// run. Text and reasoning messages are mutually exclusive per run: opening
-// one closes the other's still-open message first, so a client never sees
-// interleaved content within a single message.
+// except the three lifecycle events, and unconditionally prepends any
+// metadata-like CUSTOM events (events_dropped, usage) the event carries —
+// these, like RAW and ACTIVITY_*, are allowed to interleave inside an open
+// text/reasoning message; AG-UI's message framing is keyed by messageId, so
+// an unrelated CUSTOM/RAW/ACTIVITY event between a message's Start and End
+// is valid. Only EventTextDelta and EventReasoningDelta close the OTHER
+// kind's still-open message (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
+// REASONING_END) before opening their own — text and reasoning are mutually
+// exclusive per run, so a client never sees interleaved content within a
+// single message — and EventToolCall/EventToolResult/EventPhaseStart/
+// EventPhaseEnd/EventDone close both, since those events represent gantry
+// moving past whatever the model was saying/thinking.
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
