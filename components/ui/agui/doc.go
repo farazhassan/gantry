@@ -14,6 +14,20 @@
 // state and tools are ignored. Transport is SSE over HTTP POST. The package
 // depends only on the Go standard library and gantry itself.
 //
+// Event coverage: RUN_*, STEP_*, TEXT_MESSAGE_*, TOOL_CALL_*, CUSTOM,
+// REASONING_* (Anthropic extended thinking only), RAW (provider frames
+// gantry doesn't otherwise model), and ACTIVITY_SNAPSHOT/ACTIVITY_DELTA
+// (plan-step progress, via components/planner's update_plan interception).
+// Not implemented: STATE_SNAPSHOT/STATE_DELTA/MESSAGES_SNAPSHOT (gantry v1
+// tracks no synchronizable agent state — client-supplied state and tools are
+// accepted in the request body but ignored, as above), TEXT_MESSAGE_CHUNK/
+// TOOL_CALL_CHUNK/REASONING_MESSAGE_CHUNK (redundant alternate encodings of
+// the explicit Start/Content/End sequence this package always emits),
+// REASONING_ENCRYPTED_VALUE (round-tripping Anthropic's signed thinking
+// blocks across turns is a separate correctness feature), and REASONING_*
+// for non-Anthropic providers (OpenAI/Ollama/OpenRouter each need their own
+// wire-format decoding, not yet done).
+//
 // Typical use:
 //
 //	agent, err := gantry.NewAgent(gantry.WithLLM(llm))

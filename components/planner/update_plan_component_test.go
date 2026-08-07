@@ -236,6 +236,42 @@ func assertInterceptedAlongsideEcho(t *testing.T, out *gantry.State) {
 	}
 }
 
+func TestUpdatePlanInterceptionEmitsPlanStepChanged(t *testing.T) {
+	llm := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{updatePlanCall("c1")}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(llm))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(planner.UpdatePlan()); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	var changed []gantry.PlanStep
+	_, err = a.ResumeStream(context.Background(), seedPlanState("work the plan"), func(ev gantry.Event) error {
+		if ev.Type == gantry.EventPlanStepChanged && ev.PlanStep != nil {
+			changed = append(changed, *ev.PlanStep)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ResumeStream: %v", err)
+	}
+	// updatePlanCall applies set_status(s1, done) and add_step("write docs") —
+	// both are successful ops with a StepID, so both must emit.
+	if len(changed) != 2 {
+		t.Fatalf("changed = %+v, want 2 EventPlanStepChanged events", changed)
+	}
+	if changed[0].ID != "s1" || changed[0].Status != gantry.StepDone {
+		t.Errorf("changed[0] = %+v, want s1/done", changed[0])
+	}
+	if changed[1].Description != "write docs" || changed[1].Status != gantry.StepPending {
+		t.Errorf("changed[1] = %+v, want the newly added step", changed[1])
+	}
+}
+
 func TestUpdatePlanInstallTwiceErrors(t *testing.T) {
 	llm := eval.NewMockLLMClient()
 	a, _ := gantry.NewAgent(gantry.WithLLM(llm))

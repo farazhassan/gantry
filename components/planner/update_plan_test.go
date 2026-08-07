@@ -123,21 +123,21 @@ func TestMintStepIDSkipsCollisions(t *testing.T) {
 }
 
 func TestRunUpdatePlanEnvelopeErrors(t *testing.T) {
-	if content, isErr := runUpdatePlan(nil, json.RawMessage(`{"ops":[{"op":"add_step","description":"x"}]}`)); !isErr || !strings.Contains(content, "no plan") {
+	if content, isErr, _ := runUpdatePlan(nil, json.RawMessage(`{"ops":[{"op":"add_step","description":"x"}]}`)); !isErr || !strings.Contains(content, "no plan") {
 		t.Errorf("nil plan: (%q, %v), want an error result", content, isErr)
 	}
 	p := ledgerPlan()
-	if content, isErr := runUpdatePlan(p, json.RawMessage(`not json`)); !isErr || !strings.Contains(content, "invalid input") {
+	if content, isErr, _ := runUpdatePlan(p, json.RawMessage(`not json`)); !isErr || !strings.Contains(content, "invalid input") {
 		t.Errorf("malformed input: (%q, %v), want an error result", content, isErr)
 	}
-	if content, isErr := runUpdatePlan(p, json.RawMessage(`{"ops":[]}`)); !isErr || !strings.Contains(content, "non-empty") {
+	if content, isErr, _ := runUpdatePlan(p, json.RawMessage(`{"ops":[]}`)); !isErr || !strings.Contains(content, "non-empty") {
 		t.Errorf("empty ops: (%q, %v), want an error result", content, isErr)
 	}
 }
 
 func TestRunUpdatePlanReportsPerOpResults(t *testing.T) {
 	p := ledgerPlan()
-	content, isErr := runUpdatePlan(p, json.RawMessage(
+	content, isErr, _ := runUpdatePlan(p, json.RawMessage(
 		`{"ops":[{"op":"set_status","step_id":"s1","status":"done"},{"op":"set_status","step_id":"ghost","status":"done"}]}`))
 	if isErr {
 		t.Fatalf("per-op failures must not be an envelope error: %q", content)
@@ -153,5 +153,20 @@ func TestRunUpdatePlanReportsPerOpResults(t *testing.T) {
 	}
 	if p.Steps[0].Status != gantry.StepDone {
 		t.Errorf("s1 not mutated: %+v", p.Steps[0])
+	}
+}
+
+func TestRunUpdatePlanReturnsChangedStepResults(t *testing.T) {
+	p := ledgerPlan()
+	_, _, results := runUpdatePlan(p, json.RawMessage(
+		`{"ops":[{"op":"set_status","step_id":"s1","status":"done"},{"op":"set_status","step_id":"ghost","status":"done"}]}`))
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want 2", results)
+	}
+	if !results[0].OK || results[0].StepID != "s1" {
+		t.Errorf("results[0] = %+v, want ok for s1", results[0])
+	}
+	if results[1].OK || results[1].StepID != "" {
+		t.Errorf("results[1] = %+v, want a failed result with no StepID", results[1])
 	}
 }

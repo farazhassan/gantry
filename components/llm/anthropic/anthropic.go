@@ -27,10 +27,11 @@ const (
 // endpoint. It is safe for concurrent use: it holds no per-call state and the
 // underlying *http.Client is concurrency-safe.
 type Client struct {
-	model   string
-	baseURL string
-	apiKey  string
-	httpc   *http.Client
+	model          string
+	baseURL        string
+	apiKey         string
+	thinkingBudget int
+	httpc          *http.Client
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
@@ -88,6 +89,25 @@ func WithHTTPClient(h *http.Client) Option {
 	}
 }
 
+// WithExtendedThinking enables Claude's extended thinking, giving the model
+// up to budgetTokens tokens to reason before answering — surfaced to gantry
+// as EventReasoningDelta / StreamChunk.ReasoningDelta (see GenerateStream).
+// budgetTokens <= 0 disables it (the default); Anthropic requires MaxTokens
+// (LLMRequest.MaxTokens, or the adapter's defaultMaxTokens fallback) to
+// exceed budgetTokens.
+//
+// Known limitation: toMessages does not round-trip thinking blocks/
+// signatures back to Anthropic on later turns. Anthropic requires the prior
+// turn's thinking block(s) to be replayed alongside any tool_use content
+// when extended thinking is enabled, so enabling this on an agent that also
+// uses tools will fail the request (HTTP 400) as soon as a tool-call turn is
+// followed by another turn. Round-tripping thinking blocks is a separate,
+// not-yet-implemented feature (see AG-UI's REASONING_ENCRYPTED_VALUE, also
+// not implemented). Safe today only for tool-free agents.
+func WithExtendedThinking(budgetTokens int) Option {
+	return func(c *Client) { c.thinkingBudget = budgetTokens }
+}
+
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
 func (c *Client) BaseURL() string { return c.baseURL }
 
@@ -136,6 +156,7 @@ type streamBlock struct {
 type streamDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
+	Thinking    string `json:"thinking"`
 	PartialJSON string `json:"partial_json"`
 	StopReason  string `json:"stop_reason"`
 }
@@ -197,6 +218,12 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 						return gantry.LLMResponse{}, err
 					}
 				}
+			case "thinking_delta":
+				if ev.Delta.Thinking != "" {
+					if err := yield(gantry.StreamChunk{ReasoningDelta: ev.Delta.Thinking}); err != nil {
+						return gantry.LLMResponse{}, err
+					}
+				}
 			case "input_json_delta":
 				tools.appendArgs(ev.Index, ev.Delta.PartialJSON)
 			}
@@ -209,6 +236,19 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 			}
 		case "message_stop":
 			// terminal; loop will end at EOF
+		default:
+			// Frame types this adapter doesn't otherwise model (e.g. "ping",
+			// "content_block_stop", or any future/unknown type) — forwarded
+			// verbatim rather than silently dropped, so a client can still see
+			// them via AG-UI's RAW event. Note: "error" mid-stream events also
+			// land here today; surfacing those as a proper Go error instead is
+			// a separate, not-yet-scoped correctness improvement. payload is
+			// copied (not aliased) because it's a subslice of bufio.Scanner's
+			// internal buffer, which Scan() is free to overwrite/reuse on a
+			// later iteration — see https://pkg.go.dev/bufio#Scanner.Bytes.
+			if err := yield(gantry.StreamChunk{RawFrame: json.RawMessage(bytes.Clone(payload)), RawSource: "anthropic"}); err != nil {
+				return gantry.LLMResponse{}, err
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -271,7 +311,7 @@ func (a *blockAccumulator) blocks() []toolBlock {
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, stream))
+	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.thinkingBudget))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: encode request: %w", err)
 	}

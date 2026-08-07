@@ -12,14 +12,25 @@ import (
 // client code in anthropic.go stays focused on transport.
 
 type chatRequest struct {
-	Model       string       `json:"model"`
-	System      string       `json:"system,omitempty"`
-	Messages    []reqMessage `json:"messages"`
-	Tools       []reqTool    `json:"tools,omitempty"`
-	ToolChoice  *toolChoice  `json:"tool_choice,omitempty"`
-	MaxTokens   int          `json:"max_tokens"`
-	Temperature float64      `json:"temperature,omitempty"`
-	Stream      bool         `json:"stream"`
+	Model       string          `json:"model"`
+	System      string          `json:"system,omitempty"`
+	Messages    []reqMessage    `json:"messages"`
+	Tools       []reqTool       `json:"tools,omitempty"`
+	ToolChoice  *toolChoice     `json:"tool_choice,omitempty"`
+	MaxTokens   int             `json:"max_tokens"`
+	Temperature float64         `json:"temperature,omitempty"`
+	Stream      bool            `json:"stream"`
+	Thinking    *thinkingConfig `json:"thinking,omitempty"`
+}
+
+// thinkingConfig enables Claude's extended thinking (see WithExtendedThinking
+// in anthropic.go). Anthropic requires MaxTokens > BudgetTokens, and rejects a
+// non-default Temperature while thinking is enabled — both are enforced
+// provider-side (checkStatus surfaces the resulting HTTP 400), not fixed up
+// here, matching this adapter's existing "mechanical mapping" style.
+type thinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 // toolChoice mirrors Anthropic's tool_choice parameter.
@@ -86,13 +97,14 @@ const defaultMaxTokens = 4096
 
 // toChatRequest maps a gantry request to the Anthropic wire format. System is
 // a top-level field (not a message), and tool results become user-role
-// tool_result blocks.
-func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
+// tool_result blocks. thinkingBudget > 0 enables extended thinking with that
+// token budget; 0 (the default) omits the thinking field entirely.
+func toChatRequest(model string, req gantry.LLMRequest, stream bool, thinkingBudget int) chatRequest {
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
 	}
-	return chatRequest{
+	cr := chatRequest{
 		Model:       model,
 		System:      req.System,
 		Messages:    toMessages(req.Messages),
@@ -102,6 +114,10 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 		Temperature: req.Temperature,
 		Stream:      stream,
 	}
+	if thinkingBudget > 0 {
+		cr.Thinking = &thinkingConfig{Type: "enabled", BudgetTokens: thinkingBudget}
+	}
+	return cr
 }
 
 // toWireToolChoice maps the gantry tool choice to Anthropic's tool_choice

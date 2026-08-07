@@ -2,16 +2,22 @@ package gantry
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 )
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
 // carries a text delta, and/or the terminal StopReason + Usage on the final
-// chunk. Fields are omitempty so chunks serialize compactly.
+// chunk, and/or a reasoning delta (provider "extended thinking" content) or a
+// raw provider frame gantry does not otherwise model. Fields are omitempty so
+// chunks serialize compactly.
 type StreamChunk struct {
-	TextDelta  string     `json:"text_delta,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	Usage      *Usage     `json:"usage,omitempty"`
+	TextDelta      string          `json:"text_delta,omitempty"`
+	ReasoningDelta string          `json:"reasoning_delta,omitempty"`
+	RawFrame       json.RawMessage `json:"raw_frame,omitempty"`
+	RawSource      string          `json:"raw_source,omitempty"`
+	StopReason     StopReason      `json:"stop_reason,omitempty"`
+	Usage          *Usage          `json:"usage,omitempty"`
 }
 
 // StreamingLLMClient is an OPTIONAL extension of LLMClient. Adapters that can
@@ -32,12 +38,15 @@ type StreamingLLMClient interface {
 type EventType string
 
 const (
-	EventPhaseStart EventType = "phase_start"
-	EventPhaseEnd   EventType = "phase_end"
-	EventTextDelta  EventType = "text_delta"
-	EventToolCall   EventType = "tool_call"
-	EventToolResult EventType = "tool_result"
-	EventDone       EventType = "done"
+	EventPhaseStart      EventType = "phase_start"
+	EventPhaseEnd        EventType = "phase_end"
+	EventTextDelta       EventType = "text_delta"
+	EventReasoningDelta  EventType = "reasoning_delta"
+	EventRaw             EventType = "raw"
+	EventToolCall        EventType = "tool_call"
+	EventToolResult      EventType = "tool_result"
+	EventPlanStepChanged EventType = "plan_step_changed"
+	EventDone            EventType = "done"
 )
 
 // Event is a single whole-run observation emitted by RunStream. It is
@@ -50,14 +59,38 @@ const (
 // Agent, ParentRunID, ParentToolCallID) are stamped by the run loop on every
 // emitted event and are empty when unknown.
 type Event struct {
-	Type        EventType   `json:"type"`
-	Iteration   int         `json:"iteration"`
-	Phase       Phase       `json:"phase,omitempty"`
-	TextDelta   string      `json:"text_delta,omitempty"`
-	ToolCall    *ToolCall   `json:"tool_call,omitempty"`
-	ToolResult  *ToolResult `json:"tool_result,omitempty"`
-	DoneReason  DoneReason  `json:"done_reason,omitempty"`
-	FinalOutput string      `json:"final_output,omitempty"`
+	Type      EventType `json:"type"`
+	Iteration int       `json:"iteration"`
+	Phase     Phase     `json:"phase,omitempty"`
+	TextDelta string    `json:"text_delta,omitempty"`
+
+	// ReasoningDelta carries provider "extended thinking" content for
+	// EventReasoningDelta.
+	ReasoningDelta string `json:"reasoning_delta,omitempty"`
+
+	// RawFrame/RawSource carry a provider frame gantry does not otherwise
+	// model, for EventRaw. RawSource identifies the provider (e.g.
+	// "anthropic"). RawFrame's slice type means Event is no longer ==
+	// comparable; use reflect.DeepEqual where a whole Event must be compared.
+	RawFrame  json.RawMessage `json:"raw_frame,omitempty"`
+	RawSource string          `json:"raw_source,omitempty"`
+
+	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
+	ToolResult *ToolResult `json:"tool_result,omitempty"`
+
+	// PlanStep carries the full current state of a gantry.PlanStep that just
+	// changed, for EventPlanStepChanged. Emitted by components/planner's
+	// update_plan interception (see components/planner/update_plan_component.go).
+	PlanStep *PlanStep `json:"plan_step,omitempty"`
+
+	DoneReason  DoneReason `json:"done_reason,omitempty"`
+	FinalOutput string     `json:"final_output,omitempty"`
+
+	// Usage is a snapshot of the run's cumulative token/cost accounting as of
+	// this event (see State.Usage), attached to phase_end and done events. A
+	// nil Usage means the snapshot wasn't taken for this event, not that
+	// usage is zero — check the phase_end/done events for the latest value.
+	Usage *Usage `json:"usage,omitempty"`
 
 	// Identity: which run, session, task, and agent produced this event.
 	// RunID is minted per run; SessionID/TaskID come from State.Meta
@@ -76,7 +109,7 @@ type Event struct {
 
 	// Dropped counts events discarded by a buffering wrapper (see
 	// NewBufferedSink) since the previous delivered event; zero on direct,
-	// unbuffered streams. A plain int so Event stays comparable.
+	// unbuffered streams.
 	Dropped int `json:"dropped,omitempty"`
 }
 
@@ -132,6 +165,16 @@ func emit(ctx context.Context, ev Event) error {
 		ev.ParentToolCallID = id.parentToolCallID
 	}
 	return s(ev)
+}
+
+// Emit sends ev to the ambient EventSink in ctx (if any), stamping the run's
+// identity onto it first — the same chokepoint the core run loop uses
+// internally (see emit). Exported so components outside the gantry package
+// (e.g. components/planner's update_plan interception) can emit
+// application-level events without reimplementing identity stamping. A no-op
+// when no sink is active.
+func Emit(ctx context.Context, ev Event) error {
+	return emit(ctx, ev)
 }
 
 // NewBufferedSink wraps sink so event production is decoupled from consumption:

@@ -22,7 +22,12 @@ type Mapper struct {
 	started  bool // RUN_STARTED emitted?
 
 	openMsg map[string]string // gantry RunID -> open messageId, if any
-	msgSeq  map[string]int    // gantry RunID -> monotonic counter for that run
+	msgSeq  map[string]int    // gantry RunID -> monotonic counter for that run, shared across text and reasoning messages
+
+	openReasoning map[string]string // gantry RunID -> open reasoning messageId, if any
+
+	lastUsage    map[string]gantry.Usage      // gantry RunID -> last usage snapshot emitted as gantry.usage, if any
+	lastActivity map[string]activityStepValue // "runID:stepID" -> last activity snapshot/delta content emitted for that step
 }
 
 // NewMapper returns a Mapper for a single AG-UI thread identified by
@@ -30,19 +35,31 @@ type Mapper struct {
 // Gantry-level Event.RunID).
 func NewMapper(threadID, runID string) *Mapper {
 	return &Mapper{
-		threadID: threadID,
-		runID:    runID,
-		openMsg:  map[string]string{},
-		msgSeq:   map[string]int{},
+		threadID:      threadID,
+		runID:         runID,
+		openMsg:       map[string]string{},
+		msgSeq:        map[string]int{},
+		openReasoning: map[string]string{},
+		lastUsage:     map[string]gantry.Usage{},
+		lastActivity:  map[string]activityStepValue{},
 	}
 }
 
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
 // RUN_STARTED lazily before the first translated event, attaches Gantry
 // identity (RunID/Agent/ParentToolCallID/...) to every translated event
-// except the three lifecycle events, and closes any of ev.RunID's open text
-// messages (with TEXT_MESSAGE_END) before emitting a non-text event for
-// that run.
+// except the three lifecycle events, and unconditionally prepends any
+// metadata-like CUSTOM events (events_dropped, usage) the event carries —
+// these, like RAW and ACTIVITY_*, are allowed to interleave inside an open
+// text/reasoning message; AG-UI's message framing is keyed by messageId, so
+// an unrelated CUSTOM/RAW/ACTIVITY event between a message's Start and End
+// is valid. Only EventTextDelta and EventReasoningDelta close the OTHER
+// kind's still-open message (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
+// REASONING_END) before opening their own — text and reasoning are mutually
+// exclusive per run, so a client never sees interleaved content within a
+// single message — and EventToolCall/EventToolResult/EventPhaseStart/
+// EventPhaseEnd/EventDone close both, since those events represent gantry
+// moving past whatever the model was saying/thinking.
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
@@ -61,8 +78,14 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		ParentToolCallID: ev.ParentToolCallID,
 	}
 
+	if ev.Dropped > 0 {
+		out = append(out, newEventsDropped(ev.Dropped, id))
+	}
+	out = append(out, m.usageDelta(ev, id)...)
+
 	switch ev.Type {
 	case gantry.EventTextDelta:
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		open, hasOpen := m.openMsg[ev.RunID]
 		if !hasOpen {
 			m.msgSeq[ev.RunID]++
@@ -72,8 +95,31 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		}
 		out = append(out, newTextMessageContent(open, ev.TextDelta).withIdentity(id))
 
+	case gantry.EventReasoningDelta:
+		out = append(out, m.closeText(ev.RunID, id)...)
+		open, hasOpen := m.openReasoning[ev.RunID]
+		if !hasOpen {
+			m.msgSeq[ev.RunID]++
+			open = fmt.Sprintf("%s:reasoning:%d", ev.RunID, m.msgSeq[ev.RunID])
+			m.openReasoning[ev.RunID] = open
+			out = append(out,
+				newReasoningStart(open).withIdentity(id),
+				newReasoningMessageStart(open).withIdentity(id),
+			)
+		}
+		out = append(out, newReasoningMessageContent(open, ev.ReasoningDelta).withIdentity(id))
+
+	case gantry.EventRaw:
+		out = append(out, newRaw(ev.RawFrame, ev.RawSource).withIdentity(id))
+
+	case gantry.EventPlanStepChanged:
+		if ev.PlanStep != nil {
+			out = append(out, m.activityChange(ev.RunID, *ev.PlanStep, id)...)
+		}
+
 	case gantry.EventToolCall:
 		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if tc := ev.ToolCall; tc != nil {
 			out = append(out,
 				newToolCallStart(tc.ID, tc.Name).withIdentity(id),
@@ -84,21 +130,25 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 
 	case gantry.EventToolResult:
 		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if tr := ev.ToolResult; tr != nil {
 			msgID := fmt.Sprintf("%s:toolmsg:%s", ev.RunID, tr.CallID)
-			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content).withIdentity(id))
+			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content, tr.IsError).withIdentity(id))
 		}
 
 	case gantry.EventPhaseStart:
 		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		out = append(out, newStepStarted(stepName(ev)).withIdentity(id))
 
 	case gantry.EventPhaseEnd:
 		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		out = append(out, newStepFinished(stepName(ev)).withIdentity(id))
 
 	case gantry.EventDone:
 		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
 			out = append(out, newRunFinished(m.threadID, m.runID))
 		} else {
@@ -107,6 +157,23 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	}
 
 	return out
+}
+
+// usageDelta returns a gantry.usage CUSTOM event for ev.RunID if ev carries a
+// Usage snapshot that differs from the last one emitted for that run,
+// updating the tracked value as a side effect; otherwise it returns nil.
+// This keeps phase_end/done events — which every gantry run emits, whether
+// or not an LLM call actually ran that phase — from spamming a usage event
+// on the wire each time, since most phases leave usage unchanged.
+func (m *Mapper) usageDelta(ev gantry.Event, id identity) []Event {
+	if ev.Usage == nil {
+		return nil
+	}
+	if last, ok := m.lastUsage[ev.RunID]; ok && last == *ev.Usage {
+		return nil
+	}
+	m.lastUsage[ev.RunID] = *ev.Usage
+	return []Event{newUsage(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.Cost, id)}
 }
 
 // startFrame returns a RUN_STARTED event the first time it is called, marking
@@ -154,6 +221,21 @@ func (m *Mapper) closeText(runID string, id identity) []Event {
 	return []Event{newTextMessageEnd(open).withIdentity(id)}
 }
 
+// closeReasoning emits REASONING_MESSAGE_END + REASONING_END for runID's open
+// reasoning message, if any, and clears that run's open-reasoning state.
+// Returns nil when no reasoning message is open for runID. Mirrors closeText.
+func (m *Mapper) closeReasoning(runID string, id identity) []Event {
+	open, ok := m.openReasoning[runID]
+	if !ok {
+		return nil
+	}
+	delete(m.openReasoning, runID)
+	return []Event{
+		newReasoningMessageEnd(open).withIdentity(id),
+		newReasoningEnd(open).withIdentity(id),
+	}
+}
+
 // closeAllText emits TEXT_MESSAGE_END for every currently-open text message,
 // across every Gantry run this Mapper has seen. Sink.EmitError uses this: a
 // fatal error ends the whole AG-UI stream, not just one run, and (unlike
@@ -175,4 +257,55 @@ func (m *Mapper) closeAllText() []Event {
 		out = append(out, m.closeText(runID, identity{RunID: runID})...)
 	}
 	return out
+}
+
+// closeAllReasoning emits REASONING_MESSAGE_END + REASONING_END for every
+// currently-open reasoning message, across every Gantry run this Mapper has
+// seen. Mirrors closeAllText; Sink.EmitError calls both.
+func (m *Mapper) closeAllReasoning() []Event {
+	var out []Event
+	for runID := range m.openReasoning {
+		out = append(out, m.closeReasoning(runID, identity{RunID: runID})...)
+	}
+	return out
+}
+
+// activityChange translates a changed gantry.PlanStep into an AG-UI
+// ACTIVITY_SNAPSHOT (the first time this Mapper has reported this step for
+// this run) or an ACTIVITY_DELTA (a JSON Patch against the last snapshot
+// sent for that step) — the snapshot/delta split AG-UI defines for activity
+// messages. Returns nil if the step's tracked fields haven't actually
+// changed since the last report (e.g. a redundant emit).
+func (m *Mapper) activityChange(runID string, step gantry.PlanStep, id identity) []Event {
+	key := runID + ":" + step.ID
+	msgID := runID + ":activity:" + step.ID
+	cur := activityStepValue{ID: step.ID, Description: step.Description, Status: string(step.Status), Output: step.Output}
+
+	last, seen := m.lastActivity[key]
+	m.lastActivity[key] = cur
+	if !seen {
+		return []Event{newActivitySnapshot(msgID, cur).withIdentity(id)}
+	}
+	patch := diffActivity(last, cur)
+	if len(patch) == 0 {
+		return nil
+	}
+	return []Event{newActivityDelta(msgID, patch).withIdentity(id)}
+}
+
+// diffActivity returns the RFC 6902 JSON Patch operations turning prev into
+// cur, one "replace" per changed field, in a fixed status/description/output
+// order. Nil if prev == cur.
+func diffActivity(prev, cur activityStepValue) []jsonPatchOp {
+	var ops []jsonPatchOp
+	if prev.Status != cur.Status {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/status", Value: cur.Status})
+	}
+	if prev.Description != cur.Description {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/description", Value: cur.Description})
+	}
+	if prev.Output != cur.Output {
+		ops = append(ops, jsonPatchOp{Op: "replace", Path: "/output", Value: cur.Output})
+	}
+	return ops
 }

@@ -21,9 +21,9 @@ func DefaultStartHandler(ctx context.Context, state *State) error {
 // by passing a custom Handler via WithInnerHandler (Plan 2).
 //
 // When a RunStream sink is active AND the client implements StreamingLLMClient,
-// the handler streams, emitting an EventTextDelta per non-empty chunk. In all
-// other cases (plain Run, or a non-streaming client) it falls back to Generate
-// — identical to the pre-streaming behavior.
+// the handler streams, emitting an event per populated StreamChunk field (see
+// invokeLLM). In all other cases (plain Run, or a non-streaming client) it
+// falls back to Generate — identical to the pre-streaming behavior.
 func DefaultLLMCallHandler(client LLMClient) Handler {
 	return func(ctx context.Context, state *State) error {
 		req := LLMRequest{
@@ -46,21 +46,47 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 // invokeLLM streams when a sink is active and the client implements
 // StreamingLLMClient, otherwise falls back to Generate. It returns the
 // fully-aggregated response in both cases and does not mutate state, so the LLM
-// call can be wrapped in a generation span by the caller. Deltas are emitted
-// through emit so they carry the run's identity like every other event.
+// call can be wrapped in a generation span by the caller. Each populated field
+// on a chunk is emitted through emit as its own event, independently — a
+// terminal metadata-only chunk (empty TextDelta/ReasoningDelta/RawFrame)
+// emits nothing, but a chunk carrying more than one field emits more than one
+// event.
 func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest) (LLMResponse, error) {
 	if _, ok := SinkFrom(ctx); ok {
 		if sc, ok := client.(StreamingLLMClient); ok {
 			return sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
-				if ch.TextDelta == "" {
-					return nil
+				if ch.TextDelta != "" {
+					if err := emit(ctx, Event{
+						Type:      EventTextDelta,
+						Iteration: state.Iteration,
+						Phase:     PhaseLLMCall,
+						TextDelta: ch.TextDelta,
+					}); err != nil {
+						return err
+					}
 				}
-				return emit(ctx, Event{
-					Type:      EventTextDelta,
-					Iteration: state.Iteration,
-					Phase:     PhaseLLMCall,
-					TextDelta: ch.TextDelta,
-				})
+				if ch.ReasoningDelta != "" {
+					if err := emit(ctx, Event{
+						Type:           EventReasoningDelta,
+						Iteration:      state.Iteration,
+						Phase:          PhaseLLMCall,
+						ReasoningDelta: ch.ReasoningDelta,
+					}); err != nil {
+						return err
+					}
+				}
+				if len(ch.RawFrame) > 0 {
+					if err := emit(ctx, Event{
+						Type:      EventRaw,
+						Iteration: state.Iteration,
+						Phase:     PhaseLLMCall,
+						RawFrame:  ch.RawFrame,
+						RawSource: ch.RawSource,
+					}); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 		}
 	}

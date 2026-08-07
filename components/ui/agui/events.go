@@ -47,11 +47,22 @@ const (
 	typeTextMessageStart   = "TEXT_MESSAGE_START"
 	typeTextMessageContent = "TEXT_MESSAGE_CONTENT"
 	typeTextMessageEnd     = "TEXT_MESSAGE_END"
-	typeToolCallStart      = "TOOL_CALL_START"
-	typeToolCallArgs       = "TOOL_CALL_ARGS"
-	typeToolCallEnd        = "TOOL_CALL_END"
-	typeToolCallResult     = "TOOL_CALL_RESULT"
-	typeCustom             = "CUSTOM"
+
+	typeReasoningStart          = "REASONING_START"
+	typeReasoningMessageStart   = "REASONING_MESSAGE_START"
+	typeReasoningMessageContent = "REASONING_MESSAGE_CONTENT"
+	typeReasoningMessageEnd     = "REASONING_MESSAGE_END"
+	typeReasoningEnd            = "REASONING_END"
+
+	typeToolCallStart  = "TOOL_CALL_START"
+	typeToolCallArgs   = "TOOL_CALL_ARGS"
+	typeToolCallEnd    = "TOOL_CALL_END"
+	typeToolCallResult = "TOOL_CALL_RESULT"
+	typeCustom         = "CUSTOM"
+	typeRaw            = "RAW"
+
+	typeActivitySnapshot = "ACTIVITY_SNAPSHOT"
+	typeActivityDelta    = "ACTIVITY_DELTA"
 )
 
 // --- Lifecycle ---
@@ -170,6 +181,85 @@ func newTextMessageEnd(msgID string) TextMessageEnd {
 	return TextMessageEnd{Type: typeTextMessageEnd, MessageID: msgID}
 }
 
+// --- Reasoning ---
+
+type ReasoningStart struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningStart) eventType() string { return e.Type }
+func (e ReasoningStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningStart(msgID string) ReasoningStart {
+	return ReasoningStart{Type: typeReasoningStart, MessageID: msgID}
+}
+
+type ReasoningMessageStart struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Role      string `json:"role"`
+	identity
+}
+
+func (e ReasoningMessageStart) eventType() string { return e.Type }
+func (e ReasoningMessageStart) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageStart(msgID string) ReasoningMessageStart {
+	return ReasoningMessageStart{Type: typeReasoningMessageStart, MessageID: msgID, Role: "reasoning"}
+}
+
+type ReasoningMessageContent struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Delta     string `json:"delta"`
+	identity
+}
+
+func (e ReasoningMessageContent) eventType() string { return e.Type }
+func (e ReasoningMessageContent) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageContent(msgID, delta string) ReasoningMessageContent {
+	return ReasoningMessageContent{Type: typeReasoningMessageContent, MessageID: msgID, Delta: delta}
+}
+
+type ReasoningMessageEnd struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningMessageEnd) eventType() string { return e.Type }
+func (e ReasoningMessageEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningMessageEnd(msgID string) ReasoningMessageEnd {
+	return ReasoningMessageEnd{Type: typeReasoningMessageEnd, MessageID: msgID}
+}
+
+type ReasoningEnd struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	identity
+}
+
+func (e ReasoningEnd) eventType() string { return e.Type }
+func (e ReasoningEnd) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newReasoningEnd(msgID string) ReasoningEnd {
+	return ReasoningEnd{Type: typeReasoningEnd, MessageID: msgID}
+}
+
 // --- Tool calls ---
 
 type ToolCallStart struct {
@@ -225,6 +315,7 @@ type ToolCallResult struct {
 	ToolCallID string `json:"toolCallId"`
 	Content    string `json:"content"`
 	Role       string `json:"role"`
+	IsError    bool   `json:"isError,omitempty"`
 	identity
 }
 
@@ -233,8 +324,8 @@ func (e ToolCallResult) withIdentity(id identity) Event {
 	e.identity = id
 	return e
 }
-func newToolCallResult(msgID, toolCallID, content string) ToolCallResult {
-	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool"}
+func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCallResult {
+	return ToolCallResult{Type: typeToolCallResult, MessageID: msgID, ToolCallID: toolCallID, Content: content, Role: "tool", IsError: isError}
 }
 
 // --- Custom ---
@@ -268,6 +359,132 @@ func newSubagentDone(id identity) Custom {
 	c := newCustom(subagentDoneName, nil)
 	c.identity = id
 	return c
+}
+
+// eventsDroppedName is the CUSTOM event name signaling that a buffering
+// wrapper (see gantry.NewBufferedSink) discarded events since the previous
+// delivered one — i.e. this client's view of the run has a gap. See
+// Mapper's generic gantry.Event.Dropped handling.
+const eventsDroppedName = "gantry.events_dropped"
+
+// eventsDroppedValue is the Custom.Value payload shape for eventsDroppedName.
+type eventsDroppedValue struct {
+	Count int `json:"count"`
+}
+
+func newEventsDropped(count int, id identity) Custom {
+	c := newCustom(eventsDroppedName, eventsDroppedValue{Count: count})
+	c.identity = id
+	return c
+}
+
+// usageName is the CUSTOM event name carrying gantry's cumulative
+// token/cost accounting for a run, translated from gantry.Event.Usage.
+// Emitted only when usage changes since the last emission — see
+// Mapper.usageDelta.
+const usageName = "gantry.usage"
+
+// usageValue is the Custom.Value payload shape for usageName.
+type usageValue struct {
+	InputTokens  int     `json:"inputTokens,omitempty"`
+	OutputTokens int     `json:"outputTokens,omitempty"`
+	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
+	CostUSD      float64 `json:"costUsd,omitempty"`
+}
+
+func newUsage(inputTokens, outputTokens int, costUSD float64, id identity) Custom {
+	c := newCustom(usageName, usageValue{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Tokens:       inputTokens + outputTokens,
+		CostUSD:      costUSD,
+	})
+	c.identity = id
+	return c
+}
+
+// --- Raw ---
+
+// Raw is the AG-UI RAW event: a passthrough for a provider frame gantry does
+// not otherwise model (see the Anthropic adapter's default case in
+// GenerateStream). Event carries the frame verbatim, undecoded.
+type Raw struct {
+	Type   string          `json:"type"`
+	Event  json.RawMessage `json:"event"`
+	Source string          `json:"source,omitempty"`
+	identity
+}
+
+func (e Raw) eventType() string { return e.Type }
+func (e Raw) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newRaw(event json.RawMessage, source string) Raw {
+	return Raw{Type: typeRaw, Event: event, Source: source}
+}
+
+// --- Activity ---
+
+// activityStepType is the ACTIVITY_SNAPSHOT/ACTIVITY_DELTA activityType value
+// gantry uses for plan-step progress (see Mapper's EventPlanStepChanged
+// handling). Named like the existing gantry.* CUSTOM event names.
+const activityStepType = "gantry.plan_step"
+
+// activityStepValue is the ACTIVITY_SNAPSHOT/ACTIVITY_DELTA content shape for
+// a gantry plan step — a small client-facing projection of gantry.PlanStep,
+// deliberately excluding its free-form Meta map. Output has no omitempty:
+// the ACTIVITY_SNAPSHOT must always carry an "output" key (even "") so a
+// later ACTIVITY_DELTA can validly "replace" it per RFC 6902 — a "replace"
+// against a path absent from the last snapshot is undefined behavior for a
+// JSON Patch client.
+type activityStepValue struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	Output      string `json:"output"`
+}
+
+// jsonPatchOp is one RFC 6902 JSON Patch operation, as required by
+// ActivityDelta.Patch.
+type jsonPatchOp struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value,omitempty"`
+}
+
+type ActivitySnapshot struct {
+	Type         string `json:"type"`
+	MessageID    string `json:"messageId"`
+	ActivityType string `json:"activityType"`
+	Content      any    `json:"content"`
+	identity
+}
+
+func (e ActivitySnapshot) eventType() string { return e.Type }
+func (e ActivitySnapshot) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newActivitySnapshot(msgID string, content activityStepValue) ActivitySnapshot {
+	return ActivitySnapshot{Type: typeActivitySnapshot, MessageID: msgID, ActivityType: activityStepType, Content: content}
+}
+
+type ActivityDelta struct {
+	Type         string        `json:"type"`
+	MessageID    string        `json:"messageId"`
+	ActivityType string        `json:"activityType"`
+	Patch        []jsonPatchOp `json:"patch"`
+	identity
+}
+
+func (e ActivityDelta) eventType() string { return e.Type }
+func (e ActivityDelta) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newActivityDelta(msgID string, patch []jsonPatchOp) ActivityDelta {
+	return ActivityDelta{Type: typeActivityDelta, MessageID: msgID, ActivityType: activityStepType, Patch: patch}
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:

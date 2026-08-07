@@ -20,10 +20,30 @@ func TestEventJSONShape(t *testing.T) {
 		{"text_start", newTextMessageStart("m1"), `{"type":"TEXT_MESSAGE_START","messageId":"m1","role":"assistant"}`},
 		{"text_content", newTextMessageContent("m1", "hi"), `{"type":"TEXT_MESSAGE_CONTENT","messageId":"m1","delta":"hi"}`},
 		{"text_end", newTextMessageEnd("m1"), `{"type":"TEXT_MESSAGE_END","messageId":"m1"}`},
+		{"reasoning_start", newReasoningStart("r1"), `{"type":"REASONING_START","messageId":"r1"}`},
+		{"reasoning_msg_start", newReasoningMessageStart("r1"), `{"type":"REASONING_MESSAGE_START","messageId":"r1","role":"reasoning"}`},
+		{"reasoning_msg_content", newReasoningMessageContent("r1", "hmm"), `{"type":"REASONING_MESSAGE_CONTENT","messageId":"r1","delta":"hmm"}`},
+		{"reasoning_msg_end", newReasoningMessageEnd("r1"), `{"type":"REASONING_MESSAGE_END","messageId":"r1"}`},
+		{"reasoning_end", newReasoningEnd("r1"), `{"type":"REASONING_END","messageId":"r1"}`},
 		{"tool_start", newToolCallStart("c1", "search"), `{"type":"TOOL_CALL_START","toolCallId":"c1","toolCallName":"search"}`},
 		{"tool_args", newToolCallArgs("c1", `{"q":"x"}`), `{"type":"TOOL_CALL_ARGS","toolCallId":"c1","delta":"{\"q\":\"x\"}"}`},
 		{"tool_end", newToolCallEnd("c1"), `{"type":"TOOL_CALL_END","toolCallId":"c1"}`},
-		{"tool_result", newToolCallResult("m2", "c1", "ok"), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"ok","role":"tool"}`},
+		{"tool_result", newToolCallResult("m2", "c1", "ok", false), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"ok","role":"tool"}`},
+		{"tool_result_error", newToolCallResult("m2", "c1", "boom", true), `{"type":"TOOL_CALL_RESULT","messageId":"m2","toolCallId":"c1","content":"boom","role":"tool","isError":true}`},
+		{"raw", newRaw(json.RawMessage(`{"type":"ping"}`), "anthropic"), `{"type":"RAW","event":{"type":"ping"},"source":"anthropic"}`},
+		{
+			"activity_snapshot",
+			newActivitySnapshot("run-1:activity:s1", activityStepValue{ID: "s1", Description: "design", Status: "active"}),
+			`{"type":"ACTIVITY_SNAPSHOT","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","content":{"id":"s1","description":"design","status":"active","output":""}}`,
+		},
+		{
+			"activity_delta",
+			newActivityDelta("run-1:activity:s1", []jsonPatchOp{{Op: "replace", Path: "/status", Value: "done"}}),
+			`{"type":"ACTIVITY_DELTA","messageId":"run-1:activity:s1","activityType":"gantry.plan_step","patch":[{"op":"replace","path":"/status","value":"done"}]}`,
+		},
+		{"usage", newUsage(120, 340, 0.0041, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}}`},
+		{"usage_zero_cost", newUsage(10, 0, 0, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":10,"tokens":10}}`},
+		{"events_dropped", newEventsDropped(3, identity{}), `{"type":"CUSTOM","name":"gantry.events_dropped","value":{"count":3}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -80,8 +80,11 @@ func (updatePlanComponent) Install(a *gantry.Agent) error {
 					rest = append(rest, call)
 					continue
 				}
-				content, isErr := runUpdatePlan(s.Plan, call.Input)
+				content, isErr, results := runUpdatePlan(s.Plan, call.Input)
 				upsertResult(s, gantry.ToolResult{CallID: call.ID, Content: content, IsError: isErr})
+				if err := emitPlanStepChanges(ctx, s, results); err != nil {
+					return err
+				}
 			}
 			// Removing the intercepted calls keeps generic dispatch (and the
 			// client-tool suspend middleware in PhaseObserve) from ever seeing
@@ -116,4 +119,37 @@ func upsertResult(s *gantry.State, res gantry.ToolResult) {
 		}
 	}
 	s.ToolResults = append(s.ToolResults, res)
+}
+
+// emitPlanStepChanges emits a gantry.EventPlanStepChanged for every op in
+// results that successfully targeted a step (set_status, set_output, and
+// add_step all report StepID on success — see opResult), carrying that
+// step's current full state so an AG-UI client can render live plan
+// progress (see components/ui/agui's Mapper.activityChange). A no-op when
+// no sink is active (gantry.Emit already guards that) or the plan is nil.
+func emitPlanStepChanges(ctx context.Context, s *gantry.State, results []opResult) error {
+	if s.Plan == nil {
+		return nil
+	}
+	for _, r := range results {
+		if !r.OK || r.StepID == "" {
+			continue
+		}
+		step := findStep(s.Plan, r.StepID)
+		if step == nil {
+			continue
+		}
+		// Copy by value: step aliases live plan state (findStep returns
+		// &plan.Steps[i]), and a buffered/async sink may not read PlanStep
+		// until after a later update_plan call has mutated it further.
+		snapshot := *step
+		if err := gantry.Emit(ctx, gantry.Event{
+			Type:      gantry.EventPlanStepChanged,
+			Iteration: s.Iteration,
+			PlanStep:  &snapshot,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

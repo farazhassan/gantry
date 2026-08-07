@@ -73,28 +73,31 @@ type opResult struct {
 }
 
 // runUpdatePlan decodes one update_plan call and applies its ops to plan,
-// returning the synthesized tool-result content. isErr reports an
-// envelope-level failure (no plan, malformed JSON, empty ops); per-op failures
-// are reported in-band in the results payload and are NOT envelope errors —
-// the model reads them and corrects itself on the next turn.
-func runUpdatePlan(plan *gantry.Plan, input json.RawMessage) (content string, isErr bool) {
+// returning the synthesized tool-result content and the per-op results (so
+// the caller can tell which steps actually changed — see
+// update_plan_component.go's emitPlanStepChanges). isErr reports an
+// envelope-level failure (no plan, malformed JSON, empty ops); per-op
+// failures are reported in-band in the results payload and are NOT envelope
+// errors — the model reads them and corrects itself on the next turn.
+func runUpdatePlan(plan *gantry.Plan, input json.RawMessage) (content string, isErr bool, results []opResult) {
 	if plan == nil {
-		return "update_plan: no plan exists on this run", true
+		return "update_plan: no plan exists on this run", true, nil
 	}
 	var in updatePlanInput
 	if err := json.Unmarshal(input, &in); err != nil {
-		return "update_plan: invalid input: " + err.Error(), true
+		return "update_plan: invalid input: " + err.Error(), true, nil
 	}
 	if len(in.Ops) == 0 {
-		return "update_plan: ops must be a non-empty array", true
+		return "update_plan: ops must be a non-empty array", true, nil
 	}
+	results = applyOps(plan, in.Ops)
 	out, err := json.Marshal(struct {
 		Results []opResult `json:"results"`
-	}{Results: applyOps(plan, in.Ops)})
+	}{Results: results})
 	if err != nil {
-		return "update_plan: encode results: " + err.Error(), true
+		return "update_plan: encode results: " + err.Error(), true, nil
 	}
-	return string(out), false
+	return string(out), false, results
 }
 
 // applyOps mutates plan in place, one op at a time. A failed op (unknown
