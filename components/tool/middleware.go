@@ -181,7 +181,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			if stopErr != nil {
 				s.Done = true
 				s.DoneReason = gantry.DoneToolPolicyAborted
-				return fmt.Errorf("%w: %v", gantry.ErrToolPolicyAborted, stopErr)
+				return fmt.Errorf("%w: %w", gantry.ErrToolPolicyAborted, stopErr)
 			}
 			if runErr != nil && ctx.Err() != nil {
 				// The caller's own context was cancelled (not our internal

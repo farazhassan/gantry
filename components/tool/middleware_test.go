@@ -666,6 +666,9 @@ func TestPolicyPersistentErrorForcesCancelAndHarnessStop(t *testing.T) {
 	if err == nil || !errors.Is(err, gantry.ErrToolPolicyAborted) {
 		t.Fatalf("Run err = %v, want ErrToolPolicyAborted", err)
 	}
+	if !errors.Is(err, gantry.ErrToolAuth) {
+		t.Errorf("Run err = %v, want errors.Is(err, gantry.ErrToolAuth) to hold (the triggering sentinel must survive the ErrToolPolicyAborted wrap)", err)
+	}
 	if state.DoneReason != gantry.DoneToolPolicyAborted {
 		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneToolPolicyAborted)
 	}
