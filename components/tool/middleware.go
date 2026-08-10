@@ -115,6 +115,21 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			jobs := make([]func(ctx context.Context) error, len(calls))
 			for i, call := range calls {
 				i, call := i, call
+				// Pre-fill with the same ErrToolSkipped placeholder the
+				// aborted.Load() branch below produces. gantry.RunParallel
+				// dispatches jobs one at a time and can abandon a queued job
+				// (and everything after it) the instant execCtx is
+				// cancelled, without ever invoking its closure — not even
+				// the aborted.Load() check inside it. Without this, such a
+				// job's results[i] would be left at Go's zero value
+				// (empty CallID), silently corrupting the tool_use/
+				// tool_result correspondence sent back to the LLM.
+				results[i] = gantry.ToolResult{
+					CallID:  call.ID,
+					Content: gantry.ErrToolSkipped.Error(),
+					IsError: true,
+					Err:     gantry.ErrToolSkipped,
+				}
 				jobs[i] = func(ctx context.Context) error {
 					if aborted.Load() {
 						results[i] = gantry.ToolResult{
