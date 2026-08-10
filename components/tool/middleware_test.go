@@ -327,3 +327,49 @@ func TestFromToolsDoubleInstallReturnsError(t *testing.T) {
 		t.Fatal("second install: want error, got nil")
 	}
 }
+
+func TestNewWithPolicyDispatchesPendingCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	reg.Add(addOneTool{})
+	if err := a.With(tool.NewWithPolicy(reg, tool.Policy{Parallelism: 1})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q", state.FinalOutput)
+	}
+}
+
+func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromToolsWithPolicy(tool.Policy{Parallelism: 1}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q", state.FinalOutput)
+	}
+}

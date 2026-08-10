@@ -15,8 +15,8 @@ const (
 )
 
 type registryComponent struct {
-	reg         *Registry
-	parallelism int
+	reg    *Registry
+	policy Policy
 }
 
 // New returns a Component wiring a caller-owned Registry into the agent. It
@@ -24,21 +24,35 @@ type registryComponent struct {
 // to state.Tools) and PhaseToolExec "components/tool:dispatch" (dispatches pending
 // tool calls against reg with up to parallelism concurrent invocations;
 // parallelism <= 0 means full parallelism). Installing tool dispatch twice on the
-// same agent returns an error.
+// same agent returns an error. Equivalent to
+// NewWithPolicy(reg, Policy{Parallelism: parallelism}).
 func New(reg *Registry, parallelism int) gantry.Component {
-	return &registryComponent{reg: reg, parallelism: parallelism}
+	return NewWithPolicy(reg, Policy{Parallelism: parallelism})
+}
+
+// NewWithPolicy is New with full control over batch-failure and
+// run-disposition behavior. See Policy for the available options.
+func NewWithPolicy(reg *Registry, policy Policy) gantry.Component {
+	return &registryComponent{reg: reg, policy: policy}
 }
 
 // FromTools returns a Component that builds a Registry from the given tools and
 // wires it in with parallel dispatch up to parallelism simultaneous calls. It is
 // sugar over New for callers that do not need to retain the Registry. For a single
-// tool with sequential dispatch, use FromTools(1, t).
+// tool with sequential dispatch, use FromTools(1, t). Equivalent to
+// FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...).
 func FromTools(parallelism int, tools ...Tool) gantry.Component {
+	return FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...)
+}
+
+// FromToolsWithPolicy is FromTools with full control over batch-failure and
+// run-disposition behavior. See Policy for the available options.
+func FromToolsWithPolicy(policy Policy, tools ...Tool) gantry.Component {
 	reg := NewRegistry()
 	for _, t := range tools {
 		reg.Add(t)
 	}
-	return &registryComponent{reg: reg, parallelism: parallelism}
+	return &registryComponent{reg: reg, policy: policy}
 }
 
 func (c *registryComponent) Install(a *gantry.Agent) error {
@@ -106,7 +120,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					return nil
 				}
 			}
-			if err := gantry.RunParallel(ctx, c.parallelism, jobs); err != nil {
+			if err := gantry.RunParallel(ctx, c.policy.Parallelism, jobs); err != nil {
 				return err
 			}
 			s.ToolResults = append(s.ToolResults, results...)
