@@ -25,6 +25,7 @@ const (
 type Client struct {
 	model   string
 	baseURL string
+	think   *bool
 	httpc   *http.Client
 }
 
@@ -66,6 +67,16 @@ func WithHTTPClient(h *http.Client) Option {
 			c.httpc = h
 		}
 	}
+}
+
+// WithThinking sets Ollama's think request field, enabling or disabling
+// reasoning output on models that support it (e.g. deepseek-r1). Reasoning
+// output is surfaced to gantry as EventReasoningDelta / StreamChunk.
+// ReasoningDelta via the response's message.thinking field (see
+// GenerateStream). Not calling this option omits the field, letting the
+// provider default apply.
+func WithThinking(enabled bool) Option {
+	return func(c *Client) { c.think = &enabled }
 }
 
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
@@ -126,6 +137,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		if err := json.Unmarshal(line, &chunk); err != nil {
 			return gantry.LLMResponse{}, fmt.Errorf("ollama: decode stream chunk: %w", err)
 		}
+		if delta := chunk.Message.Thinking; delta != "" {
+			if err := yield(gantry.StreamChunk{ReasoningDelta: delta}); err != nil {
+				return gantry.LLMResponse{}, err
+			}
+		}
 		if delta := chunk.Message.Content; delta != "" {
 			content.WriteString(delta)
 			if err := yield(gantry.StreamChunk{TextDelta: delta}); err != nil {
@@ -159,7 +175,7 @@ func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (
 	if err := validateToolChoice(req.ToolChoice); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(toChatRequest(c.model, req, stream))
+	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.think))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: encode request: %w", err)
 	}

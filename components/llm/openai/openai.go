@@ -27,10 +27,11 @@ const (
 // /v1/chat/completions endpoint. It is safe for concurrent use: it holds no
 // per-call state and the underlying *http.Client is concurrency-safe.
 type Client struct {
-	model   string
-	baseURL string
-	apiKey  string
-	httpc   *http.Client
+	model           string
+	baseURL         string
+	apiKey          string
+	reasoningEffort string
+	httpc           *http.Client
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
@@ -87,6 +88,17 @@ func WithHTTPClient(h *http.Client) Option {
 			c.httpc = h
 		}
 	}
+}
+
+// WithReasoningEffort sets the reasoning_effort request parameter used by
+// OpenAI's reasoning-capable models (o1/o3/gpt-5-family), one of
+// "low"/"medium"/"high" (provider-defined; forwarded as-is, not validated
+// here). Reasoning output — where the provider returns it — is surfaced to
+// gantry as EventReasoningDelta / StreamChunk.ReasoningDelta via the
+// response's reasoning_content field (see GenerateStream). An empty effort
+// (the default) omits the field entirely.
+func WithReasoningEffort(effort string) Option {
+	return func(c *Client) { c.reasoningEffort = effort }
 }
 
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
@@ -161,6 +173,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 			continue
 		}
 		ch := chunk.Choices[0]
+		if delta := ch.Delta.ReasoningContent; delta != "" {
+			if err := yield(gantry.StreamChunk{ReasoningDelta: delta}); err != nil {
+				return gantry.LLMResponse{}, err
+			}
+		}
 		if delta := ch.Delta.Content; delta != "" {
 			content.WriteString(delta)
 			if err := yield(gantry.StreamChunk{TextDelta: delta}); err != nil {
@@ -228,7 +245,7 @@ func (a *toolAccumulator) calls() []respToolCall {
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, stream))
+	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.reasoningEffort))
 	if err != nil {
 		return nil, fmt.Errorf("openai: encode request: %w", err)
 	}

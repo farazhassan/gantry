@@ -12,14 +12,22 @@ import (
 // focused on transport.
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	ToolChoice    any            `json:"tool_choice,omitempty"`
-	Temperature   float64        `json:"temperature,omitempty"`
-	MaxTokens     int            `json:"max_tokens,omitempty"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Model         string           `json:"model"`
+	Messages      []chatMessage    `json:"messages"`
+	Tools         []chatTool       `json:"tools,omitempty"`
+	ToolChoice    any              `json:"tool_choice,omitempty"`
+	Temperature   float64          `json:"temperature,omitempty"`
+	MaxTokens     int              `json:"max_tokens,omitempty"`
+	Stream        bool             `json:"stream"`
+	StreamOptions *streamOptions   `json:"stream_options,omitempty"`
+	Reasoning     *reasoningConfig `json:"reasoning,omitempty"`
+}
+
+// reasoningConfig mirrors OpenRouter's unified reasoning parameter, which
+// normalizes the underlying provider's reasoning/thinking controls. Only
+// Effort is populated today (see WithReasoningEffort in openrouter.go).
+type reasoningConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // forcedTool is the object form of tool_choice that forces one named function.
@@ -88,6 +96,7 @@ type choice struct {
 type respMessage struct {
 	Role      string         `json:"role"`
 	Content   string         `json:"content"`
+	Reasoning string         `json:"reasoning"`
 	ToolCalls []respToolCall `json:"tool_calls"`
 }
 
@@ -106,8 +115,12 @@ type usage struct {
 }
 
 // toChatRequest maps a gantry request to the wire format. System is carried as
-// a leading system-role message.
-func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
+// a leading system-role message. reasoningEffort, when non-empty, is
+// forwarded as-is via OpenRouter's unified reasoning.effort parameter, which
+// OpenRouter normalizes to whatever the underlying provider expects;
+// reasoning output — where the provider returns it — is surfaced to gantry
+// via the response's reasoning field (see GenerateStream).
+func toChatRequest(model string, req gantry.LLMRequest, stream bool, reasoningEffort string) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
@@ -138,6 +151,9 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 	}
 	if stream {
 		cr.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+	if reasoningEffort != "" {
+		cr.Reasoning = &reasoningConfig{Effort: reasoningEffort}
 	}
 	return cr
 }

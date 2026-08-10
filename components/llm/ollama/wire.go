@@ -16,6 +16,7 @@ type chatRequest struct {
 	Messages []chatMessage `json:"messages"`
 	Tools    []chatTool    `json:"tools,omitempty"`
 	Stream   bool          `json:"stream"`
+	Think    *bool         `json:"think,omitempty"`
 	Options  *chatOptions  `json:"options,omitempty"`
 }
 
@@ -65,12 +66,17 @@ type chatResponse struct {
 type respMessage struct {
 	Role      string         `json:"role"`
 	Content   string         `json:"content"`
+	Thinking  string         `json:"thinking,omitempty"`
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 }
 
 // toChatRequest maps a gantry request to the Ollama wire format. System is
 // carried as a leading system-role message (Ollama has no separate field).
-func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
+// think is forwarded as-is via the think request field (nil omits it, letting
+// the provider default apply); reasoning-capable models (e.g. deepseek-r1)
+// report their reasoning via the response's message.thinking field, decoded
+// in GenerateStream.
+func toChatRequest(model string, req gantry.LLMRequest, stream bool, think *bool) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
@@ -103,6 +109,7 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 		Messages: msgs,
 		Tools:    tools,
 		Stream:   stream,
+		Think:    think,
 		Options:  toChatOptions(req),
 	}
 }

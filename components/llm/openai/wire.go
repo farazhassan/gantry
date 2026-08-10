@@ -11,14 +11,15 @@ import (
 // client code in openai.go stays focused on transport.
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	ToolChoice    any            `json:"tool_choice,omitempty"`
-	Temperature   float64        `json:"temperature,omitempty"`
-	MaxTokens     int            `json:"max_tokens,omitempty"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []chatMessage  `json:"messages"`
+	Tools           []chatTool     `json:"tools,omitempty"`
+	ToolChoice      any            `json:"tool_choice,omitempty"`
+	Temperature     float64        `json:"temperature,omitempty"`
+	MaxTokens       int            `json:"max_tokens,omitempty"`
+	Stream          bool           `json:"stream"`
+	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 }
 
 // forcedTool is the object form of tool_choice that forces one named function.
@@ -85,9 +86,10 @@ type choice struct {
 }
 
 type respMessage struct {
-	Role      string         `json:"role"`
-	Content   string         `json:"content"`
-	ToolCalls []respToolCall `json:"tool_calls"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content"`
+	ReasoningContent string         `json:"reasoning_content"`
+	ToolCalls        []respToolCall `json:"tool_calls"`
 }
 
 // respToolCall is the response-side tool call. In streaming, Index identifies
@@ -105,8 +107,11 @@ type usage struct {
 }
 
 // toChatRequest maps a gantry request to the OpenAI wire format. System is
-// carried as a leading system-role message.
-func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest {
+// carried as a leading system-role message. reasoningEffort, when non-empty,
+// is forwarded as-is via the reasoning_effort parameter used by OpenAI's
+// reasoning-capable models (o1/o3/gpt-5-family: "low"/"medium"/"high") — a
+// mechanical mapping, not fixed up or validated here.
+func toChatRequest(model string, req gantry.LLMRequest, stream bool, reasoningEffort string) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
@@ -127,13 +132,14 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool) chatRequest
 	}
 
 	cr := chatRequest{
-		Model:       model,
-		Messages:    msgs,
-		Tools:       toChatTools(req.Tools),
-		ToolChoice:  toWireToolChoice(req.ToolChoice),
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Stream:      stream,
+		Model:           model,
+		Messages:        msgs,
+		Tools:           toChatTools(req.Tools),
+		ToolChoice:      toWireToolChoice(req.ToolChoice),
+		Temperature:     req.Temperature,
+		MaxTokens:       req.MaxTokens,
+		Stream:          stream,
+		ReasoningEffort: reasoningEffort,
 	}
 	if stream {
 		cr.StreamOptions = &streamOptions{IncludeUsage: true}

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/llm/openrouter"
 )
 
 // sse writes lines as a Server-Sent Events body (each event is "data: <p>\n\n").
@@ -94,6 +96,89 @@ func TestGenerateStreamYieldsTerminalUsageChunk(t *testing.T) {
 	}
 	if terminal.Usage == nil || terminal.Usage.OutputTokens != 1 {
 		t.Errorf("terminal Usage = %+v, want OutputTokens=1", terminal.Usage)
+	}
+}
+
+func TestGenerateStreamYieldsReasoningDeltas(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w,
+			`{"choices":[{"delta":{"role":"assistant","reasoning":"Let me "}}]}`,
+			`{"choices":[{"delta":{"reasoning":"think..."}}]}`,
+			`{"choices":[{"delta":{"content":"answer"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			"[DONE]",
+		)
+	})
+
+	var reasoning, text []string
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(ch gantry.StreamChunk) error {
+		if ch.ReasoningDelta != "" {
+			reasoning = append(reasoning, ch.ReasoningDelta)
+		}
+		if ch.TextDelta != "" {
+			text = append(text, ch.TextDelta)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if got := strings.Join(reasoning, ""); got != "Let me think..." {
+		t.Errorf("reasoning deltas = %q, want %q", got, "Let me think...")
+	}
+	if got := strings.Join(text, ""); got != "answer" {
+		t.Errorf("text deltas = %q, want %q", got, "answer")
+	}
+	if resp.Content != "answer" {
+		t.Errorf("resp.Content = %q, want %q (reasoning excluded from content)", resp.Content, "answer")
+	}
+}
+
+func TestGenerateStreamSendsReasoningEffortWhenEnabled(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, `{"choices":[{"delta":{"content":"hi"}}]}`, "[DONE]")
+	}))
+	defer srv.Close()
+	c := openrouter.New("test-model",
+		openrouter.WithAPIKey("test-key"),
+		openrouter.WithBaseURL(srv.URL),
+		openrouter.WithHTTPClient(srv.Client()),
+		openrouter.WithReasoningEffort("high"),
+	)
+
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	reasoning, ok := gotBody["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body missing \"reasoning\" object: %+v", gotBody)
+	}
+	if reasoning["effort"] != "high" {
+		t.Errorf("reasoning.effort = %v, want %q", reasoning["effort"], "high")
+	}
+}
+
+func TestGenerateStreamOmitsReasoningByDefault(t *testing.T) {
+	var gotBody map[string]any
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, `{"choices":[{"delta":{"content":"hi"}}]}`, "[DONE]")
+	})
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if _, ok := gotBody["reasoning"]; ok {
+		t.Errorf("request body has \"reasoning\" key = %v, want omitted", gotBody["reasoning"])
 	}
 }
 
