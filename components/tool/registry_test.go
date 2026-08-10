@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -61,5 +62,30 @@ func TestRegistryInvokeSuccess(t *testing.T) {
 	}
 	if string(out) != `{"a":1}` {
 		t.Errorf("Invoke returned %q", string(out))
+	}
+}
+
+type authFailingTool struct{}
+
+func (authFailingTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "auth_failing", Description: "always fails with ErrToolAuth", Schema: json.RawMessage(`{}`)}
+}
+
+func (authFailingTool) Invoke(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, fmt.Errorf("%w: token expired", gantry.ErrToolAuth)
+}
+
+func TestRegistryInvokePreservesToolSentinel(t *testing.T) {
+	r := tool.NewRegistry()
+	r.Add(authFailingTool{})
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "auth_failing", Input: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !errors.Is(err, gantry.ErrToolExecution) {
+		t.Errorf("err should still wrap ErrToolExecution; got %v", err)
+	}
+	if !errors.Is(err, gantry.ErrToolAuth) {
+		t.Errorf("err should also wrap the tool's own ErrToolAuth; got %v", err)
 	}
 }
