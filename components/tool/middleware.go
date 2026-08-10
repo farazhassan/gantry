@@ -3,6 +3,9 @@ package tool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/farazhassan/gantry"
 )
@@ -92,11 +95,36 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			if len(calls) == 0 {
 				return next(ctx, s)
 			}
+
+			// execCtx/cancel let OnFailure=StopCancelInFlight signal running
+			// calls without touching the caller's own ctx. aborted stops any
+			// call that hasn't started yet (StopWaitInFlight and
+			// StopCancelInFlight both set it); stopErr records the first
+			// failure whose effective Disposition is HarnessStop,
+			// independent of whatever gantry.RunParallel itself returns —
+			// RunParallel's return value can also go non-nil purely because
+			// our own cancel() fired, which must NOT be misread as a hard
+			// stop when Disposition is FeedbackToLLM.
+			execCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			var aborted atomic.Bool
+			var stopMu sync.Mutex
+			var stopErr error
+
 			results := make([]gantry.ToolResult, len(calls))
 			jobs := make([]func(ctx context.Context) error, len(calls))
 			for i, call := range calls {
 				i, call := i, call
 				jobs[i] = func(ctx context.Context) error {
+					if aborted.Load() {
+						results[i] = gantry.ToolResult{
+							CallID:  call.ID,
+							Content: gantry.ErrToolSkipped.Error(),
+							IsError: true,
+							Err:     gantry.ErrToolSkipped,
+						}
+						return nil
+					}
 					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
 					if err != nil {
 						results[i] = gantry.ToolResult{
@@ -105,11 +133,22 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 							IsError: true,
 							Err:     err,
 						}
-						// Tool failures are recorded and surfaced to the LLM as
-						// error results; they do not abort the run. Non-tool
-						// errors are also preserved for middleware introspection.
-						if !errors.Is(err, gantry.ErrToolExecution) {
-							results[i].Err = err
+						onFailure, disposition := c.policy.OnFailure, c.policy.Disposition
+						if errors.Is(err, gantry.ErrToolAuth) || errors.Is(err, gantry.ErrToolPersistent) {
+							onFailure, disposition = StopCancelInFlight, HarnessStop
+						}
+						if onFailure != KeepGoing {
+							aborted.Store(true)
+							if onFailure == StopCancelInFlight {
+								cancel()
+							}
+						}
+						if disposition == HarnessStop {
+							stopMu.Lock()
+							if stopErr == nil {
+								stopErr = err
+							}
+							stopMu.Unlock()
 						}
 						return nil
 					}
@@ -120,10 +159,21 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					return nil
 				}
 			}
-			if err := gantry.RunParallel(ctx, c.policy.Parallelism, jobs); err != nil {
-				return err
-			}
+
+			runErr := gantry.RunParallel(execCtx, c.policy.Parallelism, jobs)
 			s.ToolResults = append(s.ToolResults, results...)
+
+			if stopErr != nil {
+				s.Done = true
+				s.DoneReason = gantry.DoneToolPolicyAborted
+				return fmt.Errorf("%w: %v", gantry.ErrToolPolicyAborted, stopErr)
+			}
+			if runErr != nil && ctx.Err() != nil {
+				// The caller's own context was cancelled (not our internal
+				// execCtx cancel(), which only ever affects execCtx while
+				// leaving ctx alone) — propagate as gantry always has.
+				return runErr
+			}
 			return next(ctx, s)
 		}
 	})
