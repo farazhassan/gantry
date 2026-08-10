@@ -12,6 +12,25 @@ var (
 	ErrLimitExceeded    = errors.New("gantry: limit exceeded")
 	ErrHumanAborted     = errors.New("gantry: human-in-loop aborted")
 	ErrCheckpointFailed = errors.New("gantry: checkpoint failed")
+	// ErrToolAuth signals that a tool call failed because it requires
+	// authentication/authorization that is not currently available. Tools
+	// wrap their own errors with this sentinel (e.g. fmt.Errorf("%w: %v",
+	// ErrToolAuth, err)) to mark the failure as persistent rather than a
+	// one-off: retrying or continuing is expected to fail identically on
+	// every subsequent call to that tool.
+	ErrToolAuth = errors.New("gantry: tool authentication required")
+	// ErrToolPersistent is the general form of ErrToolAuth for any other
+	// systemic (non-auth) failure a tool wants to mark as persistent.
+	ErrToolPersistent = errors.New("gantry: tool persistent failure")
+	// ErrToolPolicyAborted wraps the triggering tool error when a
+	// components/tool dispatch batch resolves with FailureDisposition ==
+	// HarnessStop (see components/tool.Policy). state.DoneReason is set to
+	// DoneToolPolicyAborted alongside this error.
+	ErrToolPolicyAborted = errors.New("gantry: tool call policy aborted run")
+	// ErrToolSkipped is recorded on any tool call that never ran because an
+	// earlier failure in the same dispatch batch set BatchFailureMode to a
+	// stopping mode (see components/tool.Policy).
+	ErrToolSkipped = errors.New("gantry: tool call skipped due to policy")
 )
 
 // DoneReason describes why the agent loop terminated.
@@ -42,6 +61,12 @@ const (
 	// resolver is configured (session.WithResolver), while task-driven runs
 	// treat it as an explicit failure (see task/driver.go).
 	DoneHandoff DoneReason = "handoff"
+	// DoneToolPolicyAborted means a components/tool dispatch batch hit a
+	// failure whose effective FailureDisposition was HarnessStop (either
+	// configured directly, or forced by a persistent-error sentinel like
+	// ErrToolAuth) — see components/tool.Policy. The returned error wraps
+	// ErrToolPolicyAborted.
+	DoneToolPolicyAborted DoneReason = "tool_policy_aborted"
 )
 
 // TraceCarrier is implemented by errors that carry the partial trace of

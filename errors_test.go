@@ -15,6 +15,10 @@ func TestSentinelErrors(t *testing.T) {
 		gantry.ErrLimitExceeded,
 		gantry.ErrHumanAborted,
 		gantry.ErrCheckpointFailed,
+		gantry.ErrToolAuth,
+		gantry.ErrToolPersistent,
+		gantry.ErrToolPolicyAborted,
+		gantry.ErrToolSkipped,
 	}
 	for _, e := range errs {
 		if e == nil {
@@ -35,6 +39,7 @@ func TestDoneReasonConstants(t *testing.T) {
 		gantry.DoneHumanAborted,
 		gantry.DoneError,
 		gantry.DoneClientToolCall,
+		gantry.DoneToolPolicyAborted,
 	}
 	seen := map[gantry.DoneReason]bool{}
 	for _, c := range cases {
