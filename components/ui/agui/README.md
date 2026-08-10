@@ -100,16 +100,19 @@ Implemented: `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`, `STEP_STARTED`/
 `TOOL_CALL_RESULT`, `CUSTOM` (gantry-specific: `gantry.usage`,
 `gantry.events_dropped`, `gantry.subagent_done`), `REASONING_START`/
 `REASONING_MESSAGE_START`/`REASONING_MESSAGE_CONTENT`/
-`REASONING_MESSAGE_END`/`REASONING_END` (Anthropic extended thinking only —
-see `anthropic.WithExtendedThinking`), `RAW` (provider frames this package
+`REASONING_MESSAGE_END`/`REASONING_END` (translated generically from any
+adapter's `StreamChunk.ReasoningDelta` — see `anthropic.WithExtendedThinking`,
+`openai.WithReasoningEffort`, `ollama.WithThinking`, and
+`openrouter.WithReasoningEffort`), `RAW` (provider frames this package
 doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
 (`components/planner`'s `update_plan` plan-step progress).
 
 Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
 `MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"
 above), the `*_CHUNK` convenience events (redundant with the explicit
-Start/Content/End sequence this package always emits),
-`REASONING_ENCRYPTED_VALUE`, and `REASONING_*` for non-Anthropic providers.
+Start/Content/End sequence this package always emits), and
+`REASONING_ENCRYPTED_VALUE` (no adapter round-trips thinking
+signatures/encrypted blocks back to the provider yet).
 
 ### Error behavior
 
