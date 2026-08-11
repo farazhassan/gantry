@@ -139,13 +139,15 @@ type Event struct {
 // multiple subscribers) should hand off to their own goroutine and return
 // quickly to avoid blocking the loop.
 //
-// One exception: EventToolResultLive (see components/tool) originates from
+// One documented exception: EventToolResultLive (see components/tool) originates from
 // goroutines gantry.RunParallel spawns for concurrent tool calls, not the run
 // goroutine. components/tool serializes its own emissions with a mutex, so
 // the sink still never receives two calls concurrently for this event either
 // — but errors it returns for EventToolResultLive specifically are discarded
 // rather than aborting the run, since it is a purely observational,
-// best-effort signal (see components/tool/middleware.go).
+// best-effort signal (see components/tool/middleware.go). Other components may
+// have their own concurrency considerations for the sinks they wrap; this is
+// not necessarily the only case where a sink sees concurrent-origin events.
 type EventSink func(Event) error
 
 // sinkKey is the context key under which the active EventSink is stored.

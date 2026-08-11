@@ -952,6 +952,67 @@ func TestDispatchLiveResultEventsAreSerialized(t *testing.T) {
 	}
 }
 
+// TestDispatchLiveResultEventReflectsCancelledCallOutcome proves that when
+// OnFailure: StopCancelInFlight cancels a call already in flight, the
+// EventToolResultLive emitted for that call carries its real outcome from
+// the tool's own Invoke (here, ctxAwareTool observing ctx.Done() and
+// returning `"cancelled"`, IsError: false) rather than a fabricated
+// gantry.ErrToolSkipped — skip is only for calls that never started at all,
+// not ones that were running and responded to cancellation themselves.
+//
+// boom is wrapped in waitThenFailTool, gated on aware.started, for the same
+// reason TestPolicyStopCancelInFlightCancelsRunningCalls does: without it, a
+// fast-failing sibling dispatched concurrently could flip the dispatcher's
+// "aborted" flag (and fire cancel()) before ctx_aware's job even reaches its
+// own Invoke, so the "in flight when cancelled" scenario this test targets
+// would not reliably occur.
+func TestDispatchLiveResultEventReflectsCancelledCallOutcome(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "aware", Name: "ctx_aware", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	aware := ctxAwareTool{started: make(chan struct{}), result: make(chan bool, 1)}
+	boom := waitThenFailTool{failingTool: failingTool{name: "boom", err: errors.New("boom")}, wait: aware.started}
+	policy := tool.Policy{Parallelism: 2, OnFailure: tool.StopCancelInFlight}
+	if err := a.With(tool.FromToolsWithPolicy(policy, boom, aware)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	var awareLive *gantry.Event
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil && ev.ToolResult.CallID == "aware" {
+			e := ev
+			awareLive = &e
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	select {
+	case cancelled := <-aware.result:
+		if !cancelled {
+			t.Errorf("ctx_aware call was not cancelled")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx_aware tool never reported a result")
+	}
+
+	if awareLive == nil {
+		t.Fatal("expected a live tool_result_live event for the cancelled 'aware' call")
+	}
+	if awareLive.ToolResult.IsError || awareLive.ToolResult.Content != `"cancelled"` {
+		t.Errorf("aware live result = %+v, want IsError=false Content=\"cancelled\" (ctx_aware.Invoke's real outcome, not a fabricated skip)", awareLive.ToolResult)
+	}
+}
+
 func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
