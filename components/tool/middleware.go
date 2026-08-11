@@ -126,6 +126,19 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			}
 
 			results := make([]gantry.ToolResult, len(calls))
+			// ran marks which jobs' closures actually executed. A job
+			// gantry.RunParallel abandons before ever launching it (see
+			// the pre-fill comment below) never sets its entry, letting
+			// the loop after RunParallel returns emit a catch-up live
+			// event for it — otherwise such a call would never get an
+			// EventToolResultLive at all, only the later batched
+			// EventToolResult. Plain writes here are race-free: every
+			// write happens inside a job goroutine before it returns,
+			// and gantry.RunParallel's internal sync.WaitGroup.Wait()
+			// (which it calls before returning) happens-after every
+			// goroutine's return, so all writes are visible by the time
+			// the read loop below runs.
+			ran := make([]bool, len(calls))
 			jobs := make([]func(ctx context.Context) error, len(calls))
 			for i, call := range calls {
 				i, call := i, call
@@ -145,6 +158,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					Err:     gantry.ErrToolSkipped,
 				}
 				jobs[i] = func(ctx context.Context) error {
+					ran[i] = true
 					if aborted.Load() {
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,
@@ -193,6 +207,16 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			}
 
 			runErr := gantry.RunParallel(execCtx, c.policy.Parallelism, jobs)
+			for i, launched := range ran {
+				if !launched {
+					// gantry.RunParallel abandoned this job before ever
+					// invoking its closure, so it never got a chance to
+					// call emitLive itself. results[i] still holds the
+					// ErrToolSkipped pre-fill, which is its real, final
+					// outcome — emit the catch-up live event for it now.
+					emitLive(ctx, results[i])
+				}
+			}
 			s.ToolResults = append(s.ToolResults, results...)
 
 			if stopErr != nil {

@@ -109,7 +109,11 @@ type Event struct {
 	// emit() alongside the identity fields below. It reflects production
 	// time, not delivery time, so it stays accurate even when a sink defers
 	// delivery (e.g. NewBufferedSink). Zero if an Event is constructed
-	// directly without going through emit() (e.g. in tests).
+	// directly without going through emit() (e.g. in tests) — a real Event
+	// produced by the run loop always has this stamped, so it deliberately
+	// has no `omitempty`: that tag wouldn't reliably drop a zero time.Time
+	// in encoding/json anyway, and omitting it here would misleadingly
+	// suggest Timestamp is as optional as the type-specific fields above it.
 	Timestamp time.Time `json:"timestamp"`
 
 	// Identity: which run, session, task, and agent produced this event.
@@ -186,6 +190,9 @@ func emit(ctx context.Context, ev Event) error {
 	if !ok {
 		return nil
 	}
+	// Stamp production time before identity, mirroring the fields below —
+	// see Event.Timestamp's doc comment for why this is the one place it's
+	// set, and why it's a no-op when there's no sink to deliver to.
 	ev.Timestamp = time.Now()
 	if id, ok := identityFrom(ctx); ok {
 		ev.RunID = id.runID

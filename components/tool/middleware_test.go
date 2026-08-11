@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1010,6 +1011,86 @@ func TestDispatchLiveResultEventReflectsCancelledCallOutcome(t *testing.T) {
 	}
 	if awareLive.ToolResult.IsError || awareLive.ToolResult.Content != `"cancelled"` {
 		t.Errorf("aware live result = %+v, want IsError=false Content=\"cancelled\" (ctx_aware.Invoke's real outcome, not a fabricated skip)", awareLive.ToolResult)
+	}
+}
+
+// TestDispatchLiveResultEventCoversAbandonedQueuedCalls is a regression test
+// for a gap flagged in PR review: emitLive is only ever called from inside a
+// job closure, but gantry.RunParallel's dispatch loop can abandon a queued
+// job the instant execCtx is cancelled (see the comment above the results[i]
+// pre-fill), without ever invoking that job's closure — not even its
+// aborted.Load() skip path. Before the fix, such a call never got any
+// EventToolResultLive at all; only the eventual batched EventToolResult
+// would mention it. This reuses the deterministic
+// occupier-holds-every-semaphore-slot pattern from
+// TestPolicyLargeFanOutPersistentErrorLeavesNoZeroValueResults to force
+// real, reproducible abandonment rather than relying on scheduler timing.
+func TestDispatchLiveResultEventCoversAbandonedQueuedCalls(t *testing.T) {
+	const numHeld = 2
+	const numQueued = 20
+
+	calls := []gantry.ToolCall{
+		{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+	}
+	occupiers := make([]ctxAwareTool, numHeld)
+	for i := 0; i < numHeld; i++ {
+		occupiers[i] = ctxAwareTool{started: make(chan struct{}), result: make(chan bool, 1)}
+		calls = append(calls, gantry.ToolCall{
+			ID:    fmt.Sprintf("occupier%d", i),
+			Name:  fmt.Sprintf("occupier%d", i),
+			Input: json.RawMessage(`{}`),
+		})
+	}
+	for i := 0; i < numQueued; i++ {
+		calls = append(calls, gantry.ToolCall{
+			ID:    fmt.Sprintf("ok%d", i),
+			Name:  "add_one",
+			Input: json.RawMessage(fmt.Sprintf("%d", i)),
+		})
+	}
+
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: calls, StopReason: gantry.StopReasonToolUse},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	authErr := fmt.Errorf("%w: token expired", gantry.ErrToolAuth)
+	reg.Add(failingTool{name: "boom", err: authErr})
+	reg.Add(addOneTool{})
+	for i, occ := range occupiers {
+		reg.Add(namedTool{Tool: occ, name: fmt.Sprintf("occupier%d", i)})
+	}
+	if err := a.With(tool.NewWithPolicy(reg, tool.Policy{Parallelism: numHeld + 1})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	live := map[string]gantry.Event{}
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil {
+			live[ev.ToolResult.CallID] = ev
+		}
+		return nil
+	}); err == nil || !errors.Is(err, gantry.ErrToolPolicyAborted) {
+		t.Fatalf("RunStream err = %v, want ErrToolPolicyAborted", err)
+	}
+
+	if len(live) != len(calls) {
+		t.Fatalf("got %d live events, want %d (one per pending call, none missing)", len(live), len(calls))
+	}
+	for _, call := range calls {
+		ev, ok := live[call.ID]
+		if !ok {
+			t.Errorf("no live event for call %q", call.ID)
+			continue
+		}
+		if strings.HasPrefix(call.ID, "ok") {
+			if !ev.ToolResult.IsError || ev.ToolResult.Content != gantry.ErrToolSkipped.Error() {
+				t.Errorf("abandoned call %q live result = %+v, want the ErrToolSkipped placeholder", call.ID, ev.ToolResult)
+			}
+		}
+		if ev.Timestamp.IsZero() {
+			t.Errorf("live event for %q has zero Timestamp", call.ID)
+		}
 	}
 }
 
