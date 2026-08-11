@@ -101,7 +101,9 @@ func WithTracer(tr gantry.Tracer) Option {
 // State.Meta identity the Driver already seeds — no per-event wrapping happens
 // here). The sink is called synchronously on the run goroutine; wrap slow
 // consumers with gantry.NewBufferedSink so a laggard cannot stall the
-// Dispatcher. A nil sink is ignored (streaming stays off, the default).
+// Dispatcher. See gantry.EventSink's doc comment for an exception to the
+// synchronous-call guarantee. A nil sink is ignored (streaming stays off, the
+// default).
 func WithEventSink(sink gantry.EventSink) Option {
 	return func(d *Driver) {
 		if sink != nil {

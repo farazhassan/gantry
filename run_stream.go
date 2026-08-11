@@ -8,7 +8,9 @@ import (
 // RunStream executes the agent loop like Run, additionally emitting whole-run
 // Events (phase transitions, token deltas, tool calls/results, and a terminal
 // done event) to sink. The sink is called synchronously on the run goroutine;
-// returning an error from it aborts the run and propagates the error.
+// returning an error from it aborts the run and propagates the error. See
+// gantry.EventSink's doc comment for an exception to the synchronous-call
+// guarantee.
 //
 // Cancellation follows ctx: a web server should pass the request context so a
 // client disconnect stops the run. Like Run, the returned *State is always
