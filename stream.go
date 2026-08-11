@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync/atomic"
+	"time"
 )
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
@@ -38,13 +39,25 @@ type StreamingLLMClient interface {
 type EventType string
 
 const (
-	EventPhaseStart      EventType = "phase_start"
-	EventPhaseEnd        EventType = "phase_end"
-	EventTextDelta       EventType = "text_delta"
-	EventReasoningDelta  EventType = "reasoning_delta"
-	EventRaw             EventType = "raw"
-	EventToolCall        EventType = "tool_call"
-	EventToolResult      EventType = "tool_result"
+	EventPhaseStart     EventType = "phase_start"
+	EventPhaseEnd       EventType = "phase_end"
+	EventTextDelta      EventType = "text_delta"
+	EventReasoningDelta EventType = "reasoning_delta"
+	EventRaw            EventType = "raw"
+	EventToolCall       EventType = "tool_call"
+	EventToolResult     EventType = "tool_result"
+	// EventToolResultLive fires the instant a single tool call resolves
+	// (success, failure, or a policy-driven skip — see components/tool.Policy),
+	// carrying the same ToolResult payload shape as EventToolResult. Unlike
+	// EventToolResult, which is emitted for the whole PhaseToolExec batch only
+	// after every call in it has resolved (so parallel calls all appear to
+	// finish "at the same time" to a consumer), EventToolResultLive is
+	// per-call and real-time — useful for visualizing exactly when each tool
+	// call actually completed. Emitted by components/tool's dispatch
+	// middleware, not the core run loop; see components/tool/middleware.go.
+	// Sink errors returned for this event are discarded (best-effort,
+	// observational only) rather than aborting the run — see EventSink.
+	EventToolResultLive  EventType = "tool_result_live"
 	EventPlanStepChanged EventType = "plan_step_changed"
 	EventDone            EventType = "done"
 )
@@ -92,6 +105,13 @@ type Event struct {
 	// usage is zero — check the phase_end/done events for the latest value.
 	Usage *Usage `json:"usage,omitempty"`
 
+	// Timestamp is the wall-clock instant this event was emitted, stamped by
+	// emit() alongside the identity fields below. It reflects production
+	// time, not delivery time, so it stays accurate even when a sink defers
+	// delivery (e.g. NewBufferedSink). Zero if an Event is constructed
+	// directly without going through emit() (e.g. in tests).
+	Timestamp time.Time `json:"timestamp"`
+
 	// Identity: which run, session, task, and agent produced this event.
 	// RunID is minted per run; SessionID/TaskID come from State.Meta
 	// (MetaSessionID / MetaTaskID) when a task driver seeded them; Agent is
@@ -118,6 +138,14 @@ type Event struct {
 // is called synchronously on the run goroutine; fan-out consumers (WebSocket,
 // multiple subscribers) should hand off to their own goroutine and return
 // quickly to avoid blocking the loop.
+//
+// One exception: EventToolResultLive (see components/tool) originates from
+// goroutines gantry.RunParallel spawns for concurrent tool calls, not the run
+// goroutine. components/tool serializes its own emissions with a mutex, so
+// the sink still never receives two calls concurrently for this event either
+// — but errors it returns for EventToolResultLive specifically are discarded
+// rather than aborting the run, since it is a purely observational,
+// best-effort signal (see components/tool/middleware.go).
 type EventSink func(Event) error
 
 // sinkKey is the context key under which the active EventSink is stored.
@@ -156,6 +184,7 @@ func emit(ctx context.Context, ev Event) error {
 	if !ok {
 		return nil
 	}
+	ev.Timestamp = time.Now()
 	if id, ok := identityFrom(ctx); ok {
 		ev.RunID = id.runID
 		ev.SessionID = id.sessionID

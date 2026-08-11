@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // streamingStub verifies a type can satisfy StreamingLLMClient at compile time.
@@ -144,5 +145,21 @@ func TestWithSinkNilSinkBehavesAsWithoutSink(t *testing.T) {
 	ctx := WithSink(context.Background(), nil)
 	if _, ok := SinkFrom(ctx); ok {
 		t.Error("SinkFrom after WithSink(ctx, nil) = (_, true), want false")
+	}
+}
+
+func TestEmitStampsTimestamp(t *testing.T) {
+	var got Event
+	sink := func(ev Event) error { got = ev; return nil }
+	ctx := WithSink(context.Background(), sink)
+
+	before := time.Now()
+	if err := emit(ctx, Event{Type: EventDone}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	after := time.Now()
+
+	if got.Timestamp.Before(before) || got.Timestamp.After(after) {
+		t.Errorf("Timestamp = %v, want between %v and %v", got.Timestamp, before, after)
 	}
 }
