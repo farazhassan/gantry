@@ -796,6 +796,162 @@ func (n namedTool) Definition() gantry.ToolDef {
 	return d
 }
 
+func TestDispatchEmitsLiveResultEventPerCall(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "a", Name: "add_one", Input: json.RawMessage(`1`)},
+				{ID: "b", Name: "add_one", Input: json.RawMessage(`2`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromTools(2, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	var events []gantry.Event
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	liveEvents := map[string]gantry.Event{}
+	liveIdx := map[string]int{}
+	batchedIdx := -1
+	for i, ev := range events {
+		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil {
+			liveEvents[ev.ToolResult.CallID] = ev
+			liveIdx[ev.ToolResult.CallID] = i
+		}
+		if ev.Type == gantry.EventToolResult && batchedIdx == -1 {
+			batchedIdx = i
+		}
+	}
+
+	if len(liveEvents) != 2 {
+		t.Fatalf("got %d live tool_result_live events, want 2: %+v", len(liveEvents), liveEvents)
+	}
+	if liveEvents["a"].ToolResult.Content != "2" || liveEvents["b"].ToolResult.Content != "3" {
+		t.Errorf("live results: a=%+v b=%+v, want a.Content=2 b.Content=3", liveEvents["a"].ToolResult, liveEvents["b"].ToolResult)
+	}
+	for id, ev := range liveEvents {
+		if ev.Timestamp.IsZero() {
+			t.Errorf("live event for %q has zero Timestamp, want it stamped by emit()", id)
+		}
+	}
+	if batchedIdx == -1 {
+		t.Fatal("expected at least one batched tool_result event")
+	}
+	for id, idx := range liveIdx {
+		if idx >= batchedIdx {
+			t.Errorf("live event for %q at index %d did not precede the batched tool_result event at index %d", id, idx, batchedIdx)
+		}
+	}
+}
+
+func TestDispatchEmitsLiveResultEventForSkippedCall(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "ok", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	policy := tool.Policy{Parallelism: 1, OnFailure: tool.StopWaitInFlight}
+	if err := a.With(tool.FromToolsWithPolicy(policy, failingTool{name: "boom", err: errors.New("boom")}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	var sawSkippedLive bool
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil && ev.ToolResult.CallID == "ok" {
+			if ev.ToolResult.IsError && ev.ToolResult.Content == gantry.ErrToolSkipped.Error() {
+				sawSkippedLive = true
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	if !sawSkippedLive {
+		t.Error("expected a live tool_result_live event for the skipped 'ok' call")
+	}
+}
+
+func TestDispatchLiveResultEventSinkErrorDoesNotAbortRun(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "a", Name: "add_one", Input: json.RawMessage(`1`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	boom := errors.New("sink boom")
+	state, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventToolResultLive {
+			return boom
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v, want nil (live event sink errors must be discarded)", err)
+	}
+	if state.FinalOutput != "done" {
+		t.Errorf("FinalOutput = %q, want run to complete normally", state.FinalOutput)
+	}
+}
+
+func TestDispatchLiveResultEventsAreSerialized(t *testing.T) {
+	calls := make([]gantry.ToolCall, 8)
+	for i := range calls {
+		calls[i] = gantry.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "add_one", Input: json.RawMessage(fmt.Sprintf("%d", i))}
+	}
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: calls, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromTools(8, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	// Deliberately NOT synchronized: if components/tool ever emits
+	// EventToolResultLive concurrently from more than one goroutine, `go
+	// test -race` will flag this unguarded append as a data race.
+	var got []gantry.Event
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		got = append(got, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	liveCount := 0
+	for _, ev := range got {
+		if ev.Type == gantry.EventToolResultLive {
+			liveCount++
+		}
+	}
+	if liveCount != len(calls) {
+		t.Errorf("got %d live events, want %d", liveCount, len(calls))
+	}
+}
+
 func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

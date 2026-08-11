@@ -110,6 +110,20 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 			var aborted atomic.Bool
 			var stopMu sync.Mutex
 			var stopErr error
+			// emitMu serializes EventToolResultLive emissions across the
+			// concurrently-executing job goroutines below, so the ambient
+			// sink — which EventSink's contract says is "called
+			// synchronously" — never receives two calls at once for this
+			// event either, even though it now originates off the run
+			// goroutine. See the EventSink doc comment.
+			var emitMu sync.Mutex
+			emitLive := func(ctx context.Context, result gantry.ToolResult) {
+				emitMu.Lock()
+				defer emitMu.Unlock()
+				// Best-effort: a sink error here must not abort an
+				// in-flight tool batch over a purely observational event.
+				_ = gantry.Emit(ctx, gantry.Event{Type: gantry.EventToolResultLive, Iteration: s.Iteration, ToolResult: &result})
+			}
 
 			results := make([]gantry.ToolResult, len(calls))
 			jobs := make([]func(ctx context.Context) error, len(calls))
@@ -138,6 +152,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 							IsError: true,
 							Err:     gantry.ErrToolSkipped,
 						}
+						emitLive(ctx, results[i])
 						return nil
 					}
 					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
@@ -148,6 +163,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 							IsError: true,
 							Err:     err,
 						}
+						emitLive(ctx, results[i])
 						onFailure, disposition := c.policy.OnFailure, c.policy.Disposition
 						if errors.Is(err, gantry.ErrToolAuth) || errors.Is(err, gantry.ErrToolPersistent) {
 							onFailure, disposition = StopCancelInFlight, HarnessStop
@@ -171,6 +187,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 						CallID:  call.ID,
 						Content: string(out),
 					}
+					emitLive(ctx, results[i])
 					return nil
 				}
 			}
