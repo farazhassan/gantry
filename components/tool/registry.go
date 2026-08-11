@@ -66,7 +66,7 @@ func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMe
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
-		return out, fmt.Errorf("%w: %v", gantry.ErrToolExecution, err)
+		return out, fmt.Errorf("%w: %w", gantry.ErrToolExecution, err)
 	}
 	return out, nil
 }

@@ -26,7 +26,7 @@ you need.
 | **transcript** | Persists & reads conversation history across runs | `transcript.New(t)` | `NewInMemoryStore()` |
 | **memory** | Vector-backed long-term memory: recalls top-k similar past turns into context, persists the final turn pair | `memory.New(store, emb)` | `vectorstore.NewInMemoryStore()` |
 | **sqlitevec** | `vectorstore.Store` on SQLite + sqlite-vec (pure Go, own module) | `sqlitevec.New(path, sqlitevec.WithDim(d))` | — |
-| **tool** | Capabilities the LLM can invoke, with parallel dispatch | `tool.FromTools(parallelism, tools...)` · `tool.New(reg, parallelism)` · `tool.Client(defs...)` | `NewRegistry()` |
+| **tool** | Capabilities the LLM can invoke, with parallel dispatch and a configurable failure policy | `tool.FromTools(parallelism, tools...)` · `tool.New(reg, parallelism)` · `tool.FromToolsWithPolicy(policy, tools...)` · `tool.NewWithPolicy(reg, policy)` · `tool.Client(defs...)` | `NewRegistry()` |
 | **skill** | Conditional instruction/context blocks injected into the system prompt | `skill.New(s)` | `NewStatic(name, prompt)` |
 | **retriever** | Fetches top-`k` docs for RAG and injects them | `retriever.New(r, k)` | `NewStatic(docs)` · `NewVectorRetriever(store, emb)` |
 | **planner** | Decomposes the task into a plan up front | `planner.New(p)` | `NewLLM(client, rubric)` |

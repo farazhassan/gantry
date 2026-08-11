@@ -3,8 +3,11 @@ package tool_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
@@ -148,6 +151,64 @@ func TestWithToolUnknownToolRecordsError(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("missing tool result for unknown tool")
+	}
+}
+
+// TestFromToolsDefaultPolicyKeepsGoingAndFeedsFailureBackToLLM exercises the
+// zero-value Policy default (KeepGoing + FeedbackToLLM) through the plain
+// public tool.FromTools API — the path every existing caller of tool.New /
+// tool.FromTools exercises unchanged by this feature. A failing call must
+// not abort the run, and its successful sibling in the same batch must still
+// run to completion and have its result fed back to the LLM. Unlike
+// TestWithToolUnknownToolRecordsError (a single unknown-tool call with no
+// sibling), this proves the multi-call batch-failure default explicitly.
+func TestFromToolsDefaultPolicyKeepsGoingAndFeedsFailureBackToLLM(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "ok", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromTools(2, failingTool{name: "boom", err: errors.New("boom")}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v (default policy must not abort the run on a tool failure)", err)
+	}
+	if state.DoneReason == gantry.DoneToolPolicyAborted {
+		t.Errorf("DoneReason = %q, want a normal completion under the default policy", state.DoneReason)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2 (run should continue past the failure to a second LLM turn)", len(reqs))
+	}
+	var okResult string
+	var okSeen, failSeen bool
+	for _, m := range reqs[1].Messages {
+		if m.Role != gantry.RoleTool {
+			continue
+		}
+		switch m.ToolCallID {
+		case "ok":
+			okSeen = true
+			okResult = m.Content
+		case "fail":
+			failSeen = true
+		}
+	}
+	if !okSeen || okResult != "6" {
+		t.Errorf("sibling 'ok' result seen=%v content=%q, want seen=true content=%q", okSeen, okResult, "6")
+	}
+	if !failSeen {
+		t.Errorf("expected an error result recorded for the failing call 'fail' too")
 	}
 }
 
@@ -325,5 +386,434 @@ func TestFromToolsDoubleInstallReturnsError(t *testing.T) {
 	}
 	if err := a.With(tool.FromTools(1, addOneTool{})); err == nil {
 		t.Fatal("second install: want error, got nil")
+	}
+}
+
+func TestNewWithPolicyDispatchesPendingCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	reg.Add(addOneTool{})
+	if err := a.With(tool.NewWithPolicy(reg, tool.Policy{Parallelism: 1})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q", state.FinalOutput)
+	}
+}
+
+type failingTool struct {
+	name string
+	err  error
+}
+
+func (t failingTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: t.name, Description: "always fails", Schema: json.RawMessage(`{}`)}
+}
+
+func (t failingTool) Invoke(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, t.err
+}
+
+func TestPolicyStopWaitInFlightSkipsQueuedCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "ok", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	policy := tool.Policy{Parallelism: 1, OnFailure: tool.StopWaitInFlight}
+	if err := a.With(tool.FromToolsWithPolicy(policy, failingTool{name: "boom", err: errors.New("boom")}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := mock.Requests()
+	var okResult string
+	for _, m := range reqs[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "ok" {
+			okResult = m.Content
+		}
+	}
+	if okResult != gantry.ErrToolSkipped.Error() {
+		t.Errorf("call %q result = %q, want skipped (%q)", "ok", okResult, gantry.ErrToolSkipped.Error())
+	}
+}
+
+type gatedTool struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (gatedTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "gated", Description: "blocks until released", Schema: json.RawMessage(`{}`)}
+}
+
+func (g gatedTool) Invoke(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	close(g.started)
+	select {
+	case <-g.release:
+		return json.RawMessage(`"released"`), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// waitThenFailTool wraps failingTool but blocks until wait is closed before
+// returning its error. Parallelism-2 dispatch launches both the failing call
+// and gatedTool's call concurrently with no ordering guarantee between them;
+// since failingTool.Invoke would otherwise return near-instantly, the
+// dispatcher's "aborted" flag could flip before gatedTool's job even reaches
+// its own Invoke call, causing it to be skipped instead of proving it runs
+// while genuinely in flight. Gating the failure on gatedTool's own "started"
+// signal removes that race deterministically, without a sleep.
+type waitThenFailTool struct {
+	failingTool
+	wait <-chan struct{}
+}
+
+func (t waitThenFailTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	<-t.wait
+	return t.failingTool.Invoke(ctx, input)
+}
+
+func TestPolicyStopWaitInFlightLetsRunningCallFinish(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "gated", Name: "gated", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	g := gatedTool{started: make(chan struct{}), release: make(chan struct{})}
+	boom := waitThenFailTool{failingTool: failingTool{name: "boom", err: errors.New("boom")}, wait: g.started}
+	policy := tool.Policy{Parallelism: 2, OnFailure: tool.StopWaitInFlight}
+	if err := a.With(tool.FromToolsWithPolicy(policy, boom, g)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Run(context.Background(), "go")
+		done <- err
+	}()
+
+	select {
+	case <-g.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gated tool never started")
+	}
+	close(g.release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := mock.Requests()
+	for _, m := range reqs[1].Messages {
+		// gatedTool.Invoke returns the JSON string `"released"` (quotes
+		// included, since dispatch stores Content as the raw JSON payload
+		// verbatim), so the success case must compare against the quoted
+		// form, not the bare word.
+		if m.Role == gantry.RoleTool && m.ToolCallID == "gated" && m.Content != `"released"` {
+			t.Errorf("gated call result = %q, want %q (should finish naturally, not be cancelled or skipped)", m.Content, `"released"`)
+		}
+	}
+}
+
+type ctxAwareTool struct {
+	// started is closed on entry to Invoke, before the select below. It lets
+	// a paired failing call in the same batch be gated on this call having
+	// genuinely begun, closing the same race waitThenFailTool closes for
+	// gatedTool (see its comment): without it, a fast-failing sibling
+	// dispatched concurrently could flip the dispatcher's "aborted" flag
+	// before this call's job even reaches its own Invoke, so it would never
+	// run at all rather than being observed in flight and cancelled.
+	started chan struct{}
+	result  chan bool // true if ctx was cancelled before the long timeout
+}
+
+func (ctxAwareTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "ctx_aware", Description: "reports whether ctx was cancelled", Schema: json.RawMessage(`{}`)}
+}
+
+func (c ctxAwareTool) Invoke(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	close(c.started)
+	select {
+	case <-ctx.Done():
+		c.result <- true
+		return json.RawMessage(`"cancelled"`), nil
+	case <-time.After(2 * time.Second):
+		c.result <- false
+		return json.RawMessage(`"not-cancelled"`), nil
+	}
+}
+
+func TestPolicyStopCancelInFlightCancelsRunningCalls(t *testing.T) {
+	// OnFailure=StopCancelInFlight only affects sibling calls; Disposition
+	// defaults to FeedbackToLLM, so the run continues to a second LLM turn —
+	// the mock script needs a response for it.
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "aware", Name: "ctx_aware", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	aware := ctxAwareTool{started: make(chan struct{}), result: make(chan bool, 1)}
+	boom := waitThenFailTool{failingTool: failingTool{name: "boom", err: errors.New("boom")}, wait: aware.started}
+	policy := tool.Policy{Parallelism: 2, OnFailure: tool.StopCancelInFlight}
+	if err := a.With(tool.FromToolsWithPolicy(policy, boom, aware)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	select {
+	case cancelled := <-aware.result:
+		if !cancelled {
+			t.Errorf("ctx_aware call was not cancelled")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx_aware tool never reported a result")
+	}
+}
+
+func TestPolicyHarnessStopAbortsRunButKeepGoingStillRunsSiblings(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "ok", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	policy := tool.Policy{Parallelism: 2, OnFailure: tool.KeepGoing, Disposition: tool.HarnessStop}
+	if err := a.With(tool.FromToolsWithPolicy(policy, failingTool{name: "boom", err: errors.New("boom")}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err == nil || !errors.Is(err, gantry.ErrToolPolicyAborted) {
+		t.Fatalf("Run err = %v, want ErrToolPolicyAborted", err)
+	}
+	if state.DoneReason != gantry.DoneToolPolicyAborted {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneToolPolicyAborted)
+	}
+	found := false
+	for _, r := range state.ToolResults {
+		if r.CallID == "ok" && !r.IsError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the sibling 'ok' call to have run to completion under OnFailure=KeepGoing; results: %+v", state.ToolResults)
+	}
+}
+
+func TestPolicyPersistentErrorForcesCancelAndHarnessStop(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "aware", Name: "ctx_aware", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	aware := ctxAwareTool{started: make(chan struct{}), result: make(chan bool, 1)}
+	authErr := fmt.Errorf("%w: token expired", gantry.ErrToolAuth)
+	boom := waitThenFailTool{failingTool: failingTool{name: "boom", err: authErr}, wait: aware.started}
+	// Policy{} is the zero value: KeepGoing + FeedbackToLLM. The persistent
+	// sentinel must override both.
+	if err := a.With(tool.FromToolsWithPolicy(tool.Policy{Parallelism: 2}, boom, aware)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err == nil || !errors.Is(err, gantry.ErrToolPolicyAborted) {
+		t.Fatalf("Run err = %v, want ErrToolPolicyAborted", err)
+	}
+	if !errors.Is(err, gantry.ErrToolAuth) {
+		t.Errorf("Run err = %v, want errors.Is(err, gantry.ErrToolAuth) to hold (the triggering sentinel must survive the ErrToolPolicyAborted wrap)", err)
+	}
+	if state.DoneReason != gantry.DoneToolPolicyAborted {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneToolPolicyAborted)
+	}
+
+	select {
+	case cancelled := <-aware.result:
+		if !cancelled {
+			t.Errorf("ctx_aware call was not cancelled despite persistent-error override")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx_aware tool never reported a result")
+	}
+}
+
+// TestPolicyLargeFanOutPersistentErrorLeavesNoZeroValueResults is a
+// regression test for a bug where gantry.RunParallel (workers.go, not
+// modified here) can abandon queued jobs entirely rather than ever invoking
+// them: its per-job dispatch loop does
+//
+//	select {
+//	case <-ctx.Done():
+//	        ... return ...
+//	case sem <- struct{}{}:
+//	}
+//
+// one job at a time, in order. If a call's job closure fails fast with a
+// persistent error (gantry.ErrToolAuth / gantry.ErrToolPersistent), the
+// automatic override fires cancel() on the shared execCtx synchronously
+// before that closure returns — strictly before RunParallel's own deferred
+// semaphore release for that job even runs. So by the time the dispatch
+// loop reaches its next not-yet-launched job, ctx.Done() is already closed,
+// and the loop takes that branch instead of ever launching the job (or any
+// job still left in the slice after it) — the job's closure body,
+// including its own aborted.Load() skip path, never runs at all. Before the
+// fix, the corresponding results[i] was only ever written from inside that
+// closure, so an abandoned call's entry was left at Go's zero value
+// (ToolResult{CallID: "", ...}), which would have produced a
+// Role: RoleTool message with no ToolCallID — a 1:1 tool_use/tool_result
+// correspondence violation against real LLM providers.
+//
+// This is reproduced deterministically (not by relying on scheduler luck
+// with full parallelism, which only reproduces the bug probabilistically
+// for a coin-flip's worth of runs) by using bounded parallelism with the
+// slots ahead of the queue held open by calls that are themselves
+// cancellation-aware: with Parallelism == numHeld+1, the failing call and
+// numHeld ctxAwareTool "occupier" calls are the only ones RunParallel's
+// dispatch loop can hand a semaphore slot to before the queue backs up.
+// Every occupier call blocks until it observes ctx.Done() (so it never
+// finishes on its own and steals a freed slot out from under the queue),
+// which guarantees at least one of the many still-queued calls behind them
+// is genuinely parked in RunParallel's select at the moment cancel() fires
+// — and once that first queued call's iteration takes the ctx.Done()
+// branch, gantry.RunParallel abandons every remaining call in the slice
+// unconditionally, regardless of scheduler timing.
+func TestPolicyLargeFanOutPersistentErrorLeavesNoZeroValueResults(t *testing.T) {
+	const numHeld = 2    // occupier calls that hold every semaphore slot open
+	const numQueued = 20 // calls guaranteed to be abandoned by RunParallel
+
+	calls := []gantry.ToolCall{
+		{ID: "fail", Name: "boom", Input: json.RawMessage(`{}`)},
+	}
+	occupiers := make([]ctxAwareTool, numHeld)
+	for i := 0; i < numHeld; i++ {
+		occupiers[i] = ctxAwareTool{started: make(chan struct{}), result: make(chan bool, 1)}
+		calls = append(calls, gantry.ToolCall{
+			ID:    fmt.Sprintf("occupier%d", i),
+			Name:  fmt.Sprintf("occupier%d", i),
+			Input: json.RawMessage(`{}`),
+		})
+	}
+	for i := 0; i < numQueued; i++ {
+		calls = append(calls, gantry.ToolCall{
+			ID:    fmt.Sprintf("ok%d", i),
+			Name:  "add_one",
+			Input: json.RawMessage(fmt.Sprintf("%d", i)),
+		})
+	}
+
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: calls, StopReason: gantry.StopReasonToolUse},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	authErr := fmt.Errorf("%w: token expired", gantry.ErrToolAuth)
+	reg.Add(failingTool{name: "boom", err: authErr})
+	reg.Add(addOneTool{})
+	for i, occ := range occupiers {
+		// Each occupier needs its own tool name since Registry is keyed by
+		// name; wrap ctxAwareTool to answer under a distinct Definition().
+		reg.Add(namedTool{Tool: occ, name: fmt.Sprintf("occupier%d", i)})
+	}
+	if err := a.With(tool.NewWithPolicy(reg, tool.Policy{Parallelism: numHeld + 1})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err == nil || !errors.Is(err, gantry.ErrToolPolicyAborted) {
+		t.Fatalf("Run err = %v, want ErrToolPolicyAborted", err)
+	}
+	if state.DoneReason != gantry.DoneToolPolicyAborted {
+		t.Errorf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneToolPolicyAborted)
+	}
+
+	if len(state.ToolResults) != len(calls) {
+		t.Fatalf("len(ToolResults) = %d, want %d (one result per pending call, none dropped from the slice)", len(state.ToolResults), len(calls))
+	}
+	for i, r := range state.ToolResults {
+		if r.CallID == "" {
+			t.Errorf("ToolResults[%d] = %+v: empty CallID means a zero-value ToolResult slipped through for a call RunParallel abandoned", i, r)
+		}
+	}
+}
+
+// namedTool lets a single Tool value be registered under a caller-chosen
+// name, so distinct ctxAwareTool instances (each with their own started/
+// result channels) can be individually addressed by ToolCall.Name.
+type namedTool struct {
+	tool.Tool
+	name string
+}
+
+func (n namedTool) Definition() gantry.ToolDef {
+	d := n.Tool.Definition()
+	d.Name = n.name
+	return d
+}
+
+func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "add_one", Input: json.RawMessage(`5`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.FromToolsWithPolicy(tool.Policy{Parallelism: 1}, addOneTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q", state.FinalOutput)
 	}
 }
