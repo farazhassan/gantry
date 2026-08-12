@@ -13,6 +13,9 @@ not committed dates.
 - **Streaming** — `StreamingLLMClient` + `RunStream` whole-run event stream
 - **Observability** — Langfuse tracer
 - **UI** — AG-UI protocol support
+- **Checkpointing** — mid-run checkpoint hooks (`checkpointer.New`'s
+  `extraPhases`) and a distributed `Lease` primitive (Redis + etcd) for
+  safe multi-worker resume — see `examples/checkpoint-resume`
 
 ## Toward v0.1
 
