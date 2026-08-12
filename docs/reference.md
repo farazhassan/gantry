@@ -111,8 +111,8 @@ func TestMyTranscript(t *testing.T) {
 ```
 
 Suites are provided for every contract: `Transcript`, `VectorStore`, `Tool`,
-`Checkpointer`, `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`,
-`Planner`, `Retriever`, `LLMClient`, and `Tracer`.
+`Checkpointer`, `Lease`, `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`,
+`Limiter`, `Planner`, `Retriever`, `LLMClient`, and `Tracer`.
 
 ## Eval
 
