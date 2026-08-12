@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ func (l *Lease) Acquire(_ context.Context, id string, ttl time.Duration) (string
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if e, ok := l.holders[id]; ok && time.Now().Before(e.expires) {
-		return "", checkpointer.ErrLeaseHeld
+		return "", fmt.Errorf("%w: id %q", checkpointer.ErrLeaseHeld, id)
 	}
 	tok, err := randomToken()
 	if err != nil {
@@ -44,7 +45,7 @@ func (l *Lease) Renew(_ context.Context, id, token string, ttl time.Duration) er
 	defer l.mu.Unlock()
 	e, ok := l.holders[id]
 	if !ok || e.token != token || !time.Now().Before(e.expires) {
-		return checkpointer.ErrLeaseLost
+		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
 	}
 	e.expires = time.Now().Add(ttl)
 	l.holders[id] = e
@@ -56,7 +57,7 @@ func (l *Lease) Release(_ context.Context, id, token string) error {
 	defer l.mu.Unlock()
 	e, ok := l.holders[id]
 	if !ok || e.token != token {
-		return checkpointer.ErrLeaseLost
+		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
 	}
 	delete(l.holders, id)
 	return nil
