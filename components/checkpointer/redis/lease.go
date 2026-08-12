@@ -53,12 +53,37 @@ func NewLease(rdb goredis.Cmdable, opts ...LeaseOption) *Lease {
 
 func (l *Lease) key(id string) string { return l.prefix + id }
 
+// nowMsLua computes the Redis server's current time in Unix milliseconds
+// into a local "nowMs", anchored to the server's own TIME command rather
+// than any client clock (see the Lease doc comment for why). It is the
+// crux of every script below, so it is defined exactly once here and
+// prepended everywhere, instead of copy-pasted per script where an edit
+// could update some copies and silently miss another.
+const nowMsLua = `
+local t = redis.call("TIME")
+local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+`
+
+// requireHolderLua computes nowMs (via nowMsLua) and then validates that
+// "token" (already declared by the caller) is the current holder of "key"
+// (also already declared) and that its lease has not passed its deadline.
+// It returns 0 (via an early "return") when that check fails, otherwise
+// falls through with curToken/deadline/nowMs all in scope so the caller
+// can perform its own state change (renew's PEXPIRE/HSET, release's DEL).
+// renewScript and releaseScript share this identical validity check.
+const requireHolderLua = nowMsLua + `
+local curToken = redis.call("HGET", key, "token")
+local deadline = redis.call("HGET", key, "deadline")
+if curToken ~= token or not deadline or tonumber(deadline) <= nowMs then
+	return 0
+end
+`
+
 var acquireScript = goredis.NewScript(`
 local key = KEYS[1]
 local token = ARGV[1]
 local ttlMs = tonumber(ARGV[2])
-local t = redis.call("TIME")
-local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+` + nowMsLua + `
 local deadline = redis.call("HGET", key, "deadline")
 if deadline and tonumber(deadline) > nowMs then
 	return 0
@@ -72,13 +97,7 @@ var renewScript = goredis.NewScript(`
 local key = KEYS[1]
 local token = ARGV[1]
 local ttlMs = tonumber(ARGV[2])
-local t = redis.call("TIME")
-local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local curToken = redis.call("HGET", key, "token")
-local deadline = redis.call("HGET", key, "deadline")
-if curToken ~= token or not deadline or tonumber(deadline) <= nowMs then
-	return 0
-end
+` + requireHolderLua + `
 redis.call("HSET", key, "deadline", tostring(nowMs + ttlMs))
 redis.call("PEXPIRE", key, ttlMs * 2)
 return 1
@@ -87,13 +106,7 @@ return 1
 var releaseScript = goredis.NewScript(`
 local key = KEYS[1]
 local token = ARGV[1]
-local t = redis.call("TIME")
-local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local curToken = redis.call("HGET", key, "token")
-local deadline = redis.call("HGET", key, "deadline")
-if curToken ~= token or not deadline or tonumber(deadline) <= nowMs then
-	return 0
-end
+` + requireHolderLua + `
 redis.call("DEL", key)
 return 1
 `)
