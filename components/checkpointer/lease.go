@@ -8,8 +8,9 @@ import (
 )
 
 // Lease is a distributed mutex keyed by run id, used to ensure only one
-// worker resumes a given run at a time. Implementations: components/checkpointer/mem
-// (tests/examples), components/checkpointer/redis, components/checkpointer/etcd.
+// worker resumes a given run at a time. Planned implementations:
+// components/checkpointer/mem (tests/examples), components/checkpointer/redis,
+// components/checkpointer/etcd.
 type Lease interface {
 	// Acquire claims id for ttl. Returns a token identifying this specific
 	// acquisition (a fencing token) for use with Renew/Release. Returns
@@ -17,7 +18,10 @@ type Lease interface {
 	Acquire(ctx context.Context, id string, ttl time.Duration) (token string, err error)
 	// Renew extends a held lease. Returns ErrLeaseLost if token is no
 	// longer the current holder (expired, or reclaimed by another worker
-	// after expiry).
+	// after expiry). Implementations must respect ctx cancellation/deadline
+	// promptly: KeepAlive's stop is synchronous and blocks until an
+	// in-flight Renew returns, so a Renew that ignores ctx can make stop
+	// block indefinitely.
 	Renew(ctx context.Context, id, token string, ttl time.Duration) error
 	// Release gives up a held lease early (e.g. clean shutdown or run
 	// completion). Best-effort: callers should not treat a Release error as
