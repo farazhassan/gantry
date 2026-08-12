@@ -17,9 +17,9 @@ import (
 // another worker's TTL-expiry takeover raced it), the in-flight a.Resume is
 // cancelled via ctx rather than left to run un-owned.
 //
-// The mid-run checkpointer component (see New's extraPhases) must already
-// be attached to a separately — ResumeLocked only manages the lease around
-// a.Resume, it does not itself save state.
+// The mid-run checkpointer component (see New's extraPhases) must already be
+// installed on a, separately from this call — ResumeLocked only manages the
+// lease around a.Resume; it does not itself save state.
 func ResumeLocked(ctx context.Context, a *gantry.Agent, cp Checkpointer, lease Lease, id string, ttl time.Duration) (*gantry.State, error) {
 	state, err := cp.Load(ctx, id)
 	if err != nil {
