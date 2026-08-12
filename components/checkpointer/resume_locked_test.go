@@ -115,3 +115,53 @@ func TestResumeLockedCancelsRunWhenLeaseIsLost(t *testing.T) {
 		t.Fatal("ResumeLocked did not return within 2s of the lease being lost — cancellation did not propagate into the blocked LLM call")
 	}
 }
+
+// alwaysFailRelease wraps a real Lease but forces every Release to fail
+// with a non-ErrLeaseLost error, to exercise ResumeLocked's
+// lease_release_failed trace-recording path (the one branch none of the
+// other tests reach, since mem.Lease's own Release failures are always
+// ErrLeaseLost).
+type alwaysFailRelease struct {
+	checkpointer.Lease
+}
+
+var errReleaseBoom = errors.New("boom")
+
+func (l *alwaysFailRelease) Release(context.Context, string, string) error {
+	return errReleaseBoom
+}
+
+func TestResumeLockedRecordsNonFatalReleaseFailureOnTrace(t *testing.T) {
+	cp := mem.New()
+	seed := gantry.NewState("go")
+	if err := cp.Save(context.Background(), "run-rl-4", seed); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	lease := &alwaysFailRelease{Lease: mem.NewLease()}
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	final, err := checkpointer.ResumeLocked(context.Background(), a, cp, lease, "run-rl-4", time.Second)
+	if err != nil {
+		t.Fatalf("ResumeLocked: %v (a Release failure must not be returned as the run's error)", err)
+	}
+
+	var found *gantry.TraceEvent
+	for _, ev := range final.Trace.Snapshot() {
+		if ev.Name == "lease_release_failed" {
+			e := ev
+			found = &e
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a lease_release_failed trace event; got none")
+	}
+	if !errors.Is(found.Err, errReleaseBoom) {
+		t.Errorf("trace event Err = %v, want wrapped errReleaseBoom", found.Err)
+	}
+	if found.Attrs["id"] != "run-rl-4" {
+		t.Errorf("trace event id attr = %v, want run-rl-4", found.Attrs["id"])
+	}
+}
