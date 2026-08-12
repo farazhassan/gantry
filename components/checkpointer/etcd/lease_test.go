@@ -1,6 +1,7 @@
 package etcd_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -47,4 +48,21 @@ var _ checkpointer.Lease = (*gantryetcd.Lease)(nil)
 func TestLeaseConformance(t *testing.T) {
 	cli := newTestClient(t)
 	conformance.LeaseSuite(t, func() checkpointer.Lease { return gantryetcd.New(cli) })
+}
+
+func TestLeaseKeyPrefixIsApplied(t *testing.T) {
+	cli := newTestClient(t)
+	l := gantryetcd.New(cli, gantryetcd.WithKeyPrefix("myapp/lease/"))
+	ctx := context.Background()
+
+	if _, err := l.Acquire(ctx, "id-1", time.Minute); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	resp, err := cli.Get(ctx, "myapp/lease/id-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(resp.Kvs) != 1 {
+		t.Fatalf("expected key stored under prefix, got %d matching keys", len(resp.Kvs))
+	}
 }

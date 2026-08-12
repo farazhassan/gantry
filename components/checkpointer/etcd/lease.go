@@ -118,6 +118,33 @@ func held(deadline time.Time) bool { return time.Now().Before(deadline) }
 // handful of attempts.
 const maxAcquireAttempts = 10
 
+// getHeld reads id's key, verifies it is currently held by token and has
+// not passed its embedded deadline, and returns the decoded lease's
+// backing native-lease id plus the key's current ModRevision (for the
+// caller's own CAS write). It returns checkpointer.ErrLeaseLost (wrapped
+// with id) if the key is absent, the token doesn't match, or the deadline
+// has passed — the shared preamble of Renew and Release, which otherwise
+// differ only in what they do with a confirmed-held lease (renew it vs.
+// delete it).
+func (l *Lease) getHeld(ctx context.Context, id, token string) (leaseID clientv3.LeaseID, modRevision int64, err error) {
+	key := l.key(id)
+	getResp, err := l.cli.Get(ctx, key)
+	if err != nil {
+		return 0, 0, fmt.Errorf("checkpointer/etcd: %q: %w", id, err)
+	}
+	if len(getResp.Kvs) == 0 {
+		return 0, 0, fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
+	}
+	curToken, deadline, leaseID, err := decodeValue(string(getResp.Kvs[0].Value))
+	if err != nil {
+		return 0, 0, fmt.Errorf("checkpointer/etcd: %q: %w", id, err)
+	}
+	if curToken != token || !held(deadline) {
+		return 0, 0, fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
+	}
+	return leaseID, getResp.Kvs[0].ModRevision, nil
+}
+
 func (l *Lease) Acquire(ctx context.Context, id string, ttl time.Duration) (string, error) {
 	key := l.key(id)
 	tok, err := randomToken()
@@ -174,20 +201,9 @@ func (l *Lease) Acquire(ctx context.Context, id string, ttl time.Duration) (stri
 }
 
 func (l *Lease) Renew(ctx context.Context, id, token string, ttl time.Duration) error {
-	key := l.key(id)
-	getResp, err := l.cli.Get(ctx, key)
+	leaseID, modRevision, err := l.getHeld(ctx, id, token)
 	if err != nil {
-		return fmt.Errorf("checkpointer/etcd: renew %q: %w", id, err)
-	}
-	if len(getResp.Kvs) == 0 {
-		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
-	}
-	curToken, deadline, leaseID, err := decodeValue(string(getResp.Kvs[0].Value))
-	if err != nil {
-		return fmt.Errorf("checkpointer/etcd: renew %q: %w", id, err)
-	}
-	if curToken != token || !held(deadline) {
-		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
+		return err
 	}
 
 	// Push the backing native lease's own physical expiry out too, so it
@@ -202,9 +218,10 @@ func (l *Lease) Renew(ctx context.Context, id, token string, ttl time.Duration) 
 		return fmt.Errorf("checkpointer/etcd: renew %q: %w", id, err)
 	}
 
+	key := l.key(id)
 	newVal := encodeValue(token, time.Now().Add(ttl), leaseID)
 	txnResp, err := l.cli.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", getResp.Kvs[0].ModRevision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", modRevision)).
 		Then(clientv3.OpPut(key, newVal, clientv3.WithLease(leaseID))).
 		Commit()
 	if err != nil {
@@ -217,24 +234,14 @@ func (l *Lease) Renew(ctx context.Context, id, token string, ttl time.Duration) 
 }
 
 func (l *Lease) Release(ctx context.Context, id, token string) error {
-	key := l.key(id)
-	getResp, err := l.cli.Get(ctx, key)
+	leaseID, modRevision, err := l.getHeld(ctx, id, token)
 	if err != nil {
-		return fmt.Errorf("checkpointer/etcd: release %q: %w", id, err)
-	}
-	if len(getResp.Kvs) == 0 {
-		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
-	}
-	curToken, deadline, leaseID, err := decodeValue(string(getResp.Kvs[0].Value))
-	if err != nil {
-		return fmt.Errorf("checkpointer/etcd: release %q: %w", id, err)
-	}
-	if curToken != token || !held(deadline) {
-		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
+		return err
 	}
 
+	key := l.key(id)
 	txnResp, err := l.cli.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", getResp.Kvs[0].ModRevision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", modRevision)).
 		Then(clientv3.OpDelete(key)).
 		Commit()
 	if err != nil {
