@@ -56,7 +56,7 @@ func (l *Lease) Release(_ context.Context, id, token string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.holders[id]
-	if !ok || e.token != token {
+	if !ok || e.token != token || !time.Now().Before(e.expires) {
 		return fmt.Errorf("%w: id %q", checkpointer.ErrLeaseLost, id)
 	}
 	delete(l.holders, id)

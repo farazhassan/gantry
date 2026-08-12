@@ -91,6 +91,23 @@ func LeaseSuite(t *testing.T, factory func() checkpointer.Lease) {
 		}
 	})
 
+	t.Run("release_after_expiry_returns_err_lease_lost", func(t *testing.T) {
+		l := factory()
+		ctx := context.Background()
+		tok, err := l.Acquire(ctx, "lease-7", 30*time.Millisecond)
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		time.Sleep(150 * time.Millisecond)
+		// The token is still the one Acquire returned, but the lease itself
+		// has expired — Release must not treat this as a valid release of a
+		// still-held lease (e.g. deleting a slot another worker has since
+		// reclaimed).
+		if err := l.Release(ctx, "lease-7", tok); !errors.Is(err, checkpointer.ErrLeaseLost) {
+			t.Fatalf("Release after expiry: want ErrLeaseLost, got %v", err)
+		}
+	})
+
 	t.Run("ttl_expiry_unblocks_new_acquire", func(t *testing.T) {
 		l := factory()
 		ctx := context.Background()
