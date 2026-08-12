@@ -216,3 +216,14 @@ func TestNewExtraPhaseOrderingMattersOnAbort(t *testing.T) {
 		t.Fatalf("Save called %d times, want 0 — wrong registration order means the extraPhases hook never observes the abort", spy.len())
 	}
 }
+
+func TestNewRejectsPhaseEndInExtraPhases(t *testing.T) {
+	spy := &spySave{}
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	err := a.With(checkpointer.New(spy, "run-bad-phase", gantry.PhaseEnd))
+	if err == nil {
+		t.Fatal("install checkpointer with PhaseEnd in extraPhases: want error, got nil")
+	}
+}

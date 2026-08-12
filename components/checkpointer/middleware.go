@@ -2,6 +2,7 @@ package checkpointer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/farazhassan/gantry"
@@ -31,8 +32,10 @@ type component struct {
 // For that to work, New must be installed via Agent.With AFTER any
 // middleware on the same phase that can itself abort the run (e.g. after
 // humanloop.New) — Compose (middleware.go) makes the last-registered
-// middleware on a phase the outermost one, and only the outermost
-// middleware is guaranteed to observe an inner middleware's returned error.
+// middleware on a phase the outermost one, and a middleware only observes
+// an error from another middleware registered before it (further in) via
+// its own call to next; one registered after it (further out) never sees
+// that error at all.
 func New(c Checkpointer, id string, extraPhases ...gantry.Phase) gantry.Component {
 	return &component{c: c, id: id, extraPhases: extraPhases}
 }
@@ -43,6 +46,9 @@ func (comp *component) Install(a *gantry.Agent) error {
 		return err
 	}
 	for _, phase := range comp.extraPhases {
+		if phase == gantry.PhaseEnd {
+			return errors.New("checkpointer: PhaseEnd is not a valid extraPhases entry; PhaseEnd is already saved unconditionally by New")
+		}
 		name := "components/checkpointer:save:" + string(phase)
 		if err := a.UseNamed(phase, name, comp.saveAlways); err != nil {
 			return err
