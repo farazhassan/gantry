@@ -146,7 +146,7 @@ func (s *Store) Upsert(ctx context.Context, points ...Point) error {
 	}
 	wp := make([]wirePoint, len(points))
 	for i, p := range points {
-		wp[i] = wirePoint{ID: p.ID, Vector: p.Vector, Payload: p.Payload}
+		wp[i] = wirePoint(p)
 	}
 	return s.doJSON(ctx, http.MethodPut, "/collections/"+s.collection+"/points", upsertRequest{Points: wp}, nil)
 }
@@ -163,7 +163,7 @@ func (s *Store) Search(ctx context.Context, vector []float32, k int) ([]Hit, err
 	}
 	hits := make([]Hit, len(out.Result))
 	for i, h := range out.Result {
-		hits[i] = Hit{ID: h.ID, Score: h.Score, Payload: h.Payload}
+		hits[i] = Hit(h)
 	}
 	return hits, nil
 }
