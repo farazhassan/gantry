@@ -44,6 +44,12 @@ func ResumeLocked(ctx context.Context, a *gantry.Agent, cp Checkpointer, lease L
 	}()
 
 	result, runErr := a.Resume(runCtx, state)
+	// a.Resume has already returned, so cancelling runCtx now can't affect
+	// it — but it's what unblocks a KeepAlive Renew call that's currently
+	// in flight, which stop() otherwise has no way to interrupt: closing
+	// stop's internal channel only stops *future* ticks, it can't reach
+	// into an already-running Renew call.
+	cancel()
 	stop()
 
 	if releaseErr := lease.Release(context.WithoutCancel(ctx), id, token); releaseErr != nil && !errors.Is(releaseErr, ErrLeaseLost) {

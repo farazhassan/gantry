@@ -116,6 +116,73 @@ func TestResumeLockedCancelsRunWhenLeaseIsLost(t *testing.T) {
 	}
 }
 
+// slowRenew wraps a real Lease but makes every Renew block until its ctx is
+// cancelled (a well-behaved, ctx-respecting implementation of a call that's
+// simply slow — e.g. a stalled network round-trip), signaling on started
+// the moment it enters that block. Used to prove ResumeLocked cancels
+// KeepAlive's context before waiting for it to stop, rather than deadlocking
+// on an in-flight Renew that has nothing to unblock it.
+type slowRenew struct {
+	checkpointer.Lease
+	started chan struct{}
+}
+
+func (l *slowRenew) Renew(ctx context.Context, id, token string, ttl time.Duration) error {
+	select {
+	case l.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestResumeLockedCancelsKeepAliveContextBeforeWaitingForStop(t *testing.T) {
+	cp := mem.New()
+	seed := gantry.NewState("go")
+	if err := cp.Save(context.Background(), "run-rl-5", seed); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	lease := &slowRenew{Lease: mem.NewLease(), started: make(chan struct{})}
+	llm := &blockingLLM{unblock: make(chan struct{}), resp: gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd}}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+
+	// A small ttl so KeepAlive's first renewal tick (ttl/3) fires quickly.
+	const ttl = 15 * time.Millisecond
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := checkpointer.ResumeLocked(context.Background(), a, cp, lease, "run-rl-5", ttl)
+		resultCh <- err
+	}()
+
+	// Wait for a Renew call to genuinely be in flight (blocked on its ctx)
+	// before letting a.Resume finish, so stop() is guaranteed to race a
+	// live, currently-blocked Renew rather than one that already returned.
+	select {
+	case <-lease.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Renew call started within 2s")
+	}
+
+	close(llm.unblock) // let a.Resume finish; Renew is still blocked on its ctx
+
+	select {
+	case err := <-resultCh:
+		if err != nil {
+			t.Fatalf("ResumeLocked: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		// If stop() doesn't cancel runCtx before waiting for the KeepAlive
+		// goroutine to exit, this call deadlocks forever: stop() blocks on
+		// the goroutine returning, the goroutine blocks on ctx.Done() inside
+		// Renew, and nothing left in ResumeLocked would ever cancel that ctx
+		// before stop() itself returns.
+		t.Fatal("ResumeLocked did not return within 2s after a.Resume finished — " +
+			"stop() is likely blocked on an in-flight Renew with nothing to unblock it")
+	}
+}
+
 // alwaysFailRelease wraps a real Lease but forces every Release to fail
 // with a non-ErrLeaseLost error, to exercise ResumeLocked's
 // lease_release_failed trace-recording path (the one branch none of the
