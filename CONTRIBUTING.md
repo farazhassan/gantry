@@ -15,7 +15,7 @@ documentation improvements are all appreciated.
 
 ## Development setup
 
-Gantry needs **Go 1.22+**. Clone the repository and work from its root. The
+Gantry needs **Go 1.24+**. Clone the repository and work from its root. The
 project is organized as multiple Go modules — the root module plus one nested
 module per component that needs a third-party dependency, so the root module
 stays dependency-free:

@@ -35,17 +35,24 @@ you need.
 | **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.New(l)` | `NewBudget(Limits{...})` |
 | **compactor** | Trims history to fit a token budget before the LLM call | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
-| **checkpointer** | Saves & restores state by id for resume / replay | `checkpointer.New(c, id)` | — |
-| **checkpointer/mem** | `checkpointer.Checkpointer` backed by an in-memory store (tests, examples) | `mem.New()` | `NewStore()` |
+| **checkpointer** | Saves & restores state by id for resume / replay; optionally saves mid-run too (see `extraPhases`) | `checkpointer.New(c, id, extraPhases...)` | — |
+| **checkpointer/mem** | `checkpointer.Checkpointer` and `checkpointer.Lease` backed by in-memory stores (tests, examples) | `mem.New()` · `mem.NewLease()` | `NewStore()` |
 | **checkpointer/file** | `checkpointer.Checkpointer` backed by a file store (one file per id, atomic writes) | `file.New(dir)` | `NewStore(dir)` |
 | **checkpointer/sql** | `checkpointer.Store` on any `database/sql` connection (SQLite, Postgres, …) | `sql.New(db)` via `checkpointer.FromStore` | — |
-| **checkpointer/redis** | `checkpointer.Store` on Redis (own module) | `redis.New(rdb)` via `checkpointer.FromStore` | — |
+| **checkpointer/redis** | `checkpointer.Store` and `checkpointer.Lease` on Redis (own module) | `redis.New(rdb)` via `checkpointer.FromStore` · `redis.NewLease(rdb)` | — |
+| **checkpointer/etcd** | `checkpointer.Lease` on etcd (own module) | `etcd.New(cli)` | — |
 
 Each built-in is a reference implementation — swap in your own (a vector-store
 retriever, a real guardrail service) by satisfying the component's interface.
 `checkpointer/mem`, `checkpointer/file`, and `checkpointer/sql` need no
-third-party dependency and live in the root module; `checkpointer/redis` and
-`sqlitevec` do need one, so each lives in its own Go module.
+third-party dependency and live in the root module; `checkpointer/redis`,
+`checkpointer/etcd`, and `sqlitevec` do need one, so each lives in its own Go
+module.
+
+For crash recovery across horizontally-scaled workers, pair a `checkpointer.Lease`
+(`redis.NewLease`/`etcd.New`) with `checkpointer.ResumeLocked`, which wraps
+Acquire → Load → Resume → Release into one call — see
+`examples/checkpoint-resume`.
 
 `memory` and `retriever`'s `NewVectorRetriever` are two policies — read-write
 and read-only — over one shared **`components/vectorstore`** `Store` interface
@@ -104,8 +111,8 @@ func TestMyTranscript(t *testing.T) {
 ```
 
 Suites are provided for every contract: `Transcript`, `VectorStore`, `Tool`,
-`Checkpointer`, `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`, `Limiter`,
-`Planner`, `Retriever`, `LLMClient`, and `Tracer`.
+`Checkpointer`, `Lease`, `Compactor`, `Critic`, `Guardrail`, `HumanInLoop`,
+`Limiter`, `Planner`, `Retriever`, `LLMClient`, and `Tracer`.
 
 ## Eval
 
@@ -135,7 +142,7 @@ into jobs that double as required status checks for branch protection on `main`:
 
 - **Lint & format** — `gofmt` check, `go vet`, and `staticcheck`.
 - **Build** — `go build ./...` on Linux, macOS, and Windows.
-- **Test** — `go test -race` with coverage on Go 1.22 and the latest stable Go.
+- **Test** — `go test -race` with coverage on Go 1.24 and the latest stable Go.
 - **Tidy** — `go mod verify` plus a `go mod tidy` no-op check.
 
 Two more workflows complete the pipeline:

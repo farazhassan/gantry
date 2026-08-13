@@ -9,7 +9,7 @@ and shipping LLM agents in Go.
 [![CI](https://github.com/farazhassan/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml/badge.svg)](https://github.com/farazhassan/gantry/actions/workflows/codeql.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/farazhassan/gantry.svg)](https://pkg.go.dev/github.com/farazhassan/gantry)
-[![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev/dl/)
+[![Go 1.24+](https://img.shields.io/badge/go-1.24%2B-00ADD8)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/farazhassan/gantry?sort=semver)](https://github.com/farazhassan/gantry/releases/latest)
 
@@ -56,7 +56,7 @@ testability the wedge promises, made concrete.
 go get github.com/farazhassan/gantry
 ```
 
-Requires **Go 1.22+**.
+Requires **Go 1.24+**.
 
 ## Quick start
 

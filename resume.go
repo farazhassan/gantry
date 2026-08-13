@@ -30,9 +30,12 @@ func (a *Agent) RunFrom(ctx context.Context, prior *State, input string) (*State
 // non-nil; a nil prior returns a fresh empty State and an error, honoring the
 // Run-family contract that the returned *State is never nil.
 //
-// Note: the in-repo checkpointer saves only at PhaseEnd (terminal state), so
-// resuming a loaded checkpoint is typically a no-op. True mid-run crash recovery
-// requires a mid-run checkpointer, which is out of scope.
+// Note: by default the in-repo checkpointer saves only at PhaseEnd (terminal
+// state), so resuming a loaded checkpoint is typically a no-op. For true
+// mid-run crash recovery, install components/checkpointer's New with
+// extraPhases to add mid-run (and save-on-abort) checkpoints, and pair it
+// with a components/checkpointer.Lease (see ResumeLocked) so only one worker
+// resumes a given run at a time.
 func (a *Agent) Resume(ctx context.Context, prior *State) (*State, error) {
 	if prior == nil {
 		return NewState(""), errors.New("gantry: Resume requires a non-nil prior state")
