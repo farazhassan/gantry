@@ -14,7 +14,12 @@ import (
 	"github.com/farazhassan/gantry/eval"
 )
 
-const leaseTTL = 40 * time.Millisecond
+// leaseTTL is deliberately generous (not the tightest value that would still
+// pass) — worker B's "immediate" takeover attempt in scenario 1 has to lose
+// the Acquire race against worker A's still-live lease, and on a loaded CI
+// runner even a few tens of milliseconds of scheduling delay between worker
+// A's Acquire and worker B's could otherwise flip that outcome.
+const leaseTTL = 200 * time.Millisecond
 
 // newSeedState returns a fresh mid-run checkpoint: as if a mid-run save
 // (checkpointer.New's extraPhases, see components/checkpointer/middleware_test.go

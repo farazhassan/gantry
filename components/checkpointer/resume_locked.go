@@ -9,8 +9,8 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// ResumeLocked loads id from cp, acquires a Lease on it, resumes a under a
-// background-renewed lease, then releases the lease. It returns
+// ResumeLocked loads id from cp, acquires a Lease on it, resumes the run on
+// a under that background-renewed lease, then releases the lease. It returns
 // ErrLeaseHeld immediately if another worker currently holds id — no
 // retry/backoff is built in; callers decide whether and how to retry. If
 // the lease is lost mid-run (e.g. this worker stalled long enough that

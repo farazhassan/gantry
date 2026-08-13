@@ -8,7 +8,7 @@ import (
 )
 
 // Lease is a distributed mutex keyed by run id, used to ensure only one
-// worker resumes a given run at a time. Planned implementations:
+// worker resumes a given run at a time. Implementations:
 // components/checkpointer/mem (tests/examples), components/checkpointer/redis,
 // components/checkpointer/etcd.
 type Lease interface {

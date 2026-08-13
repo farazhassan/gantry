@@ -1,6 +1,6 @@
 module github.com/farazhassan/gantry/components/checkpointer/etcd
 
-go 1.23.4
+go 1.24
 
 replace github.com/farazhassan/gantry => ../../..
 

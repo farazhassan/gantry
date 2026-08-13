@@ -11,10 +11,10 @@ import (
 
 // LeaseSuite verifies the contract of checkpointer.Lease. factory need not
 // return a Lease over a fresh backend on each call — sub-tests use disjoint
-// ids (lease-1..lease-6), so a single shared backend behind factory is
-// safe, mirroring how CheckpointerSuite's real consumers (e.g.
-// components/checkpointer/redis/store_test.go) already reuse one backend
-// across every factory() call.
+// ids (lease-1 through lease-7, plus lease-2-other), so a single shared
+// backend behind factory is safe, mirroring how CheckpointerSuite's real
+// consumers (e.g. components/checkpointer/redis/store_test.go) already
+// reuse one backend across every factory() call.
 func LeaseSuite(t *testing.T, factory func() checkpointer.Lease) {
 	t.Helper()
 
