@@ -183,6 +183,111 @@ func TestResumeLockedCancelsKeepAliveContextBeforeWaitingForStop(t *testing.T) {
 	}
 }
 
+// gatedAcquire wraps a real Lease but blocks every Acquire call until
+// proceed is closed, signaling on called the moment it's entered. Used to
+// simulate a whole competing resume-and-checkpoint cycle happening in the
+// window before this call's Acquire has actually returned, regardless of
+// whether ResumeLocked calls Acquire before or after Load.
+type gatedAcquire struct {
+	checkpointer.Lease
+	called  chan struct{}
+	proceed chan struct{}
+}
+
+func (l *gatedAcquire) Acquire(ctx context.Context, id string, ttl time.Duration) (string, error) {
+	select {
+	case l.called <- struct{}{}:
+	default:
+	}
+	<-l.proceed
+	return l.Lease.Acquire(ctx, id, ttl)
+}
+
+func TestResumeLockedDoesNotResumeAStaleLoadWonAfterAConcurrentSave(t *testing.T) {
+	cp := mem.New()
+	realLease := mem.NewLease()
+
+	stale := gantry.NewState("go")
+	stale.Iteration = 1
+	if err := cp.Save(context.Background(), "run-rl-6", stale); err != nil {
+		t.Fatalf("seed stale Save: %v", err)
+	}
+
+	lease := &gatedAcquire{Lease: realLease, called: make(chan struct{}), proceed: make(chan struct{})}
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	resultCh := make(chan *gantry.State, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := checkpointer.ResumeLocked(context.Background(), a, cp, lease, "run-rl-6", time.Minute)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	select {
+	case <-lease.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Acquire was not called within 2s")
+	}
+
+	// Simulate a second worker completing an entire resume-and-checkpoint
+	// cycle in the window before this call's Acquire has returned: it wins
+	// the (currently unheld) lease, saves a newer checkpoint, and releases.
+	tok, err := realLease.Acquire(context.Background(), "run-rl-6", time.Minute)
+	if err != nil {
+		t.Fatalf("simulated concurrent worker Acquire: %v", err)
+	}
+	fresh := gantry.NewState("go")
+	fresh.Iteration = 99 // a distinctive marker no normal 1-iteration run would produce
+	if err := cp.Save(context.Background(), "run-rl-6", fresh); err != nil {
+		t.Fatalf("simulated concurrent worker Save: %v", err)
+	}
+	if err := realLease.Release(context.Background(), "run-rl-6", tok); err != nil {
+		t.Fatalf("simulated concurrent worker Release: %v", err)
+	}
+
+	close(lease.proceed)
+
+	result := <-resultCh
+	if err := <-errCh; err != nil {
+		t.Fatalf("ResumeLocked: %v", err)
+	}
+	if result.Iteration != 99 {
+		t.Fatalf("resumed from Iteration=%d, want 99 — ResumeLocked used a checkpoint it loaded before actually holding the lease, missing a newer save made by a concurrent worker in between", result.Iteration)
+	}
+}
+
+// failingLoad always returns err from Load, to exercise ResumeLocked's
+// release-the-lease-on-load-failure path.
+type failingLoad struct {
+	checkpointer.Checkpointer
+	err error
+}
+
+func (c *failingLoad) Load(context.Context, string) (*gantry.State, error) { return nil, c.err }
+
+func TestResumeLockedReleasesLeaseWhenLoadFailsAfterAcquire(t *testing.T) {
+	realCP := mem.New()
+	loadErr := errors.New("load boom")
+	cp := &failingLoad{Checkpointer: realCP, err: loadErr}
+	lease := mem.NewLease()
+
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	_, err := checkpointer.ResumeLocked(context.Background(), a, cp, lease, "run-rl-7", time.Second)
+	if !errors.Is(err, loadErr) {
+		t.Fatalf("ResumeLocked error = %v, want wrapped %v", err, loadErr)
+	}
+
+	// The lease must have been released despite the Load failure — a fresh
+	// Acquire should succeed immediately rather than waiting out the ttl.
+	if _, err := lease.Acquire(context.Background(), "run-rl-7", time.Second); err != nil {
+		t.Fatalf("Acquire after failed ResumeLocked: %v (lease was not released on Load failure)", err)
+	}
+}
+
 // alwaysFailRelease wraps a real Lease but forces every Release to fail
 // with a non-ErrLeaseLost error, to exercise ResumeLocked's
 // lease_release_failed trace-recording path (the one branch none of the

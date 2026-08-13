@@ -51,7 +51,7 @@ module.
 
 For crash recovery across horizontally-scaled workers, pair a `checkpointer.Lease`
 (`redis.NewLease`/`etcd.New`) with `checkpointer.ResumeLocked`, which wraps
-Load → Acquire → Resume → Release into one call — see
+Acquire → Load → Resume → Release into one call — see
 `examples/checkpoint-resume`.
 
 `memory` and `retriever`'s `NewVectorRetriever` are two policies — read-write
