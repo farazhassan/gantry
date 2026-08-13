@@ -142,7 +142,7 @@ into jobs that double as required status checks for branch protection on `main`:
 
 - **Lint & format** — `gofmt` check, `go vet`, and `staticcheck`.
 - **Build** — `go build ./...` on Linux, macOS, and Windows.
-- **Test** — `go test -race` with coverage on Go 1.22 and the latest stable Go.
+- **Test** — `go test -race` with coverage on Go 1.24 and the latest stable Go.
 - **Tidy** — `go mod verify` plus a `go mod tidy` no-op check.
 
 Two more workflows complete the pipeline:
