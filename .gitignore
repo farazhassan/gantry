@@ -23,5 +23,9 @@ vendor/
 coverage.out
 *.coverprofile
 
+# MkDocs build output
+/site/
+.venv/
+
 # Internal planning/design docs (not published)
 docs/superpowers/

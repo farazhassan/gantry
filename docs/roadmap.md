@@ -2,7 +2,7 @@
 
 The core loop and component contracts are in place; the items below are planned
 built-ins, adapters, and capabilities. Contributions toward any of these are
-especially welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+especially welcome — see [CONTRIBUTING.md](https://github.com/farazhassan/gantry/blob/main/CONTRIBUTING.md).
 
 Items are grouped by milestone, then by theme. Milestones express rough priority,
 not committed dates.

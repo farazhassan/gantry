@@ -1,0 +1,51 @@
+name: Docs
+
+# Automatic push trigger is disabled to minimize GitHub Actions usage costs.
+# Run manually from the Actions tab ("Run workflow") when needed. To
+# re-enable push-triggered deploys, restore:
+#   push:
+#     branches: [main]
+#     paths:
+#       - 'docs/**'
+#       - 'mkdocs.yml'
+#       - '.github/workflows/docs.yml'
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
+        run: pip install -r docs/requirements.txt
+      - name: Build site
+        run: mkdocs build --strict
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
