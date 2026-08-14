@@ -1,4 +1,9 @@
-# Gantry
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/gantry-wordmark-dark.svg">
+    <img src="docs/assets/brand/gantry-wordmark-light.svg" alt="Gantry" height="56">
+  </picture>
+</p>
 
 **A tiny, testable, Go-native agent runtime for teams that want control, conformance, and no framework lock-ins.**
 

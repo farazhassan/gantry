@@ -19,6 +19,8 @@ nav:
 
 theme:
   name: material
+  logo: assets/brand/gantry-icon.svg
+  favicon: assets/brand/gantry-icon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
