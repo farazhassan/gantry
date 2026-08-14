@@ -27,9 +27,10 @@ func DefaultStartHandler(ctx context.Context, state *State) error {
 func DefaultLLMCallHandler(client LLMClient) Handler {
 	return func(ctx context.Context, state *State) error {
 		req := LLMRequest{
-			System:   state.System,
-			Messages: state.Messages,
-			Tools:    state.Tools,
+			System:      state.System,
+			Messages:    state.Messages,
+			Tools:       state.Tools,
+			Temperature: temperatureFrom(ctx),
 		}
 		genCtx, gen := startGeneration(ctx, req)
 		resp, err := invokeLLM(genCtx, client, state, req)

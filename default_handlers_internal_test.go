@@ -9,6 +9,16 @@ type stubLLM struct{ resp LLMResponse }
 
 func (s stubLLM) Generate(context.Context, LLMRequest) (LLMResponse, error) { return s.resp, nil }
 
+type recordingLLM struct {
+	resp    LLMResponse
+	capture *LLMRequest
+}
+
+func (r recordingLLM) Generate(_ context.Context, req LLMRequest) (LLMResponse, error) {
+	*r.capture = req
+	return r.resp, nil
+}
+
 type streamStubLLM struct {
 	resp   LLMResponse
 	deltas []string
@@ -95,5 +105,37 @@ func TestDefaultLLMCallHandler_StreamingStillRecordsGeneration(t *testing.T) {
 	gen := findEndedSpan(t, trc, "model.call")
 	if gen.Attrs[SpanKindKey] != SpanKindGeneration || gen.Attrs[AttrOutput] == "" {
 		t.Fatalf("streaming generation span incomplete: %v", gen.Attrs)
+	}
+}
+
+func TestDefaultLLMCallHandler_UsesContextTemperature(t *testing.T) {
+	ctx := withTemperature(context.Background(), 0.9)
+
+	var gotReq LLMRequest
+	h := DefaultLLMCallHandler(recordingLLM{
+		resp:    LLMResponse{Content: "hi"},
+		capture: &gotReq,
+	})
+	state := &State{System: "sys", Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(ctx, state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if gotReq.Temperature != 0.9 {
+		t.Errorf("req.Temperature = %v, want 0.9", gotReq.Temperature)
+	}
+}
+
+func TestDefaultLLMCallHandler_NoContextTemperatureDefaultsToZero(t *testing.T) {
+	var gotReq LLMRequest
+	h := DefaultLLMCallHandler(recordingLLM{
+		resp:    LLMResponse{Content: "hi"},
+		capture: &gotReq,
+	})
+	state := &State{System: "sys", Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(context.Background(), state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if gotReq.Temperature != 0 {
+		t.Errorf("req.Temperature = %v, want 0", gotReq.Temperature)
 	}
 }

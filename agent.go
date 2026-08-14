@@ -32,6 +32,20 @@ type Agent struct {
 // Option configures an Agent during NewAgent.
 type Option func(*Agent) error
 
+// temperatureKey is the context key under which the agent's configured
+// temperature is stored so DefaultLLMCallHandler can read it without the
+// value being threaded through every signature. Mirrors tracerKey in trace.go.
+type temperatureKey struct{}
+
+func withTemperature(ctx context.Context, t float64) context.Context {
+	return context.WithValue(ctx, temperatureKey{}, t)
+}
+
+func temperatureFrom(ctx context.Context) float64 {
+	t, _ := ctx.Value(temperatureKey{}).(float64)
+	return t
+}
+
 // NewAgent returns a new Agent. WithLLM is required; all other options are optional.
 func NewAgent(opts ...Option) (*Agent, error) {
 	a := &Agent{
@@ -298,6 +312,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// Make the tracer reachable from built-in handlers (e.g. the generation
 	// span in DefaultLLMCallHandler) without threading it through signatures.
 	ctx = withTracer(ctx, tracer)
+	ctx = withTemperature(ctx, a.temperature)
 
 	wrap := func(err error) error {
 		return wrapError(err, state.Trace)
