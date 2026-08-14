@@ -2,6 +2,7 @@ package gantry_test
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -101,6 +102,64 @@ func TestWithMaxIterationsNegativeErrors(t *testing.T) {
 	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithMaxIterations(-5))
 	if err == nil {
 		t.Errorf("expected error for MaxIterations(-5)")
+	}
+}
+
+func TestWithTemperature(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(0.7))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0.7 {
+		t.Errorf("Temperature() = %v, want 0.7", a.Temperature())
+	}
+}
+
+func TestAgentDefaultTemperature(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0 {
+		t.Errorf("default Temperature() = %v, want 0", a.Temperature())
+	}
+}
+
+func TestWithTemperatureNegativeErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(-0.1))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(-0.1)")
+	}
+}
+
+func TestWithTemperatureZeroIsValid(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0 {
+		t.Errorf("Temperature() = %v, want 0", a.Temperature())
+	}
+}
+
+func TestWithTemperatureNaNErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.NaN()))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(NaN)")
+	}
+}
+
+func TestWithTemperaturePositiveInfErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.Inf(1)))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(+Inf)")
+	}
+}
+
+func TestWithTemperatureNegativeInfErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.Inf(-1)))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(-Inf)")
 	}
 }
 

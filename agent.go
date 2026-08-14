@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 )
 
 const defaultMaxIterations = 25
@@ -20,6 +21,7 @@ type Agent struct {
 	llm           LLMClient
 	tracer        Tracer
 	maxIterations int
+	temperature   float64
 	name          string
 
 	chains      map[Phase][]namedMW
@@ -30,6 +32,20 @@ type Agent struct {
 
 // Option configures an Agent during NewAgent.
 type Option func(*Agent) error
+
+// temperatureKey is the context key under which the agent's configured
+// temperature is stored so DefaultLLMCallHandler can read it without the
+// value being threaded through every signature. Mirrors tracerKey in trace.go.
+type temperatureKey struct{}
+
+func withTemperature(ctx context.Context, t float64) context.Context {
+	return context.WithValue(ctx, temperatureKey{}, t)
+}
+
+func temperatureFrom(ctx context.Context) float64 {
+	t, _ := ctx.Value(temperatureKey{}).(float64)
+	return t
+}
 
 // NewAgent returns a new Agent. WithLLM is required; all other options are optional.
 func NewAgent(opts ...Option) (*Agent, error) {
@@ -71,6 +87,19 @@ func WithMaxIterations(n int) Option {
 			return errors.New("gantry: WithMaxIterations must be positive")
 		}
 		a.maxIterations = n
+		return nil
+	}
+}
+
+// WithTemperature sets the sampling temperature applied to every LLM call
+// this agent makes. Zero (the default) means "use the provider's default",
+// matching LLMRequest.Temperature's zero-value convention.
+func WithTemperature(t float64) Option {
+	return func(a *Agent) error {
+		if t < 0 || math.IsNaN(t) || math.IsInf(t, 0) {
+			return errors.New("gantry: WithTemperature must be a non-negative finite number")
+		}
+		a.temperature = t
 		return nil
 	}
 }
@@ -197,6 +226,10 @@ func (a *Agent) RegisterPhase(phase Phase, pos Position, anchor Phase) error {
 // MaxIterations returns the loop iteration cap.
 func (a *Agent) MaxIterations() int { return a.maxIterations }
 
+// Temperature returns the configured sampling temperature (0 unless
+// WithTemperature was used).
+func (a *Agent) Temperature() float64 { return a.temperature }
+
 // Name returns the agent's identity name ("" unless WithName was used).
 func (a *Agent) Name() string { return a.name }
 
@@ -280,6 +313,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// Make the tracer reachable from built-in handlers (e.g. the generation
 	// span in DefaultLLMCallHandler) without threading it through signatures.
 	ctx = withTracer(ctx, tracer)
+	ctx = withTemperature(ctx, a.temperature)
 
 	wrap := func(err error) error {
 		return wrapError(err, state.Trace)

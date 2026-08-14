@@ -61,7 +61,9 @@ Providers that need no key (e.g. a local Ollama server) simply omit
   `MaxTokens == 0` mean "use the provider default" — do not send an explicit `0`
   that would override the provider. If a provider *requires* a positive value
   (e.g. Anthropic's `max_tokens`), the adapter substitutes a sensible default
-  only when the request leaves it at 0.
+  only when the request leaves it at 0. Callers going through the normal
+  `Agent.Run` path set `Temperature` agent-wide with `gantry.WithTemperature`;
+  it is applied to every request `DefaultLLMCallHandler` builds.
 - **System prompt** goes wherever the provider expects it: a leading
   system-role message (Ollama, OpenAI) or a dedicated top-level field
   (Anthropic). Either way the caller just sets `LLMRequest.System`.

@@ -29,6 +29,27 @@ func TestDefaultLLMCallHandler(t *testing.T) {
 	}
 }
 
+func TestDefaultLLMCallHandlerThroughAgentRun_SendsConfiguredTemperature(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{
+		Content:    "hello",
+		StopReason: gantry.StopReasonEnd,
+	})
+	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithTemperature(0.4))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if _, err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("Requests() len = %d, want 1", len(reqs))
+	}
+	if reqs[0].Temperature != 0.4 {
+		t.Errorf("Requests()[0].Temperature = %v, want 0.4", reqs[0].Temperature)
+	}
+}
+
 func TestDefaultPostLLMHandlerNoToolCallsSetsDone(t *testing.T) {
 	state := gantry.NewState("hi")
 	state.LastResponse = &gantry.LLMResponse{
