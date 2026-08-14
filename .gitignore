@@ -29,3 +29,6 @@ coverage.out
 
 # Internal planning/design docs (not published)
 docs/superpowers/
+
+# Brainstorming visual companion session files
+/.superpowers/

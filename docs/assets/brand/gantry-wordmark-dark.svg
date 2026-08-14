@@ -1,0 +1,8 @@
+<svg width="420" height="120" viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Gantry">
+  <circle cx="60" cy="60" r="46" fill="none" stroke="#ffffff" stroke-width="13"
+    stroke-linecap="butt" stroke-dasharray="228 61.4" transform="rotate(37 60 60)"/>
+  <rect x="58" y="53.5" width="46" height="13" fill="#ffffff"/>
+  <text x="150" y="60" font-size="82" font-weight="800"
+    font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    dominant-baseline="central" letter-spacing="-1" fill="#ffffff">Gantry</text>
+</svg>
