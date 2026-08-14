@@ -104,6 +104,43 @@ func TestWithMaxIterationsNegativeErrors(t *testing.T) {
 	}
 }
 
+func TestWithTemperature(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(0.7))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0.7 {
+		t.Errorf("Temperature() = %v, want 0.7", a.Temperature())
+	}
+}
+
+func TestAgentDefaultTemperature(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0 {
+		t.Errorf("default Temperature() = %v, want 0", a.Temperature())
+	}
+}
+
+func TestWithTemperatureNegativeErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(-0.1))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(-0.1)")
+	}
+}
+
+func TestWithTemperatureZeroIsValid(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if a.Temperature() != 0 {
+		t.Errorf("Temperature() = %v, want 0", a.Temperature())
+	}
+}
+
 func TestUseNamedRegistersWithName(t *testing.T) {
 	a, _ := gantry.NewAgent(gantry.WithLLM(nilLLM{}))
 	mw := func(next gantry.Handler) gantry.Handler { return next }

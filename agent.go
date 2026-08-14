@@ -20,6 +20,7 @@ type Agent struct {
 	llm           LLMClient
 	tracer        Tracer
 	maxIterations int
+	temperature   float64
 	name          string
 
 	chains      map[Phase][]namedMW
@@ -71,6 +72,19 @@ func WithMaxIterations(n int) Option {
 			return errors.New("gantry: WithMaxIterations must be positive")
 		}
 		a.maxIterations = n
+		return nil
+	}
+}
+
+// WithTemperature sets the sampling temperature applied to every LLM call
+// this agent makes. Zero (the default) means "use the provider's default",
+// matching LLMRequest.Temperature's zero-value convention.
+func WithTemperature(t float64) Option {
+	return func(a *Agent) error {
+		if t < 0 {
+			return errors.New("gantry: WithTemperature must be non-negative")
+		}
+		a.temperature = t
 		return nil
 	}
 }
@@ -196,6 +210,10 @@ func (a *Agent) RegisterPhase(phase Phase, pos Position, anchor Phase) error {
 
 // MaxIterations returns the loop iteration cap.
 func (a *Agent) MaxIterations() int { return a.maxIterations }
+
+// Temperature returns the configured sampling temperature (0 unless
+// WithTemperature was used).
+func (a *Agent) Temperature() float64 { return a.temperature }
 
 // Name returns the agent's identity name ("" unless WithName was used).
 func (a *Agent) Name() string { return a.name }
