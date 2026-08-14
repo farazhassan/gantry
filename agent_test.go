@@ -2,6 +2,7 @@ package gantry_test
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -138,6 +139,27 @@ func TestWithTemperatureZeroIsValid(t *testing.T) {
 	}
 	if a.Temperature() != 0 {
 		t.Errorf("Temperature() = %v, want 0", a.Temperature())
+	}
+}
+
+func TestWithTemperatureNaNErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.NaN()))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(NaN)")
+	}
+}
+
+func TestWithTemperaturePositiveInfErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.Inf(1)))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(+Inf)")
+	}
+}
+
+func TestWithTemperatureNegativeInfErrors(t *testing.T) {
+	_, err := gantry.NewAgent(gantry.WithLLM(nilLLM{}), gantry.WithTemperature(math.Inf(-1)))
+	if err == nil {
+		t.Errorf("expected error for WithTemperature(-Inf)")
 	}
 }
 

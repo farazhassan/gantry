@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 )
 
 const defaultMaxIterations = 25
@@ -95,8 +96,8 @@ func WithMaxIterations(n int) Option {
 // matching LLMRequest.Temperature's zero-value convention.
 func WithTemperature(t float64) Option {
 	return func(a *Agent) error {
-		if t < 0 {
-			return errors.New("gantry: WithTemperature must be non-negative")
+		if t < 0 || math.IsNaN(t) || math.IsInf(t, 0) {
+			return errors.New("gantry: WithTemperature must be a non-negative finite number")
 		}
 		a.temperature = t
 		return nil
