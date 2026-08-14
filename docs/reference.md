@@ -2,7 +2,7 @@
 
 Detailed reference for Gantry's components, conformance suites, eval harness,
 testing, and repository layout. For the overview, install steps, quick start,
-and core concepts, see the [main README](../README.md). For keyed, durable
+and core concepts, see the [main README](https://github.com/farazhassan/gantry#readme). For keyed, durable
 multi-turn conversations, see the [sessions guide](sessions.md).
 
 ## Contents
@@ -137,7 +137,7 @@ gofmt -l .              # lists files needing formatting (empty = clean)
 
 ### Continuous integration
 
-Every push and pull request runs the [CI workflow](../.github/workflows/ci.yml), split
+Every push and pull request runs the [CI workflow](https://github.com/farazhassan/gantry/blob/main/.github/workflows/ci.yml), split
 into jobs that double as required status checks for branch protection on `main`:
 
 - **Lint & format** — `gofmt` check, `go vet`, and `staticcheck`.
@@ -147,14 +147,14 @@ into jobs that double as required status checks for branch protection on `main`:
 
 Two more workflows complete the pipeline:
 
-- **[Release](../.github/workflows/release.yml)** — triggered by a pushed `v*` tag;
+- **[Release](https://github.com/farazhassan/gantry/blob/main/.github/workflows/release.yml)** — triggered by a pushed `v*` tag;
   re-runs the build and tests, then publishes a GitHub Release with auto-generated
   notes (tags with a pre-release suffix like `v0.0.1-beta` are flagged as
   pre-releases).
-- **[CodeQL](../.github/workflows/codeql.yml)** — security and quality scanning on
+- **[CodeQL](https://github.com/farazhassan/gantry/blob/main/.github/workflows/codeql.yml)** — security and quality scanning on
   pushes, PRs, and a weekly schedule.
 
-[Dependabot](../.github/dependabot.yml) keeps Go modules and GitHub Actions versions
+[Dependabot](https://github.com/farazhassan/gantry/blob/main/.github/dependabot.yml) keeps Go modules and GitHub Actions versions
 up to date.
 
 ## Project layout
