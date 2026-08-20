@@ -23,7 +23,10 @@ package honors that field, but the agent must opt in to suspending on a
 call with no server-side implementation:
 
 ```go
-agent, _ := gantry.NewAgent(gantry.WithLLM(llm))
+agent, err := gantry.NewAgent(gantry.WithLLM(llm))
+if err != nil {
+    log.Fatal(err)
+}
 if err := agent.With(tool.DynamicClient()); err != nil {
     log.Fatal(err)
 }
@@ -141,6 +144,8 @@ signatures/encrypted blocks back to the provider yet).
 
 - **Before streaming starts** (bad JSON, empty `messages`, non-user last
   message, unknown role) → a plain HTTP `400`/`405`, no SSE.
+- **`tools` declared without `tool.DynamicClient` installed** → HTTP `500`
+  (a server misconfiguration, not a client error — see "Frontend actions" above).
 - **Mid-stream** (the agent errors after headers are sent, or panics) → a
   `RUN_ERROR` frame, since the `200` status is already committed. The error is
   also logged server-side (see `WithLogger`); a panic's recovered value/stack
