@@ -10,17 +10,22 @@
 //   - Handler: a thin net/http.Handler that decodes a RunAgentInput, rebuilds
 //     the prior conversation, and drives agent.RunFromStream.
 //
-// Scope: the request's replayed message history is honored; client-supplied
-// state and tools are ignored. Transport is SSE over HTTP POST. The package
-// depends only on the Go standard library and gantry itself.
+// Scope: the request's replayed message history and client-declared tools
+// (RunAgentInput.Tools — e.g. a CopilotKit frontend action registered via
+// useCopilotAction) are honored; client-supplied state is still ignored
+// ("shared state" is a separate, unimplemented feature). Transport is SSE
+// over HTTP POST. The package depends on the Go standard library, gantry
+// itself, and components/tool (for the client-tool suspend mechanism used
+// by request-declared tools — see input.go and components/tool.DynamicClient).
 //
 // Event coverage: RUN_*, STEP_*, TEXT_MESSAGE_*, TOOL_CALL_*, CUSTOM,
 // REASONING_* (Anthropic extended thinking only), RAW (provider frames
 // gantry doesn't otherwise model), and ACTIVITY_SNAPSHOT/ACTIVITY_DELTA
 // (plan-step progress, via components/planner's update_plan interception).
 // Not implemented: STATE_SNAPSHOT/STATE_DELTA/MESSAGES_SNAPSHOT (gantry v1
-// tracks no synchronizable agent state — client-supplied state and tools are
-// accepted in the request body but ignored, as above), TEXT_MESSAGE_CHUNK/
+// tracks no synchronizable agent state — client-supplied state is accepted
+// in the request body but ignored, as above; client-supplied tools ARE now
+// honored, see Scope), TEXT_MESSAGE_CHUNK/
 // TOOL_CALL_CHUNK/REASONING_MESSAGE_CHUNK (redundant alternate encodings of
 // the explicit Start/Content/End sequence this package always emits),
 // REASONING_ENCRYPTED_VALUE (round-tripping Anthropic's signed thinking

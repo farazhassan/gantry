@@ -7,17 +7,32 @@ import (
 	"strings"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/tool"
 )
 
-// RunAgentInput is the AG-UI request body POSTed to the handler. v1 honors
-// Messages (the replayed thread); State and Tools are accepted but ignored
-// (client-supplied state-merge and client-advertised tools are out of scope).
+// RunAgentInput is the AG-UI request body POSTed to the handler. Messages
+// (the replayed thread) and Tools (client-declared tools, e.g. a CopilotKit
+// frontend action registered via useCopilotAction) are honored. State is
+// accepted but ignored — client-supplied state sync ("shared state") is a
+// separate, unimplemented feature; see doc.go.
 type RunAgentInput struct {
 	ThreadID string          `json:"threadId"`
 	RunID    string          `json:"runId"`
 	Messages []InputMessage  `json:"messages"`
 	State    json.RawMessage `json:"state,omitempty"`
-	Tools    json.RawMessage `json:"tools,omitempty"`
+	Tools    []InputTool     `json:"tools,omitempty"`
+}
+
+// InputTool is a client-declared tool advertised to the LLM for this request
+// only — e.g. a CopilotKit frontend action. There is no server-side
+// implementation, so if the model calls it, the run suspends
+// (gantry.DoneClientToolCall) for the client to fulfill instead of being
+// executed. Requires components/tool.DynamicClient installed on the agent;
+// see Handler's startup check.
+type InputTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // InputMessage is one entry in RunAgentInput.Messages. Tool linkage uses the
@@ -76,7 +91,11 @@ func (in *RunAgentInput) ToRun() (prior *gantry.State, input string, err error) 
 	if err := requireToolResults(msgs); err != nil {
 		return nil, "", err
 	}
-	return &gantry.State{Messages: msgs}, last.Content, nil
+	state := &gantry.State{Messages: msgs}
+	if err := applyClientTools(state, in.Tools); err != nil {
+		return nil, "", err
+	}
+	return state, last.Content, nil
 }
 
 // ToResume reconstructs the full prior conversation as a non-terminal State for
@@ -107,11 +126,15 @@ func (in *RunAgentInput) ToResume() (*gantry.State, error) {
 	// ResumeStream runs this State directly (no newStateFrom rebuild), so Meta
 	// and Trace must be initialized here. Meta is needed by the client-tools
 	// advertise middleware (it assigns into the map); Trace is needed by run().
-	return &gantry.State{
+	state := &gantry.State{
 		Messages: msgs,
 		Meta:     map[string]any{},
 		Trace:    gantry.NewTrace(),
-	}, nil
+	}
+	if err := applyClientTools(state, in.Tools); err != nil {
+		return nil, err
+	}
+	return state, nil
 }
 
 // requireToolResults validates that the transcript is a well-formed resumable
@@ -149,6 +172,34 @@ func requireToolResults(msgs []gantry.Message) error {
 	}
 	for id := range open {
 		return fmt.Errorf("agui: tool call %q has no matching tool result; cannot resume", id)
+	}
+	return nil
+}
+
+// applyClientTools converts decoded InputTools to gantry.ToolDefs and stashes
+// them via tool.SetPendingClientTools, so the run this State is used for
+// advertises them and suspends if the model calls one. A no-op when tools is
+// empty. Malformed Parameters (invalid JSON) is rejected here as a clean
+// error, matching how ToRun/ToResume reject other malformed input (see
+// toHarnessMessage); empty/duplicate names are rejected by
+// tool.SetPendingClientTools itself.
+func applyClientTools(state *gantry.State, tools []InputTool) error {
+	if len(tools) == 0 {
+		return nil
+	}
+	defs := make([]gantry.ToolDef, 0, len(tools))
+	for _, it := range tools {
+		if len(it.Parameters) > 0 && !json.Valid(it.Parameters) {
+			return fmt.Errorf("agui: tool %q has invalid JSON parameters", it.Name)
+		}
+		defs = append(defs, gantry.ToolDef{
+			Name:        it.Name,
+			Description: it.Description,
+			Schema:      it.Parameters,
+		})
+	}
+	if err := tool.SetPendingClientTools(state, defs...); err != nil {
+		return fmt.Errorf("agui: %w", err)
 	}
 	return nil
 }

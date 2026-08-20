@@ -234,6 +234,168 @@ func TestHandlerRejectsIncompleteResume(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsToolsWithoutClientSupport(t *testing.T) {
+	// No tool.Client / tool.DynamicClient installed: a request declaring
+	// tools must fail loudly, not silently drop the model's tool call.
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"get_location"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "DynamicClient") {
+		t.Fatalf("body = %q, want a message pointing at tool.DynamicClient", b)
+	}
+}
+
+// TestHandlerRejectsToolsWithOnlyStaticClientSupport is a regression test for
+// a real gap: tool.Client and tool.DynamicClient both install the same
+// PhaseObserve suspend middleware, but only DynamicClient's PhaseStart
+// middleware reads the per-run pending-defs Meta key that request-declared
+// tools are stashed under (via tool.SetPendingClientTools). An agent with
+// only tool.Client installed would previously pass the safety-net check
+// (since some client-tool suspend support existed) and return 200, while the
+// request-declared tool was silently never advertised to the LLM — exactly
+// the "unexplained gap" failure mode the safety net exists to catch.
+func TestHandlerRejectsToolsWithOnlyStaticClientSupport(t *testing.T) {
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
+	if err := a.With(tool.Client(ask.Definition())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"get_location"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (only tool.Client installed, no DynamicClient)", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "DynamicClient") {
+		t.Fatalf("body = %q, want a message pointing at tool.DynamicClient", b)
+	}
+}
+
+// TestHandlerAllowsEmptyToolsArrayWithoutClientSupport pins the
+// len(in.Tools) > 0 check: a present-but-empty "tools" array declares
+// nothing, so it must not trip the safety net even with no client-tool
+// support installed.
+func TestHandlerAllowsEmptyToolsArrayWithoutClientSupport(t *testing.T) {
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty tools array declares nothing)", resp.StatusCode)
+	}
+}
+
+// dynamicClientAgent returns an agent whose mock LLM calls get_location (a
+// tool declared only per-request, via RunAgentInput.tools — not statically
+// via tool.Client) on the first request and answers with text on the second.
+func dynamicClientAgent(t *testing.T) *gantry.Agent {
+	t.Helper()
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "You are in Lahore.", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+	return a
+}
+
+func TestHandlerSuspendsOnDynamicClientTool(t *testing.T) {
+	a := dynamicClientAgent(t)
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"where am I?"}],` +
+		`"tools":[{"name":"get_location","description":"returns the browser location","parameters":{}}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, resp.Body); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := sb.String()
+	if !strings.Contains(out, `"type":"TOOL_CALL_START"`) {
+		t.Fatalf("missing TOOL_CALL_START:\n%s", out)
+	}
+	if !strings.Contains(out, `"type":"RUN_FINISHED"`) {
+		t.Fatalf("missing RUN_FINISHED:\n%s", out)
+	}
+	if strings.Contains(out, `"type":"TOOL_CALL_RESULT"`) {
+		t.Fatalf("client tool call must have no TOOL_CALL_RESULT:\n%s", out)
+	}
+}
+
+func TestHandlerResumesOnDynamicClientToolResult(t *testing.T) {
+	a := dynamicClientAgent(t)
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	toolsField := `"tools":[{"name":"get_location","description":"returns the browser location","parameters":{}}]`
+
+	first := `{"messages":[{"role":"user","content":"where am I?"}],` + toolsField + `}`
+	r1, err := http.Post(srv.URL, "application/json", strings.NewReader(first))
+	if err != nil {
+		t.Fatalf("POST 1: %v", err)
+	}
+	io.Copy(io.Discard, r1.Body)
+	r1.Body.Close()
+
+	// A CopilotKit resume replays the full history AND resends the tool
+	// declarations, since AG-UI requests are stateless.
+	resume := `{"messages":[` +
+		`{"role":"user","content":"where am I?"},` +
+		`{"role":"assistant","toolCalls":[{"id":"q1","type":"function","function":{"name":"get_location","arguments":"{}"}}]},` +
+		`{"role":"tool","toolCallId":"q1","content":"{\"lat\":31.5,\"lng\":74.3}"}` +
+		`],` + toolsField + `}`
+	r2, err := http.Post(srv.URL, "application/json", strings.NewReader(resume))
+	if err != nil {
+		t.Fatalf("POST 2: %v", err)
+	}
+	defer r2.Body.Close()
+	var sb strings.Builder
+	io.Copy(&sb, r2.Body)
+	out := sb.String()
+	if got := joinTextDeltas(out); !strings.Contains(got, "You are in Lahore.") {
+		t.Fatalf("resume did not produce final answer; reassembled %q:\n%s", got, out)
+	}
+	if !strings.Contains(out, `"type":"RUN_FINISHED"`) {
+		t.Fatalf("missing RUN_FINISHED on resume:\n%s", out)
+	}
+}
+
 func TestHandlerMidStreamError(t *testing.T) {
 	// A mock LLM that returns an error makes RunFromStream fail after headers
 	// are sent, so the handler must emit a RUN_ERROR frame.
