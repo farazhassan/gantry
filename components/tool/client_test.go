@@ -203,3 +203,98 @@ func TestClientDuplicateNameReturnsError(t *testing.T) {
 		t.Fatal("duplicate tool name: want error, got nil")
 	}
 }
+
+func TestDynamicClientSuspendsOnPerRunTool(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+
+	prior := &gantry.State{}
+	tool.SetPendingClientTools(prior, gantry.ToolDef{
+		Name:        "get_location",
+		Description: "returns the browser's location",
+		Schema:      json.RawMessage(`{}`),
+	})
+
+	state, err := a.RunFrom(context.Background(), prior, "where am I?")
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want true / %q", state.Done, state.DoneReason, gantry.DoneClientToolCall)
+	}
+	if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "q1" {
+		t.Fatalf("PendingToolCalls = %#v, want the get_location call", state.PendingToolCalls)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "get_location" {
+		t.Fatalf("get_location not advertised: %#v", reqs)
+	}
+}
+
+func TestDynamicClientDoesNotPersistAcrossCalls(t *testing.T) {
+	// SetPendingClientTools must be called again for every run — nothing
+	// should silently carry the tool forward once state.Tools is rebuilt.
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{Content: "no tools here", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || len(reqs[0].Tools) != 0 {
+		t.Fatalf("Tools = %#v, want none advertised when SetPendingClientTools was never called", reqs[0].Tools)
+	}
+	if state.DoneReason != gantry.DoneNoToolCalls {
+		t.Fatalf("DoneReason = %q, want %q", state.DoneReason, gantry.DoneNoToolCalls)
+	}
+}
+
+func TestSuspendClientCallsInstalledReportsBothPaths(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+
+	bare, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if tool.SuspendClientCallsInstalled(bare) {
+		t.Fatal("bare agent: want false")
+	}
+
+	withClient, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := withClient.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+	if !tool.SuspendClientCallsInstalled(withClient) {
+		t.Fatal("agent with Client: want true")
+	}
+
+	withDynamic, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := withDynamic.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+	if !tool.SuspendClientCallsInstalled(withDynamic) {
+		t.Fatal("agent with DynamicClient: want true")
+	}
+}
+
+func TestClientAndDynamicClientCannotBothInstall(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+	if err := a.With(tool.DynamicClient()); err == nil {
+		t.Fatal("installing DynamicClient after Client: want error, got nil")
+	}
+}

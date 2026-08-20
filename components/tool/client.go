@@ -7,36 +7,47 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// Middleware names installed by Client.
+// Middleware names installed by Client and DynamicClient.
 const (
-	advertiseClientName = "components/tool:client_advertise"
-	suspendName         = "components/tool:client_suspend"
+	advertiseClientName        = "components/tool:client_advertise"
+	dynamicClientAdvertiseName = "components/tool:dynamic_client_advertise"
+	suspendName                = "components/tool:client_suspend"
 
-	// clientToolsMetaKey carries the set of client-side tool names from the
-	// PhaseStart advertise middleware to the PhaseToolExec dispatch and the
-	// PhaseObserve suspend middleware. Namespaced per the State.Meta convention.
+	// clientToolsMetaKey carries the set of client-side tool names from
+	// whichever PhaseStart middleware advertised them (Client's or
+	// DynamicClient's) to the PhaseToolExec dispatch and the PhaseObserve
+	// suspend middleware. Namespaced per the State.Meta convention.
 	clientToolsMetaKey = "components/tool:client_tools"
+
+	// pendingClientDefsMetaKey carries tool defs set via
+	// SetPendingClientTools into DynamicClient's PhaseStart middleware. A
+	// separate key from clientToolsMetaKey: it must survive into PhaseStart,
+	// where state.Tools is rebuilt every call (Agent.run resets state.Tools
+	// to nil before running PhaseStart on every Run/RunFrom/RunStream/
+	// RunFromStream/Resume/ResumeStream call), so state.Tools itself cannot
+	// be used to pass defs into a run — only state.Meta survives that reset.
+	pendingClientDefsMetaKey = "components/tool:pending_client_defs"
 )
 
 type clientComponent struct{ defs []gantry.ToolDef }
 
-// Client returns a Component declaring definition-only "client-side" tools. Their
-// ToolDefs are advertised to the LLM, but they have no server-side Invoke: when the
-// model calls one, the run suspends at the observe boundary with
-// state.DoneReason == gantry.DoneClientToolCall and the call(s) left in
-// state.PendingToolCalls. Installing client tools twice on the same agent, an empty
-// tool name, or a duplicate name returns an error.
+// Client returns a Component declaring definition-only "client-side" tools,
+// fixed for the agent's lifetime. Their ToolDefs are advertised to the LLM on
+// every run, but they have no server-side Invoke: when the model calls one,
+// the run suspends at the observe boundary with state.DoneReason ==
+// gantry.DoneClientToolCall and the call(s) left in state.PendingToolCalls.
+// Installing client tools twice on the same agent, an empty tool name, a
+// duplicate name, or installing alongside DynamicClient (both install the
+// same suspend middleware — see SuspendClientCalls) returns an error.
+//
+// Use DynamicClient instead when the tool set varies per caller/session
+// (e.g. an AG-UI handler wrapping CopilotKit frontend actions) rather
+// than being fixed at agent construction.
 func Client(defs ...gantry.ToolDef) gantry.Component {
 	return &clientComponent{defs: defs}
 }
 
 func (c *clientComponent) Install(a *gantry.Agent) error {
-	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
-		if name == advertiseClientName {
-			return errors.New("tool: client tools already installed on this agent")
-		}
-	}
-
 	names := make(map[string]bool, len(c.defs))
 	for _, d := range c.defs {
 		if d.Name == "" {
@@ -49,26 +60,92 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 	}
 	defsCopy := append([]gantry.ToolDef(nil), c.defs...)
 
-	// PhaseStart: advertise client defs to the LLM and record the client-tool
-	// name set so dispatch (PhaseToolExec) and suspend (PhaseObserve) can see it.
-	if err := a.UseNamed(gantry.PhaseStart, advertiseClientName, func(next gantry.Handler) gantry.Handler {
-		return func(ctx context.Context, s *gantry.State) error {
-			s.Tools = append(s.Tools, defsCopy...)
-			if s.Meta == nil {
-				s.Meta = map[string]any{}
-			}
-			s.Meta[clientToolsMetaKey] = names
-			return next(ctx, s)
-		}
-	}); err != nil {
+	if err := SuspendClientCalls().Install(a); err != nil {
 		return err
 	}
 
-	// PhaseObserve: capture the client calls before DefaultObserveHandler clears
-	// the pending slice, let server results persist, then restore the client
-	// call(s) and suspend. Running suspend here (not in PhaseToolExec) is
-	// required: the loop breaks on state.Done between phases, so setting Done in
-	// tool_exec would skip observe and lose server results.
+	// PhaseStart: advertise the fixed defs to the LLM and mark their names as
+	// client-side, every run — state.Tools and state.Meta[clientToolsMetaKey]
+	// are per-run scratch (see pendingClientDefsMetaKey's doc comment above).
+	return a.UseNamed(gantry.PhaseStart, advertiseClientName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.Tools = append(s.Tools, defsCopy...)
+			markClientNames(s, names)
+			return next(ctx, s)
+		}
+	})
+}
+
+// SetPendingClientTools stashes tool defs to be advertised and treated as
+// client-side for the very next Run/RunFrom/RunStream/RunFromStream/Resume/
+// ResumeStream call on s — and no further, since state.Tools is rebuilt from
+// scratch on every such call (see pendingClientDefsMetaKey's doc comment).
+// Call this on the State you are about to pass into that call. Requires
+// DynamicClient installed on the agent to take effect; use
+// SuspendClientCallsInstalled to verify that ahead of time and fail clearly
+// instead of silently losing the call.
+//
+// Unlike Client (fixed defs at agent-construction time), this supports a
+// tool set that varies per caller/session — e.g. an AG-UI handler calling it
+// from its request-decoding path with tools decoded from a request (like a
+// CopilotKit frontend action) — at the cost of needing to be called before
+// every run/resume that should advertise them.
+func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) {
+	if len(defs) == 0 {
+		return
+	}
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	existing, _ := s.Meta[pendingClientDefsMetaKey].([]gantry.ToolDef)
+	s.Meta[pendingClientDefsMetaKey] = append(existing, defs...)
+}
+
+type dynamicClientComponent struct{}
+
+// DynamicClient returns a Component that advertises and suspends on per-run
+// client tool defs set via SetPendingClientTools, instead of a fixed list
+// installed once. Install this at agent construction when the tool set is
+// only known per-request. Installing it twice, or alongside Client, on the
+// same agent returns an error (both install the same PhaseObserve suspend
+// middleware — see SuspendClientCalls).
+func DynamicClient() gantry.Component {
+	return &dynamicClientComponent{}
+}
+
+func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
+	if err := SuspendClientCalls().Install(a); err != nil {
+		return err
+	}
+	return a.UseNamed(gantry.PhaseStart, dynamicClientAdvertiseName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			defs, _ := s.Meta[pendingClientDefsMetaKey].([]gantry.ToolDef)
+			if len(defs) > 0 {
+				s.Tools = append(s.Tools, defs...)
+				names := make(map[string]bool, len(defs))
+				for _, d := range defs {
+					names[d.Name] = true
+				}
+				markClientNames(s, names)
+			}
+			return next(ctx, s)
+		}
+	})
+}
+
+// SuspendClientCalls installs the PhaseObserve middleware that suspends a
+// run when any pending tool call's name was marked client-side this run (by
+// Client's or DynamicClient's PhaseStart middleware). Client and
+// DynamicClient both install this internally; call it directly only if you
+// are marking client tool names some other way. Installing it twice on the
+// same agent returns an error.
+func SuspendClientCalls() gantry.Component {
+	return suspendComponent{}
+}
+
+type suspendComponent struct{}
+
+func (suspendComponent) Install(a *gantry.Agent) error {
 	return a.UseNamed(gantry.PhaseObserve, suspendName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)
@@ -91,9 +168,43 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 	})
 }
 
-// clientToolSet returns the client-tool name set recorded by Client
-// for this run, or nil when no client tools were configured. A nil map is safe
-// to index (always reports false), so callers need no special-casing.
+// SuspendClientCallsInstalled reports whether SuspendClientCalls is
+// installed on a (directly, or via Client/DynamicClient). Callers that mark
+// tool names dynamically per-run (e.g. an AG-UI handler) can check this
+// once at setup and fail clearly instead of silently losing an unmarked
+// run's client tool calls: without it, an unresolved pending call is simply
+// cleared by DefaultObserveHandler with no result message, which the next
+// LLM call sees as an unexplained gap in the transcript.
+func SuspendClientCallsInstalled(a *gantry.Agent) bool {
+	for _, name := range a.MiddlewareNames(gantry.PhaseObserve) {
+		if name == suspendName {
+			return true
+		}
+	}
+	return false
+}
+
+// markClientNames merges names into the client-tool-name set recorded on
+// s.Meta, so multiple markers within the same PhaseStart chain compose
+// instead of clobbering each other.
+func markClientNames(s *gantry.State, names map[string]bool) {
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	set, _ := s.Meta[clientToolsMetaKey].(map[string]bool)
+	if set == nil {
+		set = make(map[string]bool, len(names))
+	}
+	for n := range names {
+		set[n] = true
+	}
+	s.Meta[clientToolsMetaKey] = set
+}
+
+// clientToolSet returns the client-tool name set recorded by Client or
+// DynamicClient for this run, or nil when no client tools were configured. A
+// nil map is safe to index (always reports false), so callers need no
+// special-casing.
 func clientToolSet(s *gantry.State) map[string]bool {
 	if s.Meta == nil {
 		return nil
