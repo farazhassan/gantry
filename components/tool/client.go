@@ -95,7 +95,7 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 // scratch on every such call (see pendingClientDefsMetaKey's doc comment).
 // Call this on the State you are about to pass into that call. Requires
 // DynamicClient installed on the agent to take effect; use
-// SuspendClientCallsInstalled to verify that ahead of time and fail clearly
+// DynamicClientInstalled to verify that ahead of time and fail clearly
 // instead of silently losing the call.
 //
 // An empty tool name, or a duplicate name among the defs passed in this
