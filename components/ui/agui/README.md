@@ -14,6 +14,28 @@ It is built in three layers (see `doc.go` for the full overview):
   decodes a `RunAgentInput`, rebuilds the prior conversation, and drives
   `agent.RunFromStream`.
 
+## Frontend actions (CopilotKit)
+
+CopilotKit's `useCopilotAction` registers a tool in the browser and sends it
+per-request in `RunAgentInput.tools` — there is no separate CopilotKit wire
+protocol; it talks AG-UI directly via `@ag-ui/client`'s `HttpAgent`. This
+package honors that field, but the agent must opt in to suspending on a
+call with no server-side implementation:
+
+```go
+agent, _ := gantry.NewAgent(gantry.WithLLM(llm))
+if err := agent.With(tool.DynamicClient()); err != nil {
+    log.Fatal(err)
+}
+http.Handle("/agui", agui.Handler(agent))
+```
+
+Without `tool.DynamicClient()` installed, `Handler` rejects (HTTP 500) any
+request that declares `tools`, rather than silently dropping the model's
+call. If your agent's tool set never varies per request, prefer the static
+`tool.Client(defs...)` instead — see `components/tool`'s package doc. The
+two are mutually exclusive on one agent (installing both returns an error).
+
 ## Testing it yourself
 
 ### 1. Run the unit + integration tests
