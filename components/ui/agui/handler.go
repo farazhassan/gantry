@@ -120,7 +120,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		}
 
 		// run executes on its own goroutine so this goroutine is free to
-		// interleave heartbeat pings on cfg.heartbeat while it waits — a
+		// interleave heartbeat pings on cfg.Heartbeat while it waits — a
 		// silently-thinking model or a slow tool call would otherwise leave
 		// the connection with no bytes on the wire, which is exactly what
 		// idle-read-timeout proxies/load balancers treat as a dead
