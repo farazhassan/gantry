@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/ui/internal/streamconfig"
 )
 
 // Handler returns an http.Handler that serves a single AG-UI run per POST. It
@@ -33,17 +34,11 @@ import (
 // (WithLogger, WithErrorMapper, WithHeartbeatInterval, WithMaxBodyBytes,
 // WithAllowedOrigins) to tune or disable any of this.
 func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
-	cfg := defaultConfig()
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(cfg)
-	}
+	cfg := streamconfig.Apply(opts...)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cfg.corsEnabled() {
-			applyCORSHeaders(w, r, cfg)
+		if cfg.CORSEnabled() {
+			streamconfig.ApplyCORSHeaders(w, r, cfg)
 			if r.Method == http.MethodOptions {
 				// The preflight itself always succeeds; an unlisted origin
 				// simply gets no Access-Control-Allow-Origin above, which is
@@ -58,7 +53,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		}
 
 		// Cap the request body so a client cannot force unbounded allocation.
-		r.Body = http.MaxBytesReader(w, r.Body, cfg.maxBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodyBytes)
 		var in RunAgentInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, "agui: invalid request JSON: "+err.Error(), http.StatusBadRequest)
@@ -125,7 +120,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		}
 
 		// run executes on its own goroutine so this goroutine is free to
-		// interleave heartbeat pings on cfg.heartbeat while it waits — a
+		// interleave heartbeat pings on cfg.Heartbeat while it waits — a
 		// silently-thinking model or a slow tool call would otherwise leave
 		// the connection with no bytes on the wire, which is exactly what
 		// idle-read-timeout proxies/load balancers treat as a dead
@@ -150,8 +145,8 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		}()
 
 		var tick <-chan time.Time
-		if cfg.heartbeat > 0 {
-			ticker := time.NewTicker(cfg.heartbeat)
+		if cfg.Heartbeat > 0 {
+			ticker := time.NewTicker(cfg.Heartbeat)
 			defer ticker.Stop()
 			tick = ticker.C
 		}
@@ -174,7 +169,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 
 		switch {
 		case outcome.panicVal != nil:
-			cfg.logger.Error("agui: panic during run",
+			cfg.Logger.Error("agui: panic during run",
 				"threadId", threadID, "runId", runID,
 				"panic", outcome.panicVal, "stack", string(outcome.stack))
 			// The recovered value can carry arbitrary internal detail (a
@@ -183,27 +178,11 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 			// value and stack are for the server-side log above only.
 			_ = sink.EmitError(errors.New("agui: internal error"))
 		case outcome.err != nil:
-			cfg.logger.Log(r.Context(), runErrorLogLevel(outcome.err), "agui: run ended with error",
+			cfg.Logger.Log(r.Context(), runErrorLogLevel(outcome.err), "agui: run ended with error",
 				"threadId", threadID, "runId", runID, "error", outcome.err)
-			_ = sink.EmitError(errors.New(safeMapError(cfg, outcome.err)))
+			_ = sink.EmitError(errors.New(cfg.SafeMapError(outcome.err, "agui: internal error")))
 		}
 	})
-}
-
-// safeMapError applies cfg.mapError, recovering if it panics. Unlike the
-// agent/tool/LLM path, a caller-supplied mapper runs directly in the handler
-// goroutine — the run goroutine's own recover (above) does not cover it — so
-// without this, a bug in a WithErrorMapper would take the request down with
-// an unexplained EOF instead of the clean RUN_ERROR this whole file exists to
-// guarantee.
-func safeMapError(cfg *config, err error) (msg string) {
-	defer func() {
-		if p := recover(); p != nil {
-			cfg.logger.Error("agui: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
-			msg = "agui: internal error"
-		}
-	}()
-	return cfg.mapError(err)
 }
 
 // runOutcome is what the goroutine running the agent reports back to the
@@ -226,10 +205,6 @@ func runErrorLogLevel(err error) slog.Level {
 	}
 	return slog.LevelError
 }
-
-// maxRequestBytes caps the decoded RunAgentInput body (1 MiB). A replayed
-// thread is text; this is generous while preventing unbounded allocation.
-const maxRequestBytes = 1 << 20
 
 // newID returns a random 16-byte hex id, used when the client omits threadId or
 // runId. crypto/rand keeps it collision-safe with no third-party dependency.

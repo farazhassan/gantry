@@ -1,25 +1,23 @@
-package agui
+package streamconfig
 
 import "net/http"
 
-// applyCORSHeaders sets Access-Control-* response headers for r under cfg.
+// ApplyCORSHeaders sets Access-Control-* response headers for r under cfg.
 // Safe to call unconditionally on every request; it no-ops when CORS isn't
-// enabled (cfg.corsEnabled()) or the request carries no Origin header.
-// Called for both the OPTIONS preflight and the actual POST — browsers
+// enabled (cfg.CORSEnabled()) or the request carries no Origin header.
+// Called for both the OPTIONS preflight and the actual response — browsers
 // enforce CORS on the real response too, not just the preflight.
-func applyCORSHeaders(w http.ResponseWriter, r *http.Request, cfg *config) {
-	if !cfg.corsEnabled() {
+func ApplyCORSHeaders(w http.ResponseWriter, r *http.Request, cfg *Config) {
+	if !cfg.CORSEnabled() {
 		return
 	}
 	origin := r.Header.Get("Origin")
-	if !cfg.originAllowed(origin) {
+	if !cfg.OriginAllowed(origin) {
 		return
 	}
-	if cfg.allowAllOrigins {
+	if cfg.AllowAllOrigins {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 	} else {
-		// Echoing a specific origin (rather than "*") makes the response
-		// origin-dependent, so caches must key on it too.
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Add("Vary", "Origin")
 	}
