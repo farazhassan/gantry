@@ -341,11 +341,19 @@ func (r *ChatRequest) ToResume() (*gantry.State, error) {
 	}, nil
 }
 
-// hasToolPart reports whether m has at least one tool-call part -- the
-// signal Handler uses to route a request to ResumeStream instead of
-// RunFromStream.
+// hasToolPart reports whether m's FINAL step segment (the parts after its
+// last "step-start", or all parts if it has none) contains at least one
+// tool-call part -- the signal Handler uses to route a request to
+// ResumeStream instead of RunFromStream. Scoped to the final segment only:
+// an earlier step's tool call says nothing about whether the turn as a
+// whole is still suspended -- see segmentAssistant's doc comment for why a
+// single UIMessage can span multiple steps.
 func hasToolPart(m UIMessage) bool {
-	for _, p := range m.Parts {
+	for i := len(m.Parts) - 1; i >= 0; i-- {
+		p := m.Parts[i]
+		if p.Type == partStepStart {
+			return false
+		}
 		if isToolPart(p.Type) {
 			return true
 		}

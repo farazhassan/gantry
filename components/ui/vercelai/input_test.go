@@ -314,6 +314,31 @@ func TestHasToolPart(t *testing.T) {
 	}
 }
 
+func TestHasToolPartIgnoresEarlierResolvedSegment(t *testing.T) {
+	m := UIMessage{Role: "assistant", Parts: []Part{
+		{Type: "dynamic-tool", ToolCallID: "c1", ToolName: "search", State: "output-available", Input: json.RawMessage(`{}`), Output: json.RawMessage(`"a"`)},
+		{Type: "step-start"},
+		{Type: "text", Text: "done"},
+	}}
+	if hasToolPart(m) {
+		t.Error("hasToolPart = true, want false: the final segment has no tool part, only an earlier resolved one")
+	}
+}
+
+func TestToResumeRejectsAlreadyCompletedMultiStepMessage(t *testing.T) {
+	r := &ChatRequest{Messages: []UIMessage{
+		{Role: "user", Parts: []Part{{Type: "text", Text: "hi"}}},
+		{Role: "assistant", Parts: []Part{
+			{Type: "dynamic-tool", ToolCallID: "c1", ToolName: "search", State: "output-available", Input: json.RawMessage(`{}`), Output: json.RawMessage(`"a"`)},
+			{Type: "step-start"},
+			{Type: "text", Text: "done"},
+		}},
+	}}
+	if _, err := r.ToResume(); err == nil {
+		t.Fatal("expected an error: the final segment is already complete, nothing to resume")
+	}
+}
+
 func TestSegmentAssistantConsecutiveStepStartsProduceNoSpuriousMessage(t *testing.T) {
 	m := UIMessage{Role: "assistant", Parts: []Part{
 		{Type: "text", Text: "first"},
