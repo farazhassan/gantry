@@ -100,3 +100,31 @@ func TestSafeMapErrorRecoversPanic(t *testing.T) {
 		t.Errorf("SafeMapError after panic = %q, want the generic fallback", got)
 	}
 }
+
+func TestWithErrorMapperAppliesCustomMapper(t *testing.T) {
+	c := Apply(WithErrorMapper(func(error) string { return "custom" }))
+	if got := c.MapError(errors.New("x")); got != "custom" {
+		t.Errorf("MapError(x) = %q, want %q from the custom mapper", got, "custom")
+	}
+}
+
+func TestSafeMapErrorOnBareConfig(t *testing.T) {
+	// A Config's fields are all exported, so callers can build one as a
+	// struct literal without Default()/Apply(), leaving Logger and
+	// MapError nil. SafeMapError must not panic in either case.
+	t.Run("nil MapError", func(t *testing.T) {
+		c := &Config{}
+		got := c.SafeMapError(errors.New("x"))
+		if got != "internal error" {
+			t.Errorf("SafeMapError with nil MapError = %q, want %q", got, "internal error")
+		}
+	})
+
+	t.Run("panicking MapError, nil Logger", func(t *testing.T) {
+		c := &Config{MapError: func(error) string { panic("boom") }}
+		got := c.SafeMapError(errors.New("x"))
+		if got != "internal error" {
+			t.Errorf("SafeMapError with nil Logger and panicking MapError = %q, want %q", got, "internal error")
+		}
+	})
+}

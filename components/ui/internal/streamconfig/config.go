@@ -157,12 +157,26 @@ func (c *Config) OriginAllowed(origin string) bool {
 // separate run goroutine a wrapper's own panic recovery covers — so without
 // this, a bug in a WithErrorMapper would take the request down with an
 // unexplained EOF instead of a clean client-visible error.
+//
+// Config's fields are all exported, so a Config can be built as a bare
+// struct literal without going through Default()/Apply(), leaving Logger
+// and/or MapError nil. Both are guarded here: a nil Logger falls back to
+// noopLogger instead of nil-dereferencing inside the recover handler
+// (defeating the whole point of this function), and a nil MapError is
+// treated as an immediate failure rather than a guaranteed panic.
 func (c *Config) SafeMapError(err error) (msg string) {
+	logger := c.Logger
+	if logger == nil {
+		logger = noopLogger
+	}
 	defer func() {
 		if p := recover(); p != nil {
-			c.Logger.Error("streamconfig: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
+			logger.Error("streamconfig: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
 			msg = "internal error"
 		}
 	}()
+	if c.MapError == nil {
+		return "internal error"
+	}
 	return c.MapError(err)
 }
