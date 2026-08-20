@@ -6,6 +6,17 @@
 // and dispatches matching ToolCalls during PhaseToolExec. Tool lifetime follows
 // the caller's Registry (or the agent when the Registry is not retained
 // elsewhere) — there is no process-global state.
+//
+// DynamicClient is the per-request counterpart to Client: instead of a fixed
+// tool list at agent-construction time, a caller marks tool defs as
+// client-side for the very next run/resume call via SetPendingClientTools
+// (e.g. an AG-UI handler decoding per-request tool declarations from a
+// CopilotKit frontend action). Client and DynamicClient are mutually
+// exclusive on one agent — both install the same suspend middleware
+// (SuspendClientCalls), so installing both returns an error. Use
+// SuspendClientCallsInstalled or DynamicClientInstalled to check ahead of
+// time whether an agent supports the (static or per-request, respectively)
+// client-tool mechanism.
 package tool
 
 import (

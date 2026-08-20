@@ -3,6 +3,7 @@ package tool_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -149,7 +150,7 @@ func TestResumeDoesNotDuplicateAdvertisedTools(t *testing.T) {
 	}
 }
 
-func TestClientToolNameCollisionPanics(t *testing.T) {
+func TestClientToolNameCollisionReturnsError(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
 			ToolCalls:  []gantry.ToolCall{{ID: "x", Name: "add_one", Input: json.RawMessage(`1`)}},
@@ -164,12 +165,13 @@ func TestClientToolNameCollisionPanics(t *testing.T) {
 		t.Fatalf("install client tools: %v", err)
 	}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("expected panic on client/registered tool name collision")
-		}
-	}()
-	_, _ = a.Run(context.Background(), "go")
+	_, err := a.Run(context.Background(), "go")
+	if err == nil {
+		t.Fatal("expected an error on client/registered tool name collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "add_one") {
+		t.Fatalf("error = %v, want it to name the colliding tool", err)
+	}
 }
 
 func TestClientDoubleInstallReturnsError(t *testing.T) {
