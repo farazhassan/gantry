@@ -348,6 +348,31 @@ func TestSuspendClientCallsInstalledReportsBothPaths(t *testing.T) {
 	}
 }
 
+func TestDynamicClientInstalledDistinguishesFromClient(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+
+	bare, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if tool.DynamicClientInstalled(bare) {
+		t.Fatal("bare agent: want false")
+	}
+
+	withClient, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := withClient.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+	if tool.DynamicClientInstalled(withClient) {
+		t.Fatal("agent with only Client (no DynamicClient): want false")
+	}
+
+	withDynamic, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := withDynamic.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+	if !tool.DynamicClientInstalled(withDynamic) {
+		t.Fatal("agent with DynamicClient: want true")
+	}
+}
+
 func TestClientAndDynamicClientCannotBothInstall(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))

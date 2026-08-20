@@ -256,6 +256,58 @@ func TestHandlerRejectsToolsWithoutClientSupport(t *testing.T) {
 	}
 }
 
+// TestHandlerRejectsToolsWithOnlyStaticClientSupport is a regression test for
+// a real gap: tool.Client and tool.DynamicClient both install the same
+// PhaseObserve suspend middleware, but only DynamicClient's PhaseStart
+// middleware reads the per-run pending-defs Meta key that request-declared
+// tools are stashed under (via tool.SetPendingClientTools). An agent with
+// only tool.Client installed would previously pass the safety-net check
+// (since some client-tool suspend support existed) and return 200, while the
+// request-declared tool was silently never advertised to the LLM — exactly
+// the "unexplained gap" failure mode the safety net exists to catch.
+func TestHandlerRejectsToolsWithOnlyStaticClientSupport(t *testing.T) {
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
+	if err := a.With(tool.Client(ask.Definition())); err != nil {
+		t.Fatalf("install client tools: %v", err)
+	}
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"get_location"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (only tool.Client installed, no DynamicClient)", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "DynamicClient") {
+		t.Fatalf("body = %q, want a message pointing at tool.DynamicClient", b)
+	}
+}
+
+// TestHandlerAllowsEmptyToolsArrayWithoutClientSupport pins the
+// len(in.Tools) > 0 check: a present-but-empty "tools" array declares
+// nothing, so it must not trip the safety net even with no client-tool
+// support installed.
+func TestHandlerAllowsEmptyToolsArrayWithoutClientSupport(t *testing.T) {
+	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty tools array declares nothing)", resp.StatusCode)
+	}
+}
+
 // dynamicClientAgent returns an agent whose mock LLM calls get_location (a
 // tool declared only per-request, via RunAgentInput.tools — not statically
 // via tool.Client) on the first request and answers with text on the second.

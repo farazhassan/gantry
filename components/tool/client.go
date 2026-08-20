@@ -221,6 +221,23 @@ func SuspendClientCallsInstalled(a *gantry.Agent) bool {
 	return false
 }
 
+// DynamicClientInstalled reports whether DynamicClient specifically (not
+// just Client) is installed on a. Request-declared, per-run client tools
+// (set via SetPendingClientTools) are only ever advertised to the LLM by
+// DynamicClient's PhaseStart middleware — SuspendClientCallsInstalled alone
+// does not guarantee that, since Client also installs the shared suspend
+// middleware without reading per-run pending defs. Callers that decode
+// dynamic per-request tool declarations (e.g. an AG-UI handler) should
+// check this specifically before trusting they'll be advertised.
+func DynamicClientInstalled(a *gantry.Agent) bool {
+	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
+		if name == dynamicClientAdvertiseName {
+			return true
+		}
+	}
+	return false
+}
+
 // markClientNames merges names into the client-tool-name set recorded on
 // s.Meta, so multiple markers within the same PhaseStart chain compose
 // instead of clobbering each other.

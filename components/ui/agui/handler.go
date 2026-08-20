@@ -23,11 +23,13 @@ import (
 //
 // Scope (v1): the request's message history and client-declared tools (see
 // RunAgentInput.Tools) are honored; client-supplied state is ignored. A
-// request that declares tools requires components/tool.Client or
-// tool.DynamicClient installed on agent — see the clientToolsReady check
-// below. The caller is responsible for auth/middleware around this handler
-// (CORS is the one exception — see WithAllowedOrigins). Cancellation follows
-// the request context, so a client disconnect stops the run.
+// request that declares tools requires components/tool.DynamicClient
+// installed on agent specifically — tool.Client alone is not enough, since
+// it never advertises per-request tool declarations (see the
+// clientToolsReady check below). The caller is responsible for
+// auth/middleware around this handler (CORS is the one exception — see
+// WithAllowedOrigins). Cancellation follows the request context, so a
+// client disconnect stops the run.
 //
 // With no opts, Handler still hardens the stream for production traffic: a
 // run's terminal error is logged server-side and streamed to the client as
@@ -40,12 +42,21 @@ import (
 func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 	cfg := streamconfig.Apply(opts...)
 
-	// Computed once at construction, not per-request: whether the agent can
-	// suspend on a request-declared client tool call. Without this, an
-	// unresolved pending call is silently cleared by DefaultObserveHandler
-	// with no result message, which the next LLM call sees as an
-	// unexplained gap in the transcript — see tool.SuspendClientCallsInstalled.
-	clientToolsReady := tool.SuspendClientCallsInstalled(agent)
+	// Computed once at construction, not per-request: whether request-declared
+	// client tools (RunAgentInput.Tools) will actually be advertised to the
+	// LLM. This must check DynamicClient specifically, not just "some
+	// client-tool suspend support is installed": tool.Client also installs
+	// the shared PhaseObserve suspend middleware (so
+	// tool.SuspendClientCallsInstalled would report true for it too), but
+	// its PhaseStart middleware only advertises its own fixed static defs —
+	// it never reads the per-run pending-defs Meta key that
+	// tool.SetPendingClientTools writes. Only DynamicClient's PhaseStart
+	// middleware does that. Getting this wrong lets a request-declared tool
+	// call be silently dropped: an unresolved pending call is cleared by
+	// DefaultObserveHandler with no result message, which the next LLM call
+	// sees as an unexplained gap in the transcript — see
+	// tool.DynamicClientInstalled.
+	clientToolsReady := tool.DynamicClientInstalled(agent)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cfg.CORSEnabled() {
@@ -75,8 +86,8 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 			return
 		}
 		if len(in.Tools) > 0 && !clientToolsReady {
-			http.Error(w, "agui: request declares tools but the agent has no client-tool "+
-				"suspend support installed (see components/tool.DynamicClient)", http.StatusInternalServerError)
+			http.Error(w, "agui: request declares tools but the agent has no components/tool.DynamicClient "+
+				"installed (tool.Client alone does not advertise request-declared tools)", http.StatusInternalServerError)
 			return
 		}
 
