@@ -180,7 +180,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		case outcome.err != nil:
 			cfg.Logger.Log(r.Context(), runErrorLogLevel(outcome.err), "agui: run ended with error",
 				"threadId", threadID, "runId", runID, "error", outcome.err)
-			_ = sink.EmitError(errors.New(cfg.SafeMapError(outcome.err)))
+			_ = sink.EmitError(errors.New(cfg.SafeMapError(outcome.err, "agui: internal error")))
 		}
 	})
 }

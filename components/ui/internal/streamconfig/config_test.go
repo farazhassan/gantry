@@ -95,9 +95,20 @@ func TestWithAllowedOriginsExactList(t *testing.T) {
 func TestSafeMapErrorRecoversPanic(t *testing.T) {
 	c := Default()
 	c.MapError = func(error) string { panic("boom") }
-	got := c.SafeMapError(errors.New("x"))
-	if got != "internal error" {
-		t.Errorf("SafeMapError after panic = %q, want the generic fallback", got)
+	got := c.SafeMapError(errors.New("x"), "agui: internal error")
+	if got != "agui: internal error" {
+		t.Errorf("SafeMapError after panic = %q, want the caller's fallback", got)
+	}
+}
+
+func TestSafeMapErrorFallbackVariesByCaller(t *testing.T) {
+	// Different wrappers pass their own protocol-prefixed fallback, so a
+	// panicking (or nil) MapError still yields that wrapper's existing
+	// errorText convention rather than one hard-coded generic string.
+	c := Default()
+	c.MapError = func(error) string { panic("boom") }
+	if got := c.SafeMapError(errors.New("x"), "vercelai: internal error"); got != "vercelai: internal error" {
+		t.Errorf("SafeMapError after panic = %q, want %q", got, "vercelai: internal error")
 	}
 }
 
@@ -114,7 +125,7 @@ func TestSafeMapErrorOnBareConfig(t *testing.T) {
 	// MapError nil. SafeMapError must not panic in either case.
 	t.Run("nil MapError", func(t *testing.T) {
 		c := &Config{}
-		got := c.SafeMapError(errors.New("x"))
+		got := c.SafeMapError(errors.New("x"), "internal error")
 		if got != "internal error" {
 			t.Errorf("SafeMapError with nil MapError = %q, want %q", got, "internal error")
 		}
@@ -122,7 +133,7 @@ func TestSafeMapErrorOnBareConfig(t *testing.T) {
 
 	t.Run("panicking MapError, nil Logger", func(t *testing.T) {
 		c := &Config{MapError: func(error) string { panic("boom") }}
-		got := c.SafeMapError(errors.New("x"))
+		got := c.SafeMapError(errors.New("x"), "internal error")
 		if got != "internal error" {
 			t.Errorf("SafeMapError with nil Logger and panicking MapError = %q, want %q", got, "internal error")
 		}

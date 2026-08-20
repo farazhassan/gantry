@@ -158,13 +158,20 @@ func (c *Config) OriginAllowed(origin string) bool {
 // this, a bug in a WithErrorMapper would take the request down with an
 // unexplained EOF instead of a clean client-visible error.
 //
+// fallback is returned verbatim whenever MapError can't produce a message
+// (nil, or it panics) — callers pass their own protocol-prefixed generic
+// message (e.g. "agui: internal error", "vercelai: internal error") so a
+// panicking mapper still yields the same errorText convention as every
+// other internal-failure path in that wrapper's handler, instead of a
+// bare, unprefixed "internal error".
+//
 // Config's fields are all exported, so a Config can be built as a bare
 // struct literal without going through Default()/Apply(), leaving Logger
 // and/or MapError nil. Both are guarded here: a nil Logger falls back to
 // noopLogger instead of nil-dereferencing inside the recover handler
 // (defeating the whole point of this function), and a nil MapError is
 // treated as an immediate failure rather than a guaranteed panic.
-func (c *Config) SafeMapError(err error) (msg string) {
+func (c *Config) SafeMapError(err error, fallback string) (msg string) {
 	logger := c.Logger
 	if logger == nil {
 		logger = noopLogger
@@ -172,11 +179,11 @@ func (c *Config) SafeMapError(err error) (msg string) {
 	defer func() {
 		if p := recover(); p != nil {
 			logger.Error("streamconfig: panic in error mapper", "panic", p, "stack", string(debug.Stack()))
-			msg = "internal error"
+			msg = fallback
 		}
 	}()
 	if c.MapError == nil {
-		return "internal error"
+		return fallback
 	}
 	return c.MapError(err)
 }

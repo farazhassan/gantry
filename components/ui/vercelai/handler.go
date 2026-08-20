@@ -168,7 +168,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		case outcome.err != nil:
 			cfg.Logger.Log(r.Context(), runErrorLogLevel(outcome.err), "vercelai: run ended with error",
 				"error", outcome.err)
-			_ = sink.EmitError(errors.New(cfg.SafeMapError(outcome.err)))
+			_ = sink.EmitError(errors.New(cfg.SafeMapError(outcome.err, "vercelai: internal error")))
 		}
 	})
 }
