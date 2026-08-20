@@ -28,16 +28,20 @@ beyond what this example wires up.
 ### Calling it from a browser (CORS)
 
 CORS is disabled by default, matching the package's default (the caller owns
-auth/middleware). Unlike a curl-only demo, a CopilotKit frontend is *always*
-a separate browser origin from this server — CopilotKit runs inside your web
-app's own dev server (e.g. `http://localhost:3000`), not alongside the Go
-process — so you will need `AGUI_ALLOWED_ORIGINS` for any real integration:
+auth/middleware). If you're calling this server directly from browser code
+(e.g. a raw `fetch`, or `@ag-ui/client`'s `HttpAgent` constructed *in the
+browser*) from a different origin, you'll need `AGUI_ALLOWED_ORIGINS`:
 
 ```bash
 AGUI_ALLOWED_ORIGINS=http://localhost:3000 go run ./examples/agui-copilotkit
 # or, for any origin during local development:
 AGUI_ALLOWED_ORIGINS=* go run ./examples/agui-copilotkit
 ```
+
+The `frontend/` app below does **not** need this: its browser code never
+talks to this Go server directly, only to its own same-origin
+`/api/copilotkit` Next.js route, which then talks to this server
+server-side (not subject to browser CORS at all).
 
 ## Basic run: a request-declared tool
 
@@ -67,104 +71,47 @@ full manual walkthrough of that suspend/resume round trip against a real
 model; the mechanics are identical here, only the tool's origin (request vs.
 Go code) differs.
 
-## Wiring an actual CopilotKit frontend
+## A real CopilotKit frontend: `frontend/`
 
-This is the part that's new relative to `examples/agui`. CopilotKit talks the
-AG-UI protocol **directly** — there is no separate "CopilotKit wire protocol"
-to bridge. But connecting a custom AG-UI backend like this one still goes
-through a small **CopilotKit Runtime** route: a backend endpoint (typically a
-Next.js API route) that constructs `@ag-ui/client`'s `HttpAgent` pointed at
-your Gantry server and registers it by name. The frontend's `<CopilotKit>`
-component then just points `runtimeUrl` at that route and names the agent by
-the id it was registered under — it does not construct or hold an `HttpAgent`
-itself. The only thing that changes on the Go side is installing
-`tool.DynamicClient()` instead of `tool.Client(...)`, since CopilotKit sends
-its registered frontend actions per-request in `RunAgentInput.tools` rather
-than once at agent construction.
+[`frontend/`](frontend) is a real, runnable Next.js app wired up to this
+server — not a snippet. It proves the point of `tool.DynamicClient`
+concretely: it registers a `get_location` frontend action via
+`useCopilotAction`, backed by the browser's real `navigator.geolocation`
+API — something this Go server can never do itself, since it has no access
+to the browser. When the model calls `get_location`, the run suspends
+exactly as in the curl example above, and CopilotKit resolves it in the
+browser.
 
-This repo ships no JS/npm tooling, so the snippets below are illustrative —
-they show the shape of a real integration, not runnable files in this repo.
+CopilotKit talks the AG-UI protocol **directly** — there is no separate
+"CopilotKit wire protocol" to bridge. Connecting a custom AG-UI backend like
+this one goes through a small **CopilotKit Runtime** route
+(`frontend/app/api/copilotkit/route.ts`) that constructs `@ag-ui/client`'s
+`HttpAgent` pointed at this Gantry server and registers it under the agent
+id `gantry_demo`. The frontend's `<CopilotKit runtimeUrl="/api/copilotkit"
+agent="gantry_demo">` (`frontend/app/layout.tsx`) then just names that agent
+id — it never constructs or holds an `HttpAgent` itself. The only thing that
+changes on the Go side, relative to a fixed-tool example like
+`examples/agui`, is installing `tool.DynamicClient()` instead of
+`tool.Client(...)`, since CopilotKit sends its registered frontend actions
+per-request in `RunAgentInput.tools` rather than once at agent construction.
 
-**1. Backend Runtime route** (e.g. `app/api/copilotkit/route.ts` in a Next.js
-App Router project) — this is the piece that actually constructs `HttpAgent`:
+Quick start (two terminals):
 
-```ts
-// app/api/copilotkit/route.ts
-import {
-  CopilotRuntime,
-  copilotRuntimeNextJSAppRouterEndpoint,
-  ExperimentalEmptyAdapter,
-} from "@copilotkit/runtime";
-import { HttpAgent } from "@ag-ui/client";
-import { NextRequest } from "next/server";
+```bash
+# terminal 1, repo root: the Gantry AG-UI server
+go run ./examples/agui-copilotkit
 
-// CopilotRuntime's serviceAdapter normally picks the LLM for CopilotKit's own
-// built-in chat completion path; it's unused here because HttpAgent is a
-// full AG-UI agent (this Gantry server) that generates its own responses, so
-// an empty adapter is the standard placeholder for this shape. (Import names
-// under @copilotkit/runtime have moved across versions -- check your
-// installed version's docs if this doesn't match exactly.)
-const serviceAdapter = new ExperimentalEmptyAdapter();
-
-const runtime = new CopilotRuntime({
-  agents: {
-    // Points at this example server (AGUI_ADDR, default :8080). The key
-    // ("gantry_demo") is the id the frontend below selects via `agent=`.
-    gantry_demo: new HttpAgent({ url: "http://localhost:8080/agui" }),
-  },
-});
-
-export const POST = async (req: NextRequest) => {
-  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
-    runtime,
-    serviceAdapter,
-    endpoint: "/api/copilotkit",
-  });
-  return handleRequest(req);
-};
+# terminal 2: the CopilotKit frontend
+cd examples/agui-copilotkit/frontend
+npm install
+npm run dev
 ```
 
-**2. Frontend** — `runtimeUrl` points at the Runtime route above, and `agent`
-is the **string id** it was registered under (not an `HttpAgent` instance):
-
-```tsx
-import { CopilotKit, useCopilotAction } from "@copilotkit/react-core";
-
-function LocationAction() {
-  // Registers a *frontend* action: the tool's definition (name, description,
-  // parameters) is sent to the server per-request in RunAgentInput.tools, and
-  // its handler/render run entirely in the browser -- nothing is executed
-  // server-side. This is exactly what tool.DynamicClient advertises and
-  // suspends on: the model calls "get_location", the Go server has never
-  // heard of it, the run suspends, and CopilotKit resolves it here.
-  useCopilotAction({
-    name: "get_location",
-    description: "Returns the browser's current location.",
-    parameters: [],
-    handler: async () => {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject),
-      );
-      return { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    },
-    render: ({ status }) => <span>Locating you… ({status})</span>,
-  });
-  return null;
-}
-
-export default function App() {
-  return (
-    <CopilotKit runtimeUrl="/api/copilotkit" agent="gantry_demo">
-      <LocationAction />
-      {/* your chat UI */}
-    </CopilotKit>
-  );
-}
-```
-
-`render` (or a returned result from `handler`) is what makes `get_location` a
-*frontend* action rather than a server-side tool: the call is fulfilled by
-code running in the user's browser (here, the Geolocation API), not by Go.
+Then open <http://localhost:3000> and ask "Where am I?". The Runtime route
+reads the Go server's URL from `GANTRY_AGUI_URL` (default
+`http://localhost:8080/agui`, matching `AGUI_ADDR` above) — see
+`frontend/.env.local.example`. See [`frontend/README.md`](frontend/README.md)
+for more on running and structuring the app.
 
 ## Without `tool.DynamicClient`
 
