@@ -217,11 +217,13 @@ func TestDynamicClientSuspendsOnPerRunTool(t *testing.T) {
 	}
 
 	prior := &gantry.State{}
-	tool.SetPendingClientTools(prior, gantry.ToolDef{
+	if err := tool.SetPendingClientTools(prior, gantry.ToolDef{
 		Name:        "get_location",
 		Description: "returns the browser's location",
 		Schema:      json.RawMessage(`{}`),
-	})
+	}); err != nil {
+		t.Fatalf("SetPendingClientTools: %v", err)
+	}
 
 	state, err := a.RunFrom(context.Background(), prior, "where am I?")
 	if err != nil {
@@ -281,11 +283,13 @@ func TestDynamicClientDoesNotReadvertiseOnLaterResumeWithoutResetting(t *testing
 	}
 
 	prior := &gantry.State{}
-	tool.SetPendingClientTools(prior, gantry.ToolDef{
+	if err := tool.SetPendingClientTools(prior, gantry.ToolDef{
 		Name:        "get_location",
 		Description: "returns the browser's location",
 		Schema:      json.RawMessage(`{}`),
-	})
+	}); err != nil {
+		t.Fatalf("SetPendingClientTools: %v", err)
+	}
 
 	suspended, err := a.RunFrom(context.Background(), prior, "where am I?")
 	if err != nil {
@@ -352,5 +356,113 @@ func TestClientAndDynamicClientCannotBothInstall(t *testing.T) {
 	}
 	if err := a.With(tool.DynamicClient()); err == nil {
 		t.Fatal("installing DynamicClient after Client: want error, got nil")
+	}
+}
+
+func TestDynamicClientStaleNameDoesNotResuspendOnLaterResume(t *testing.T) {
+	// Regression: a name marked client-side by SetPendingClientTools on one
+	// run/resume of a *State must not linger into a later run/resume of the
+	// SAME state where SetPendingClientTools was not called again. If it
+	// lingers, a call to that name on a later turn is wrongly classified
+	// client-side and re-suspends the run even though nobody declared it
+	// client-side this turn — a silent hang from the caller's perspective,
+	// since it's waiting on a frontend nobody asked anything of.
+	//
+	// No registered server tool is involved here on purpose: the dispatch
+	// middleware's client/registered-name collision panic (see
+	// TestDynamicClientStaleNameDoesNotCollideWithServerToolOnLaterResume's
+	// removal note below) fires unconditionally whenever a name is present
+	// in the client-marked set and also registered — independent of
+	// staleness, and even independent of whether that name is actually
+	// called that turn. That makes it unsuitable for isolating the leak:
+	// marking a registered name client-side panics on the very turn it's
+	// marked, not on a later stale turn. This test isolates the leak itself
+	// by using a name with no registered tool at all.
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			// Turn 1: get_location is client-marked via SetPendingClientTools
+			// this turn, so the call suspends.
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{
+			// Turn 2 (after Resume, no SetPendingClientTools this time): the
+			// LLM calls get_location again. It must NOT be treated as
+			// client-side, since nothing declared it this turn.
+			ToolCalls:  []gantry.ToolCall{{ID: "q2", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+
+	prior := &gantry.State{}
+	if err := tool.SetPendingClientTools(prior, gantry.ToolDef{
+		Name:        "get_location",
+		Description: "client-side get_location for turn 1 only",
+		Schema:      json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("SetPendingClientTools: %v", err)
+	}
+
+	suspended, err := a.RunFrom(context.Background(), prior, "where am I?")
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if !suspended.Done || suspended.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend", suspended.Done, suspended.DoneReason)
+	}
+
+	// Fulfill the client call and clear terminal fields, then resume the SAME
+	// state WITHOUT calling SetPendingClientTools again.
+	suspended.Messages = append(suspended.Messages, gantry.Message{
+		Role:       gantry.RoleTool,
+		ToolCallID: suspended.PendingToolCalls[0].ID,
+		Content:    `{"lat":0,"lng":0}`,
+	})
+	suspended.Done = false
+	suspended.DoneReason = ""
+	suspended.PendingToolCalls = nil
+
+	final, err := a.Resume(context.Background(), suspended)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	// The bug: q2 gets wrongly classified client-side and the run suspends
+	// again with DoneClientToolCall instead of running the rest of the loop
+	// (the unhandled call falling through with no dispatcher installed, then
+	// the LLM producing its normal final "done" response).
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%q out=%q, want the run to continue past q2 (not re-suspend) to a normal finish",
+			final.DoneReason, final.FinalOutput)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("got %d LLM requests, want 3 (turn 1, turn 2's get_location call, turn 2's continuation past it)", len(reqs))
+	}
+}
+
+func TestSetPendingClientToolsEmptyNameReturnsError(t *testing.T) {
+	prior := &gantry.State{}
+	badDef := gantry.ToolDef{Name: "", Description: "bad", Schema: json.RawMessage(`{}`)}
+	if err := tool.SetPendingClientTools(prior, badDef); err == nil {
+		t.Fatal("empty tool name: want error, got nil")
+	}
+	if prior.Meta != nil {
+		t.Fatalf("state.Meta = %#v, want untouched after validation failure", prior.Meta)
+	}
+}
+
+func TestSetPendingClientToolsDuplicateNameReturnsError(t *testing.T) {
+	prior := &gantry.State{}
+	dupDef := gantry.ToolDef{Name: "same", Description: "dup", Schema: json.RawMessage(`{}`)}
+	if err := tool.SetPendingClientTools(prior, dupDef, dupDef); err == nil {
+		t.Fatal("duplicate tool name: want error, got nil")
+	}
+	if prior.Meta != nil {
+		t.Fatalf("state.Meta = %#v, want untouched after validation failure", prior.Meta)
 	}
 }

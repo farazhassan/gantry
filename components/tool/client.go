@@ -85,20 +85,37 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 // SuspendClientCallsInstalled to verify that ahead of time and fail clearly
 // instead of silently losing the call.
 //
+// An empty tool name, or a duplicate name among the defs passed in this
+// call, returns an error and leaves s unmodified — the same validation
+// Client.Install performs at agent-construction time, applied here at
+// per-run time since a caller decoding tool names from a request (e.g. an
+// AG-UI handler) can hand this malformed input just as easily.
+//
 // Unlike Client (fixed defs at agent-construction time), this supports a
 // tool set that varies per caller/session — e.g. an AG-UI handler calling it
 // from its request-decoding path with tools decoded from a request (like a
 // CopilotKit frontend action) — at the cost of needing to be called before
 // every run/resume that should advertise them.
-func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) {
+func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) error {
 	if len(defs) == 0 {
-		return
+		return nil
+	}
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		if d.Name == "" {
+			return errors.New("tool: client tools require non-empty tool names")
+		}
+		if names[d.Name] {
+			return errors.New("tool: duplicate client tool name " + d.Name)
+		}
+		names[d.Name] = true
 	}
 	if s.Meta == nil {
 		s.Meta = map[string]any{}
 	}
 	existing, _ := s.Meta[pendingClientDefsMetaKey].([]gantry.ToolDef)
 	s.Meta[pendingClientDefsMetaKey] = append(existing, defs...)
+	return nil
 }
 
 type dynamicClientComponent struct{}
@@ -120,6 +137,7 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 	return a.UseNamed(gantry.PhaseStart, dynamicClientAdvertiseName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			defs, _ := s.Meta[pendingClientDefsMetaKey].([]gantry.ToolDef)
+			names := make(map[string]bool, len(defs))
 			if len(defs) > 0 {
 				// Consume the pending defs: delete them from Meta so they
 				// don't silently re-advertise on a later Run/Resume call on
@@ -127,12 +145,20 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 				// SetPendingClientTools again (see its doc comment).
 				delete(s.Meta, pendingClientDefsMetaKey)
 				s.Tools = append(s.Tools, defs...)
-				names := make(map[string]bool, len(defs))
 				for _, d := range defs {
 					names[d.Name] = true
 				}
-				markClientNames(s, names)
 			}
+			// Unlike Client's fixed name set (safe to merge every call via
+			// markClientNames, since it's the same names every time),
+			// DynamicClient's name set varies per run and must be replaced
+			// wholesale — including being cleared when this run set no
+			// pending defs — so a name marked client-side on an earlier
+			// run/resume of the same *State can't linger and wrongly
+			// re-suspend a call nobody advertised this turn (see
+			// replaceClientNames, and
+			// TestDynamicClientStaleNameDoesNotResuspendOnLaterResume).
+			replaceClientNames(s, names)
 			return next(ctx, s)
 		}
 	})
@@ -141,9 +167,9 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 // SuspendClientCalls installs the PhaseObserve middleware that suspends a
 // run when any pending tool call's name was marked client-side this run (by
 // Client's or DynamicClient's PhaseStart middleware). Client and
-// DynamicClient both install this internally; call it directly only if you
-// are marking client tool names some other way. Installing it twice on the
-// same agent returns an error.
+// DynamicClient both install this internally — most callers want one of
+// those, not this directly. Installing it twice on the same agent returns
+// an error.
 func SuspendClientCalls() gantry.Component {
 	return suspendComponent{}
 }
@@ -204,6 +230,24 @@ func markClientNames(s *gantry.State, names map[string]bool) {
 		set[n] = true
 	}
 	s.Meta[clientToolsMetaKey] = set
+}
+
+// replaceClientNames overwrites the client-tool-name set recorded on s.Meta
+// with exactly names, clearing the key entirely when names is empty. Used by
+// DynamicClient, whose per-run tool set must not carry stale names forward
+// from an earlier run/resume on the same *State — unlike Client's fixed set,
+// which is the same every call and so is safe to merge via markClientNames.
+func replaceClientNames(s *gantry.State, names map[string]bool) {
+	if len(names) == 0 {
+		if s.Meta != nil {
+			delete(s.Meta, clientToolsMetaKey)
+		}
+		return
+	}
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	s.Meta[clientToolsMetaKey] = names
 }
 
 // clientToolSet returns the client-tool name set recorded by Client or
