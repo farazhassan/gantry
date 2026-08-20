@@ -7,6 +7,8 @@ this file only covers running this app.
 
 ## Run
 
+Requires Node 20.9+ (Next.js 16's minimum).
+
 ```bash
 # terminal 1, from the repo root: the Gantry AG-UI server
 go run ./examples/agui-copilotkit
@@ -17,6 +19,10 @@ npm run dev
 ```
 
 Then open <http://localhost:3000> and ask "Where am I?".
+
+CopilotKit's Runtime prints an anonymous-telemetry notice on every build/dev
+run; set `COPILOTKIT_TELEMETRY_DISABLED=true` in the environment (or in
+`.env.local`) to opt out.
 
 ## Layout
 

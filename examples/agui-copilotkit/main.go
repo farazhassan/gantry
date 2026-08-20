@@ -67,9 +67,13 @@ func main() {
 	}
 
 	// CORS is disabled by default, matching the package's default (the caller
-	// owns auth/middleware) -- but a CopilotKit frontend is *always* a
-	// separate browser origin from this server, so you will need
-	// AGUI_ALLOWED_ORIGINS to actually use this from CopilotKit's dev server.
+	// owns auth/middleware). It's only needed for a caller that talks to
+	// this server directly from browser code (a raw fetch, or @ag-ui/client's
+	// HttpAgent constructed *in the browser*, or the curl examples in the
+	// README). The examples/agui-copilotkit/frontend CopilotKit app does NOT
+	// need this: its browser code only ever talks to its own same-origin
+	// Next.js Runtime route, which then calls this server server-side --
+	// never subject to browser CORS. See the README for the full picture.
 	var aguiOpts []agui.Option
 	if origins := parseOrigins(os.Getenv("AGUI_ALLOWED_ORIGINS")); len(origins) > 0 {
 		aguiOpts = append(aguiOpts, agui.WithAllowedOrigins(origins...))

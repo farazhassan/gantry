@@ -40,9 +40,29 @@ function LocationAction() {
         return { error: message };
       }
     },
-    render: ({ status }) => <span>Locating you... ({status})</span>,
+    render: ({ status, result }) => {
+      switch (status) {
+        case "inProgress":
+          return <span>Preparing to ask the browser for your location...</span>;
+        case "executing":
+          return <span>Locating you (check for a permission prompt)...</span>;
+        case "complete":
+          return <span>{describeLocationResult(result)}</span>;
+      }
+    },
   });
   return null;
+}
+
+function describeLocationResult(result: unknown): string {
+  if (result && typeof result === "object" && "error" in result) {
+    return `Could not get your location: ${String((result as { error: unknown }).error)}`;
+  }
+  if (result && typeof result === "object" && "lat" in result && "lng" in result) {
+    const { lat, lng } = result as { lat: number; lng: number };
+    return `Found you at ${lat.toFixed(4)}, ${lng.toFixed(4)}.`;
+  }
+  return "Done.";
 }
 
 function geolocationErrorMessage(err: GeolocationPositionError): string {
