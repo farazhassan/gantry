@@ -297,3 +297,58 @@ func (r *ChatRequest) ToRun() (prior *gantry.State, input string, err error) {
 	}
 	return &gantry.State{Messages: msgs}, inputText, nil
 }
+
+// ToResume reconstructs the full prior conversation, including the final
+// message, as a non-terminal State for gantry.ResumeStream. The handler
+// uses it when the message list ends in an assistant turn whose tool
+// call(s) are now resolved -- this protocol's equivalent of AG-UI's
+// tool-role-terminated resume signal (there is no separate "tool" role
+// here; see doc.go's "Run vs. resume" note).
+//
+// It errors under the same conditions as ToRun (empty Messages, unknown
+// role, invalid tool linkage), applied to the FULL message list including
+// the last one -- so an unresolved tool call anywhere, including the very
+// last message, is caught by requireToolResults -- plus: a last message
+// with no tool part at all (nothing to resume).
+func (r *ChatRequest) ToResume() (*gantry.State, error) {
+	if len(r.Messages) == 0 {
+		return nil, errors.New("vercelai: messages is empty")
+	}
+	last := r.Messages[len(r.Messages)-1]
+	if !hasToolPart(last) {
+		return nil, errors.New("vercelai: last message has no tool call to resume")
+	}
+
+	var msgs []gantry.Message
+	for i := range r.Messages {
+		mm, err := toGantryMessages(r.Messages[i])
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, mm...)
+	}
+	if err := requireToolResults(msgs); err != nil {
+		return nil, err
+	}
+	// ResumeStream runs this State directly (no rebuild from a fresh
+	// input), so Meta and Trace must be initialized here -- mirrors agui's
+	// ToResume, which needs the same for the client-tools advertise
+	// middleware (Meta) and the run loop (Trace).
+	return &gantry.State{
+		Messages: msgs,
+		Meta:     map[string]any{},
+		Trace:    gantry.NewTrace(),
+	}, nil
+}
+
+// hasToolPart reports whether m has at least one tool-call part -- the
+// signal Handler uses to route a request to ResumeStream instead of
+// RunFromStream.
+func hasToolPart(m UIMessage) bool {
+	for _, p := range m.Parts {
+		if isToolPart(p.Type) {
+			return true
+		}
+	}
+	return false
+}
