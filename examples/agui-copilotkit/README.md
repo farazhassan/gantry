@@ -71,23 +71,64 @@ Go code) differs.
 
 This is the part that's new relative to `examples/agui`. CopilotKit talks the
 AG-UI protocol **directly** — there is no separate "CopilotKit wire protocol"
-to bridge — via `@ag-ui/client`'s `HttpAgent`. That means nothing changes on
-the CopilotKit side beyond pointing `HttpAgent` at a Gantry-backed URL; the
-only thing that changes on the Go side is installing `tool.DynamicClient()`
-instead of `tool.Client(...)`, since CopilotKit sends its registered actions
-per-request in `RunAgentInput.tools` rather than once at agent construction.
+to bridge. But connecting a custom AG-UI backend like this one still goes
+through a small **CopilotKit Runtime** route: a backend endpoint (typically a
+Next.js API route) that constructs `@ag-ui/client`'s `HttpAgent` pointed at
+your Gantry server and registers it by name. The frontend's `<CopilotKit>`
+component then just points `runtimeUrl` at that route and names the agent by
+the id it was registered under — it does not construct or hold an `HttpAgent`
+itself. The only thing that changes on the Go side is installing
+`tool.DynamicClient()` instead of `tool.Client(...)`, since CopilotKit sends
+its registered frontend actions per-request in `RunAgentInput.tools` rather
+than once at agent construction.
 
-This repo ships no JS/npm tooling, so the snippet below is illustrative — it
-shows the shape of a real integration, not a runnable file in this repo:
+This repo ships no JS/npm tooling, so the snippets below are illustrative —
+they show the shape of a real integration, not runnable files in this repo.
+
+**1. Backend Runtime route** (e.g. `app/api/copilotkit/route.ts` in a Next.js
+App Router project) — this is the piece that actually constructs `HttpAgent`:
 
 ```ts
+// app/api/copilotkit/route.ts
+import {
+  CopilotRuntime,
+  copilotRuntimeNextJSAppRouterEndpoint,
+  ExperimentalEmptyAdapter,
+} from "@copilotkit/runtime";
 import { HttpAgent } from "@ag-ui/client";
-import { CopilotKit, useCopilotAction } from "@copilotkit/react-core";
+import { NextRequest } from "next/server";
 
-// Point CopilotKit's HttpAgent at this server (AGUI_ADDR, default :8080).
-const agent = new HttpAgent({
-  url: "http://localhost:8080/agui",
+// CopilotRuntime's serviceAdapter normally picks the LLM for CopilotKit's own
+// built-in chat completion path; it's unused here because HttpAgent is a
+// full AG-UI agent (this Gantry server) that generates its own responses, so
+// an empty adapter is the standard placeholder for this shape. (Import names
+// under @copilotkit/runtime have moved across versions -- check your
+// installed version's docs if this doesn't match exactly.)
+const serviceAdapter = new ExperimentalEmptyAdapter();
+
+const runtime = new CopilotRuntime({
+  agents: {
+    // Points at this example server (AGUI_ADDR, default :8080). The key
+    // ("gantry_demo") is the id the frontend below selects via `agent=`.
+    gantry_demo: new HttpAgent({ url: "http://localhost:8080/agui" }),
+  },
 });
+
+export const POST = async (req: NextRequest) => {
+  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
+    runtime,
+    serviceAdapter,
+    endpoint: "/api/copilotkit",
+  });
+  return handleRequest(req);
+};
+```
+
+**2. Frontend** — `runtimeUrl` points at the Runtime route above, and `agent`
+is the **string id** it was registered under (not an `HttpAgent` instance):
+
+```tsx
+import { CopilotKit, useCopilotAction } from "@copilotkit/react-core";
 
 function LocationAction() {
   // Registers a *frontend* action: the tool's definition (name, description,
@@ -113,7 +154,7 @@ function LocationAction() {
 
 export default function App() {
   return (
-    <CopilotKit runtimeUrl={undefined} agent={agent}>
+    <CopilotKit runtimeUrl="/api/copilotkit" agent="gantry_demo">
       <LocationAction />
       {/* your chat UI */}
     </CopilotKit>
@@ -121,7 +162,7 @@ export default function App() {
 }
 ```
 
-`render` (or a returned result from `handler`) is what makes this a
+`render` (or a returned result from `handler`) is what makes `get_location` a
 *frontend* action rather than a server-side tool: the call is fulfilled by
 code running in the user's browser (here, the Geolocation API), not by Go.
 
