@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/components/ui/internal/streamconfig"
 )
 
@@ -20,10 +21,13 @@ import (
 // decodes a RunAgentInput, reconstructs the prior conversation, and streams the
 // agent's events back as AG-UI SSE frames by driving agent.RunFromStream.
 //
-// Scope (v1): the request's message history is honored; client-supplied state
-// and tools are ignored. The caller is responsible for auth/middleware around
-// this handler (CORS is the one exception — see WithAllowedOrigins). Cancellation
-// follows the request context, so a client disconnect stops the run.
+// Scope (v1): the request's message history and client-declared tools (see
+// RunAgentInput.Tools) are honored; client-supplied state is ignored. A
+// request that declares tools requires components/tool.Client or
+// tool.DynamicClient installed on agent — see the clientToolsReady check
+// below. The caller is responsible for auth/middleware around this handler
+// (CORS is the one exception — see WithAllowedOrigins). Cancellation follows
+// the request context, so a client disconnect stops the run.
 //
 // With no opts, Handler still hardens the stream for production traffic: a
 // run's terminal error is logged server-side and streamed to the client as
@@ -35,6 +39,13 @@ import (
 // WithAllowedOrigins) to tune or disable any of this.
 func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 	cfg := streamconfig.Apply(opts...)
+
+	// Computed once at construction, not per-request: whether the agent can
+	// suspend on a request-declared client tool call. Without this, an
+	// unresolved pending call is silently cleared by DefaultObserveHandler
+	// with no result message, which the next LLM call sees as an
+	// unexplained gap in the transcript — see tool.SuspendClientCallsInstalled.
+	clientToolsReady := tool.SuspendClientCallsInstalled(agent)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cfg.CORSEnabled() {
@@ -61,6 +72,11 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		}
 		if len(in.Messages) == 0 {
 			http.Error(w, "agui: messages is empty", http.StatusBadRequest)
+			return
+		}
+		if len(in.Tools) > 0 && !clientToolsReady {
+			http.Error(w, "agui: request declares tools but the agent has no client-tool "+
+				"suspend support installed (see components/tool.DynamicClient)", http.StatusInternalServerError)
 			return
 		}
 
