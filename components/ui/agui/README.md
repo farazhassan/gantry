@@ -111,8 +111,9 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
   reconstructed as prior conversation state.
 - `threadId` / `runId` are optional; if omitted, the handler generates random
   ones.
-- v1 honors `messages` only. Client-supplied `state` and `tools` are accepted in
-  the body but ignored — Gantry tools are server-registered.
+- v1 honors `messages` and, when `tool.DynamicClient` is installed, `tools` —
+  see "Frontend actions" above. Client-supplied `state` is still accepted in
+  the body but ignored.
 
 ### AG-UI event coverage
 
