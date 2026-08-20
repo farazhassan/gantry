@@ -29,6 +29,25 @@ const (
 	pendingClientDefsMetaKey = "components/tool:pending_client_defs"
 )
 
+// validateClientDefNames checks defs for the constraints every client-tool
+// name set must satisfy — non-empty, non-duplicate — returning the name set
+// on success. Shared by Client.Install (validating its fixed defs once, at
+// agent-construction time) and SetPendingClientTools (validating its defs
+// every call, at per-run time).
+func validateClientDefNames(defs []gantry.ToolDef) (map[string]bool, error) {
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		if d.Name == "" {
+			return nil, errors.New("tool: client tools require non-empty tool names")
+		}
+		if names[d.Name] {
+			return nil, errors.New("tool: duplicate client tool name " + d.Name)
+		}
+		names[d.Name] = true
+	}
+	return names, nil
+}
+
 type clientComponent struct{ defs []gantry.ToolDef }
 
 // Client returns a Component declaring definition-only "client-side" tools,
@@ -48,15 +67,9 @@ func Client(defs ...gantry.ToolDef) gantry.Component {
 }
 
 func (c *clientComponent) Install(a *gantry.Agent) error {
-	names := make(map[string]bool, len(c.defs))
-	for _, d := range c.defs {
-		if d.Name == "" {
-			return errors.New("tool: client tools require non-empty tool names")
-		}
-		if names[d.Name] {
-			return errors.New("tool: duplicate client tool name " + d.Name)
-		}
-		names[d.Name] = true
+	names, err := validateClientDefNames(c.defs)
+	if err != nil {
+		return err
 	}
 	defsCopy := append([]gantry.ToolDef(nil), c.defs...)
 
@@ -100,15 +113,8 @@ func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) error {
 	if len(defs) == 0 {
 		return nil
 	}
-	names := make(map[string]bool, len(defs))
-	for _, d := range defs {
-		if d.Name == "" {
-			return errors.New("tool: client tools require non-empty tool names")
-		}
-		if names[d.Name] {
-			return errors.New("tool: duplicate client tool name " + d.Name)
-		}
-		names[d.Name] = true
+	if _, err := validateClientDefNames(defs); err != nil {
+		return err
 	}
 	if s.Meta == nil {
 		s.Meta = map[string]any{}
