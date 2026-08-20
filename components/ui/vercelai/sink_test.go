@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -106,6 +107,36 @@ func TestSinkHeartbeatWritesCommentLine(t *testing.T) {
 	}
 	if got := buf.String(); got != ": ping\n\n" {
 		t.Fatalf("got %q, want %q", got, ": ping\n\n")
+	}
+}
+
+// TestSinkConcurrentEventsDoNotRace drives many goroutines calling the same
+// Sink's EventSink concurrently -- the shape components/tool's parallel
+// tool dispatch produces once two sub-agent runs have passthrough enabled
+// and are invoked in the same PhaseToolExec pass. Run with -race; this test
+// existing at all is the point (a data race here means Sink is unsafe for
+// the exact scenario this feature introduces).
+func TestSinkConcurrentEventsDoNotRace(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "m1")
+	sink := s.Sink()
+
+	var wg sync.WaitGroup
+	const goroutines = 8
+	const eventsEach = 50
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < eventsEach; i++ {
+				_ = sink(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "x"})
+			}
+		}()
+	}
+	wg.Wait()
+
+	if buf.Len() == 0 {
+		t.Fatal("expected SSE frames written, buffer is empty")
 	}
 }
 
