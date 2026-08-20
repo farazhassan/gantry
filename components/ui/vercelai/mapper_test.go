@@ -150,6 +150,25 @@ func TestMapperUsageDedup(t *testing.T) {
 	}
 }
 
+func TestMapperStepBoundaryClosesOpenTextFirst(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	_ = m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseAssembleContext}) // start-step
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi"})                     // text-start + delta
+
+	// PhaseObserve's phase_end fires directly, without an intervening
+	// EventToolCall/EventDone to close the open text block first. The
+	// resulting chunk order must still be text-end before finish-step.
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseObserve})
+	want := []Chunk{
+		newTextEnd("m1:text:1"),
+		newFinishStep(),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperPlanStepActivity(t *testing.T) {
 	m := NewMapper("m1")
 	m.started = true

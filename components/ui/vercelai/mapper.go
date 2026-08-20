@@ -144,7 +144,19 @@ func (m *Mapper) stepBoundary(ev gantry.Event) []Chunk {
 		m.stepOpen = true
 		return []Chunk{newStartStep()}
 	case ev.Type == gantry.EventPhaseEnd && ev.Phase == gantry.PhaseObserve:
-		return m.closeStep()
+		// Close any still-open text/reasoning block before finish-step,
+		// mirroring EventDone's order in Map -- otherwise a client could
+		// see finish-step precede the text-end/reasoning-end that belongs
+		// to the step it just closed. Not reachable through today's stock
+		// gantry loop (EventToolCall already closes both before
+		// PhaseObserve when there are tool calls, and the loop exits
+		// before PhaseObserve when there aren't), but nothing enforces
+		// that invariant, so defend here too.
+		var out []Chunk
+		out = append(out, m.closeText()...)
+		out = append(out, m.closeReasoning()...)
+		out = append(out, m.closeStep()...)
+		return out
 	}
 	return nil
 }
