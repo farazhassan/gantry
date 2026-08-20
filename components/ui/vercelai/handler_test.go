@@ -249,6 +249,48 @@ func TestHandlerMidStreamError(t *testing.T) {
 	}
 }
 
+func TestHandlerResumeOmitsFreshMessageID(t *testing.T) {
+	a := suspendingAgent(t)
+	srv := httptest.NewServer(Handler(a))
+	t.Cleanup(srv.Close)
+
+	first := `{"messages":[{"role":"user","parts":[{"type":"text","text":"hi, I am Ada"}]}]}`
+	r1, err := http.Post(srv.URL, "application/json", strings.NewReader(first))
+	if err != nil {
+		t.Fatalf("POST 1: %v", err)
+	}
+	io.Copy(io.Discard, r1.Body)
+	r1.Body.Close()
+
+	resume := `{"messages":[` +
+		`{"role":"user","parts":[{"type":"text","text":"hi, I am Ada"}]},` +
+		`{"role":"assistant","parts":[{"type":"dynamic-tool","toolCallId":"q1","toolName":"ask_user","state":"output-available","input":{"q":"name?"},"output":{"answer":"Ada"}}]}` +
+		`]}`
+	r2, err := http.Post(srv.URL, "application/json", strings.NewReader(resume))
+	if err != nil {
+		t.Fatalf("POST 2: %v", err)
+	}
+	defer r2.Body.Close()
+	var sb strings.Builder
+	io.Copy(&sb, r2.Body)
+	out := sb.String()
+
+	// Find the "start" chunk and confirm it carries no messageId -- the
+	// resume response continues the client's existing assistant message,
+	// so minting a fresh id here would silently re-identify it client-side.
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") || !strings.Contains(line, `"type":"start"`) {
+			continue
+		}
+		if strings.Contains(line, "messageId") {
+			t.Fatalf("resume's start chunk carries a messageId, want it omitted:\n%s", line)
+		}
+		return
+	}
+	t.Fatalf("no start chunk found in resume response:\n%s", out)
+}
+
 func TestRunErrorLogLevelTreatsCancellationAsDebug(t *testing.T) {
 	if got := runErrorLogLevel(context.Canceled); got.String() != "DEBUG" {
 		t.Errorf("runErrorLogLevel(context.Canceled) = %v, want Debug", got)

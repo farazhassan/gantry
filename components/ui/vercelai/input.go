@@ -188,6 +188,21 @@ func segmentAssistant(m UIMessage) ([]gantry.Message, error) {
 	return out, nil
 }
 
+// decodeToolOutput reconstructs a resolved tool part's Output back into a
+// plain gantry.ToolResult.Content string. newToolOutputAvailable (chunks.go)
+// always JSON-encodes ToolResult.Content as a wire JSON *string* -- so if
+// raw unmarshals as a Go string, that's the original Content value
+// recovered exactly. If raw isn't a JSON string (e.g. a client or test
+// hand-authored a bare object/number as Output), fall back to the raw JSON
+// text as-is, since there's no string to unwrap.
+func decodeToolOutput(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
+}
+
 // toolCallAndResult maps one tool part to a gantry.ToolCall plus, if the
 // part carries a resolved result, the gantry.Message{Role: RoleTool} that
 // answers it. A part in state input-streaming or input-available (no
@@ -206,15 +221,17 @@ func toolCallAndResult(p Part) (gantry.ToolCall, *gantry.Message, error) {
 	}
 	call := gantry.ToolCall{ID: p.ToolCallID, Name: p.ToolName, Input: p.Input}
 
-	// Output is kept as raw JSON text (quotes and all, for a string
-	// output) rather than unwrapped: gantry.ToolResult.Content has no
-	// structured-vs-string distinction, and unwrapping is ill-defined
-	// when Output isn't a JSON string to begin with.
+	// Output is decoded via decodeToolOutput rather than taken as raw JSON
+	// text: newToolOutputAvailable (chunks.go) always JSON-encodes
+	// gantry.ToolResult.Content as a wire JSON *string*, so undoing that
+	// encoding recovers the original Content exactly. See decodeToolOutput
+	// for the fallback when Output isn't a JSON string to begin with (e.g.
+	// a hand-authored test part).
 	switch p.State {
 	case stateInputStreaming, stateInputAvailable:
 		return call, nil, nil
 	case stateOutputAvailable:
-		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: string(p.Output)}, nil
+		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: decodeToolOutput(p.Output)}, nil
 	case stateOutputError:
 		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: p.ErrorText}, nil
 	case stateOutputDenied:

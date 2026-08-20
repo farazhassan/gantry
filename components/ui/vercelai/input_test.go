@@ -99,7 +99,7 @@ func TestToGantryMessagesAssistantWithToolCallAndResult(t *testing.T) {
 	}
 	want := []gantry.Message{
 		{Role: gantry.RoleAssistant, Content: "let me check", ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "search", Input: json.RawMessage(`{"q":"x"}`)}}},
-		{Role: gantry.RoleTool, ToolCallID: "c1", Content: `"found it"`},
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "found it"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
@@ -121,7 +121,7 @@ func TestToGantryMessagesSegmentsOnStepStart(t *testing.T) {
 	}
 	want := []gantry.Message{
 		{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "search", Input: json.RawMessage(`{}`)}}},
-		{Role: gantry.RoleTool, ToolCallID: "c1", Content: `"ok"`},
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "ok"},
 		{Role: gantry.RoleAssistant, Content: "Here's what I found."},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -376,7 +376,7 @@ func TestSegmentAssistantTwoToolCallsOneResolvedOneNot(t *testing.T) {
 				{ID: "c2", Name: "ask_user", Input: json.RawMessage(`{}`)},
 			},
 		},
-		{Role: gantry.RoleTool, ToolCallID: "c1", Content: `"a"`},
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "a"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
@@ -435,6 +435,23 @@ func TestToolCallAndResultOutputErrorAndDenied(t *testing.T) {
 	}
 	if resDenied == nil || resDenied.Content == "" {
 		t.Fatalf("output-denied result = %#v, want a non-empty denial message", resDenied)
+	}
+}
+
+func TestToolCallAndResultOutputAvailableUndoesWireQuoting(t *testing.T) {
+	// newToolOutputAvailable (chunks.go) always JSON-encodes
+	// ToolResult.Content as a wire JSON string -- so a resolved tool part
+	// carrying that same encoding must decode back to the exact original
+	// Content, not the literal (still-quoted) wire text.
+	_, result, err := toolCallAndResult(Part{
+		ToolCallID: "t1", ToolName: "weather", State: "output-available",
+		Output: json.RawMessage(`"{\"temp\":22}"`),
+	})
+	if err != nil {
+		t.Fatalf("toolCallAndResult: %v", err)
+	}
+	if result == nil || result.Content != `{"temp":22}` {
+		t.Fatalf("Content = %#v, want %q (the unwrapped original tool output)", result, `{"temp":22}`)
 	}
 }
 

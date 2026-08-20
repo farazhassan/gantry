@@ -70,6 +70,13 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		// resume signal.
 		last := in.Messages[len(in.Messages)-1]
 		var run func(sink gantry.EventSink) (*gantry.State, error)
+		// messageID is the "start" chunk's messageId. It is only minted
+		// fresh on the "user" (fresh run) branch; on the "assistant"
+		// (resume) branch it stays "" so the field is omitted on the wire
+		// (Start.MessageID has omitempty) -- the client is continuing an
+		// assistant UIMessage it already has, and streaming back a new id
+		// would silently re-identify it.
+		var messageID string
 		switch last.Role {
 		case "user":
 			prior, input, err := in.ToRun()
@@ -77,6 +84,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			messageID = newID()
 			run = func(sink gantry.EventSink) (*gantry.State, error) {
 				return agent.RunFromStream(r.Context(), prior, input, sink)
 			}
@@ -106,7 +114,7 @@ func Handler(agent *gantry.Agent, opts ...Option) http.Handler {
 		w.Header().Set("x-vercel-ai-ui-message-stream", "v1")
 		w.WriteHeader(http.StatusOK)
 
-		sink := NewSink(w, newID())
+		sink := NewSink(w, messageID)
 		if f, ok := w.(http.Flusher); ok {
 			sink.SetFlusher(f.Flush)
 		}
