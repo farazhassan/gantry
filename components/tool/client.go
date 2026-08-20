@@ -121,6 +121,11 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 		return func(ctx context.Context, s *gantry.State) error {
 			defs, _ := s.Meta[pendingClientDefsMetaKey].([]gantry.ToolDef)
 			if len(defs) > 0 {
+				// Consume the pending defs: delete them from Meta so they
+				// don't silently re-advertise on a later Run/Resume call on
+				// the same *State that forgot to call
+				// SetPendingClientTools again (see its doc comment).
+				delete(s.Meta, pendingClientDefsMetaKey)
 				s.Tools = append(s.Tools, defs...)
 				names := make(map[string]bool, len(defs))
 				for _, d := range defs {

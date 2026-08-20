@@ -263,6 +263,62 @@ func TestDynamicClientDoesNotPersistAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestDynamicClientDoesNotReadvertiseOnLaterResumeWithoutResetting(t *testing.T) {
+	// SetPendingClientTools's contract is "the very next run/resume call on
+	// s — and no further". Calling it once, suspending, fulfilling the call,
+	// and then Resuming the SAME *State without calling it again must NOT
+	// re-advertise the tool on that second call.
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+
+	prior := &gantry.State{}
+	tool.SetPendingClientTools(prior, gantry.ToolDef{
+		Name:        "get_location",
+		Description: "returns the browser's location",
+		Schema:      json.RawMessage(`{}`),
+	})
+
+	suspended, err := a.RunFrom(context.Background(), prior, "where am I?")
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if !suspended.Done || suspended.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend", suspended.Done, suspended.DoneReason)
+	}
+
+	// Fulfill the client call and clear terminal fields, then resume the
+	// SAME state WITHOUT calling SetPendingClientTools again.
+	suspended.Messages = append(suspended.Messages, gantry.Message{
+		Role:       gantry.RoleTool,
+		ToolCallID: suspended.PendingToolCalls[0].ID,
+		Content:    `{"lat":0,"lng":0}`,
+	})
+	suspended.Done = false
+	suspended.DoneReason = ""
+	suspended.PendingToolCalls = nil
+
+	if _, err := a.Resume(context.Background(), suspended); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("got %d LLM requests, want 2 (run + resume)", len(reqs))
+	}
+	if len(reqs[1].Tools) != 0 {
+		t.Fatalf("resume request advertised %#v, want none (SetPendingClientTools was not called again)", reqs[1].Tools)
+	}
+}
+
 func TestSuspendClientCallsInstalledReportsBothPaths(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 
