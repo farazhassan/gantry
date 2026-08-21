@@ -14,6 +14,31 @@ It is built in three layers (see `doc.go` for the full overview):
   decodes a `RunAgentInput`, rebuilds the prior conversation, and drives
   `agent.RunFromStream`.
 
+## Frontend actions (CopilotKit)
+
+CopilotKit's `useCopilotAction` registers a tool in the browser and sends it
+per-request in `RunAgentInput.tools` — there is no separate CopilotKit wire
+protocol; it talks AG-UI directly via `@ag-ui/client`'s `HttpAgent`. This
+package honors that field, but the agent must opt in to suspending on a
+call with no server-side implementation:
+
+```go
+agent, err := gantry.NewAgent(gantry.WithLLM(llm))
+if err != nil {
+    log.Fatal(err)
+}
+if err := agent.With(tool.DynamicClient()); err != nil {
+    log.Fatal(err)
+}
+http.Handle("/agui", agui.Handler(agent))
+```
+
+Without `tool.DynamicClient()` installed, `Handler` rejects (HTTP 500) any
+request that declares `tools`, rather than silently dropping the model's
+call. If your agent's tool set never varies per request, prefer the static
+`tool.Client(defs...)` instead — see `components/tool`'s package doc. The
+two are mutually exclusive on one agent (installing both returns an error).
+
 ## Testing it yourself
 
 ### 1. Run the unit + integration tests
@@ -89,8 +114,9 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
   reconstructed as prior conversation state.
 - `threadId` / `runId` are optional; if omitted, the handler generates random
   ones.
-- v1 honors `messages` only. Client-supplied `state` and `tools` are accepted in
-  the body but ignored — Gantry tools are server-registered.
+- v1 honors `messages` and, when `tool.DynamicClient` is installed, `tools` —
+  see "Frontend actions" above. Client-supplied `state` is still accepted in
+  the body but ignored.
 
 ### AG-UI event coverage
 
@@ -118,6 +144,8 @@ signatures/encrypted blocks back to the provider yet).
 
 - **Before streaming starts** (bad JSON, empty `messages`, non-user last
   message, unknown role) → a plain HTTP `400`/`405`, no SSE.
+- **`tools` declared without `tool.DynamicClient` installed** → HTTP `500`
+  (a server misconfiguration, not a client error — see "Frontend actions" above).
 - **Mid-stream** (the agent errors after headers are sent, or panics) → a
   `RUN_ERROR` frame, since the `200` status is already committed. The error is
   also logged server-side (see `WithLogger`); a panic's recovered value/stack

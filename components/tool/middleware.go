@@ -78,10 +78,15 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)
 			// A client-tool name that also names a registered tool is a wiring
-			// bug: dispatch would skip the executable tool. Catch it loudly.
+			// bug — for a statically-declared Client tool, a dev-time mistake;
+			// for a DynamicClient tool (e.g. a request-declared CopilotKit
+			// frontend action), the name may come from untrusted input, so this
+			// must be a normal returned error (not a panic) to avoid handing an
+			// external caller an easy way to force a panic/recover + full
+			// stack-trace log entry on every request that names a collision.
 			for name := range set {
 				if _, ok := c.reg.Lookup(name); ok {
-					panic("tool: client tool name collides with a registered tool: " + name)
+					return fmt.Errorf("tool: client tool name collides with a registered tool: %s", name)
 				}
 			}
 			// Dispatch only server-side (non-client) calls; client-side calls

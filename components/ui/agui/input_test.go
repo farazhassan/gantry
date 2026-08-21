@@ -1,11 +1,14 @@
 package agui
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/eval"
 )
 
 func TestToRunSplitsHistoryAndLastUser(t *testing.T) {
@@ -247,6 +250,79 @@ func TestToRunRejectsUnansweredToolCall(t *testing.T) {
 	}
 	if _, _, err := in.ToRun(); err == nil {
 		t.Fatalf("expected error for unanswered tool call in run history")
+	}
+}
+
+func TestToRunDecodesToolsAndSuspendsOnCall(t *testing.T) {
+	in := &RunAgentInput{
+		Messages: []InputMessage{{Role: "user", Content: "where am I?"}},
+		Tools: []InputTool{
+			{Name: "get_location", Description: "returns the browser's location", Parameters: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	prior, input, err := in.ToRun()
+	if err != nil {
+		t.Fatalf("ToRun: %v", err)
+	}
+	if input != "where am I?" {
+		t.Fatalf("input = %q, want %q", input, "where am I?")
+	}
+
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+
+	state, err := a.RunFrom(context.Background(), prior, input)
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want true / %q", state.Done, state.DoneReason, gantry.DoneClientToolCall)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "get_location" {
+		t.Fatalf("get_location not advertised: %#v", reqs)
+	}
+}
+
+func TestToRunRejectsToolMissingName(t *testing.T) {
+	in := &RunAgentInput{
+		Messages: []InputMessage{{Role: "user", Content: "hi"}},
+		Tools:    []InputTool{{Description: "no name"}},
+	}
+	if _, _, err := in.ToRun(); err == nil {
+		t.Fatal("tool missing name: want error, got nil")
+	}
+}
+
+func TestToRunRejectsInvalidToolParameters(t *testing.T) {
+	in := &RunAgentInput{
+		Messages: []InputMessage{{Role: "user", Content: "hi"}},
+		Tools:    []InputTool{{Name: "bad", Parameters: json.RawMessage(`{not json`)}},
+	}
+	if _, _, err := in.ToRun(); err == nil {
+		t.Fatal("invalid tool parameters: want error, got nil")
+	}
+}
+
+func TestToRunWithNoToolsAdvertisesNone(t *testing.T) {
+	in := &RunAgentInput{Messages: []InputMessage{{Role: "user", Content: "hi"}}}
+	prior, _, err := in.ToRun()
+	if err != nil {
+		t.Fatalf("ToRun: %v", err)
+	}
+	if _, ok := prior.Meta["components/tool:pending_client_defs"]; ok {
+		t.Fatalf("Meta should carry no pending client defs when Tools is empty: %#v", prior.Meta)
 	}
 }
 
