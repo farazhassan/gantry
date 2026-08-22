@@ -257,6 +257,85 @@ func TestInvokeReturnsPendingResultWhenChildSuspends(t *testing.T) {
 	// TestTwoLevelNestedSuspendAndResume (Task 12) — not this task.
 }
 
+func TestResumeFoldsOnlyIncrementalUsageNotCumulative(t *testing.T) {
+	// Regression test for the double-counting bug: gantry.Agent.Resume keeps
+	// accumulating onto the same State.Usage field, so the child's st.Usage
+	// after Resume is CUMULATIVE (pre-suspend + this round), not just this
+	// round's increment. Resume must fold only the increment; folding the
+	// full cumulative total a second time would double-count the pre-suspend
+	// portion that Invoke's own pass already folded.
+	askMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+			Usage:      gantry.Usage{InputTokens: 7, OutputTokens: 11},
+		},
+		gantry.LLMResponse{
+			Content:    "resumed answer",
+			StopReason: gantry.StopReasonEnd,
+			Usage:      gantry.Usage{InputTokens: 5, OutputTokens: 9},
+		},
+	)
+	child, err := gantry.NewAgent(gantry.WithLLM(askMock))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	if err := child.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools on child: %v", err)
+	}
+	tl := New("planner", "plans, asking before executing", child)
+	resumable, ok := tl.(tool.ResumableTool)
+	if !ok {
+		t.Fatal("delegate tool does not implement tool.ResumableTool")
+	}
+
+	// Pass 1: mirrors the PhaseToolExec pass containing the original Invoke —
+	// Component installs a fresh *usageRecorder before delegating to dispatch.
+	rec1 := &usageRecorder{}
+	_, err = tl.Invoke(withUsageRecorder(context.Background(), rec1), json.RawMessage(`{"goal":"plan the release"}`))
+	var pending *gantry.PendingResult
+	if !errors.As(err, &pending) {
+		t.Fatalf("Invoke err = %v, want a *gantry.PendingResult", err)
+	}
+	if len(pending.Pending) != 1 {
+		t.Fatalf("Pending = %#v, want exactly the child's ask_user call", pending.Pending)
+	}
+	if got, want := rec1.total(), (gantry.Usage{InputTokens: 7, OutputTokens: 11}); got != want {
+		t.Fatalf("suspend-pass folded usage = %+v, want %+v", got, want)
+	}
+
+	// Pass 2: mirrors a LATER, separate PhaseToolExec pass in which the
+	// resume is dispatched — Component installs another fresh recorder for
+	// this pass, independent of rec1.
+	rec2 := &usageRecorder{}
+	out, err := resumable.Resume(withUsageRecorder(context.Background(), rec2), pending.Resume, []gantry.ToolResult{
+		{CallID: pending.Pending[0].ID, Content: `{"answer":"go ahead"}`},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	var res struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if res.Output != "resumed answer" {
+		t.Errorf("output = %q, want the child's post-resume FinalOutput", res.Output)
+	}
+
+	wantIncrement := gantry.Usage{InputTokens: 5, OutputTokens: 9}
+	if got := rec2.total(); got != wantIncrement {
+		t.Errorf("resume-pass folded usage = %+v, want %+v (only the usage accrued during this resume round, not the child's full cumulative total)", got, wantIncrement)
+	}
+
+	total := rec1.total().Add(rec2.total())
+	wantTotal := gantry.Usage{InputTokens: 12, OutputTokens: 20}
+	if total != wantTotal {
+		t.Errorf("total usage folded across the suspend and resume passes = %+v, want %+v (the child's actual cumulative usage, counted exactly once)", total, wantTotal)
+	}
+}
+
 func TestInvokeWithoutPassthroughStillHasNoAmbientEvents(t *testing.T) {
 	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))

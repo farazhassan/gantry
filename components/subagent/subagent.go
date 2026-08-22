@@ -46,6 +46,17 @@ func WithMaxDepth(n int) Option {
 // WithTimeout bounds the child run's wall-clock time. When the deadline
 // passes, the child run is cancelled and the delegate returns a tool error
 // wrapping context.DeadlineExceeded. d <= 0 is ignored (no timeout).
+//
+// The timeout applies per Invoke/Resume call, not as a cumulative cap across
+// a suspended child's full lifetime: Invoke and Resume each independently
+// open a fresh context.WithTimeout window of duration d. A child that
+// suspends and is resumed N times gets N independent full-duration windows —
+// one per round — so its aggregate wall-clock budget across every round is
+// N*d, not a single d-wide cap from first Invoke to final Resume. This is
+// deliberate: time spent waiting on a suspended child's answer (which may be
+// arbitrarily long — a human in the loop, an external system) should not
+// burn down the budget for how long any one LLM-working round is allowed to
+// run.
 func WithTimeout(d time.Duration) Option {
 	return func(t *delegateTool) {
 		if d > 0 {
@@ -194,6 +205,11 @@ func (t *delegateTool) Resume(ctx context.Context, resume json.RawMessage, resul
 	if err := json.Unmarshal(resume, &child); err != nil {
 		return nil, fmt.Errorf("%s: decoding suspended child state: %w", t.name, err)
 	}
+	// child.Usage is the child's cumulative usage as of its last suspend (or,
+	// for the very first Resume after one suspend, exactly what Invoke's own
+	// fold already recorded). Snapshot it now so the fold below can record
+	// only what THIS round adds — see the delta comment further down.
+	before := child.Usage
 
 	depth := depthFrom(ctx)
 	runCtx := withDepth(ctx, depth+1)
@@ -207,8 +223,25 @@ func (t *delegateTool) Resume(ctx context.Context, resume json.RawMessage, resul
 	}
 
 	st, err := tool.Resume(runCtx, t.child, t.childReg, &child, results)
+	// st.Usage is the child's CUMULATIVE usage — gantry.Agent.Resume keeps
+	// accumulating onto the same State.Usage field rather than restarting it,
+	// so it already includes everything folded by a prior suspend round
+	// (Invoke's own rec.add, or an earlier Resume's). Component installs a
+	// fresh *usageRecorder per PhaseToolExec pass and adds its total into the
+	// parent's state.Usage unconditionally at the end of every pass, so
+	// folding the full cumulative total here would double-count whatever a
+	// prior pass already folded. Fold only the delta this round actually
+	// added: st.Usage minus the cumulative total as of just before this
+	// Resume call (before, captured above from the unmarshaled child state).
+	// Record BEFORE the error check, matching Invoke: the Run/Resume family
+	// always returns a non-nil *State, and an errored resume may still have
+	// consumed tokens before failing.
 	if rec, ok := usageRecorderFrom(ctx); ok {
-		rec.add(st.Usage)
+		rec.add(gantry.Usage{
+			InputTokens:  st.Usage.InputTokens - before.InputTokens,
+			OutputTokens: st.Usage.OutputTokens - before.OutputTokens,
+			Cost:         st.Usage.Cost - before.Cost,
+		})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: child run failed: %w", t.name, err)
