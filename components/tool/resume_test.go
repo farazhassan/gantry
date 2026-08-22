@@ -280,3 +280,166 @@ func TestResumeNilRegistryOnNestedPendingCallReturnsErrorNotPanic(t *testing.T) 
 	}
 }
 
+func TestResumeRoutesToResumableToolAndFinishes(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "used the specialist's answer", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			if string(resume) != `{"step":1}` {
+				t.Errorf("Resume got token %q, want the stashed one", resume)
+			}
+			if len(results) != 1 || results[0].CallID != "ask1" || results[0].Content != "the answer" {
+				t.Errorf("Resume got results %#v, want the ask1 answer", results)
+			}
+			return json.RawMessage(`{"output":"specialist finished"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !suspended.Done || len(suspended.PendingToolCalls) != 1 {
+		t.Fatalf("not suspended: %#v", suspended)
+	}
+
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: suspended.PendingToolCalls[0].ID, Content: "the answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "used the specialist's answer" {
+		t.Fatalf("Done=%q out=%q, want a normal finish", final.DoneReason, final.FinalOutput)
+	}
+	var gotOutput bool
+	for _, m := range mock.Requests()[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" && m.Content == `{"output":"specialist finished"}` {
+			gotOutput = true
+		}
+	}
+	if !gotOutput {
+		t.Error("the originating call c1's folded result must carry the ResumableTool's Resume output")
+	}
+}
+
+func TestResumeRoutesToResumableToolAndReSuspends(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return nil, &gantry.PendingResult{
+				Pending: []gantry.ToolCall{{ID: "ask2", Name: "ask_user"}},
+				Resume:  json.RawMessage(`{"step":2}`),
+			}
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	again, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !again.Done || again.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want re-suspended", again.Done, again.DoneReason)
+	}
+	if len(again.PendingToolCalls) != 1 || again.PendingToolCalls[0].Name != "ask_user" {
+		t.Fatalf("PendingToolCalls = %#v, want the new ask2 leaf", again.PendingToolCalls)
+	}
+	if again.PendingToolCalls[0].ID == firstID {
+		t.Error("the re-suspended call must get a fresh composite ID, not reuse the first round's")
+	}
+	if len(mock.Requests()) != 1 {
+		t.Errorf("LLM called %d times, want 1 (still suspended, must not continue)", len(mock.Requests()))
+	}
+}
+
+func TestResumeSurvivesSimulatedCheckpointRoundTrip(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return json.RawMessage(`{"output":"ok"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Simulate a checkpoint save/load between suspend and resume.
+	data, err := json.Marshal(suspended)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var reloaded gantry.State
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	final, err := tool.Resume(context.Background(), a, reg, &reloaded, []gantry.ToolResult{
+		{CallID: reloaded.PendingToolCalls[0].ID, Content: "the answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume after round-trip: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%q out=%q, want a normal finish after a checkpoint round-trip", final.DoneReason, final.FinalOutput)
+	}
+}
+
