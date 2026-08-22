@@ -218,6 +218,45 @@ func TestInvokeThreadsParentLinkWhenAmbientIdentityPresent(t *testing.T) {
 	}
 }
 
+func TestInvokeReturnsPendingResultWhenChildSuspends(t *testing.T) {
+	askMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	child, err := gantry.NewAgent(gantry.WithLLM(askMock))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	if err := child.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools on child: %v", err)
+	}
+	tl := New("planner", "plans, asking before executing", child)
+
+	if _, ok := tl.(tool.ResumableTool); !ok {
+		t.Fatal("delegate tool does not implement tool.ResumableTool")
+	}
+
+	_, err = tl.Invoke(context.Background(), json.RawMessage(`{"goal":"plan the release"}`))
+	if err == nil {
+		t.Fatal("Invoke = nil error, want a *gantry.PendingResult when the child suspends")
+	}
+	var pending *gantry.PendingResult
+	if !errors.As(err, &pending) {
+		t.Fatalf("Invoke err = %v, want it to be a *gantry.PendingResult", err)
+	}
+	if len(pending.Pending) != 1 || pending.Pending[0].Name != "ask_user" {
+		t.Fatalf("Pending = %#v, want the child's own ask_user call", pending.Pending)
+	}
+	if len(pending.Resume) == 0 {
+		t.Error("Resume token is empty, want the marshaled suspended child state")
+	}
+	// tl.(tool.ResumableTool).Resume is exercised end-to-end by
+	// TestOneLevelNestedSuspendAndResume (Task 11) and
+	// TestTwoLevelNestedSuspendAndResume (Task 12) — not this task.
+}
+
 func TestInvokeWithoutPassthroughStillHasNoAmbientEvents(t *testing.T) {
 	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))

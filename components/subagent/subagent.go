@@ -24,8 +24,9 @@ type delegateTool struct {
 	description string
 	child       *gantry.Agent
 	maxDepth    int
-	timeout     time.Duration // 0 ⇒ no timeout
-	passSink    bool          // false ⇒ scope the ambient EventSink away from the child
+	timeout     time.Duration  // 0 ⇒ no timeout
+	passSink    bool           // false ⇒ scope the ambient EventSink away from the child
+	childReg    *tool.Registry // see WithChildRegistry
 }
 
 // Option configures a delegate tool built by New.
@@ -62,6 +63,17 @@ func WithEventPassthrough() Option {
 	return func(t *delegateTool) { t.passSink = true }
 }
 
+// WithChildRegistry supplies the *tool.Registry the child agent was wired
+// with (via tool.New, tool.NewWithPolicy, or subagent.ComponentWithRegistry)
+// when the child itself may suspend on a ResumableTool — including when it
+// dispatches its own nested sub-agent. Required for Resume to route an
+// answer down through more than one level of nesting; omit it when the
+// child only ever suspends on a declared tool.Client/DynamicClient call (no
+// ResumableTools of its own).
+func WithChildRegistry(reg *tool.Registry) Option {
+	return func(t *delegateTool) { t.childReg = reg }
+}
+
 // New wraps child as a tool the parent's LLM can invoke. name and description
 // are advertised verbatim in the ToolDef; the input schema is fixed:
 // {"goal" (required), "context" (optional briefing string)}. child must be
@@ -83,6 +95,7 @@ func New(name, description string, child *gantry.Agent, opts ...Option) tool.Too
 
 // compile-time check: delegateTool implements tool.Tool.
 var _ tool.Tool = (*delegateTool)(nil)
+var _ tool.ResumableTool = (*delegateTool)(nil)
 
 // Definition describes the delegate to the parent's LLM.
 func (t *delegateTool) Definition() gantry.ToolDef {
@@ -165,9 +178,59 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 	if err != nil {
 		return nil, fmt.Errorf("%s: child run failed: %w", t.name, err)
 	}
-	out, mErr := json.Marshal(map[string]string{"output": st.FinalOutput})
-	if mErr != nil {
-		return nil, fmt.Errorf("%s: encoding output: %w", t.name, mErr)
+	return t.asResult(st)
+}
+
+// Resume continues a suspended child run using the token from a prior
+// *gantry.PendingResult.Resume (the whole child *gantry.State, marshaled)
+// and the answers for its pending call(s). It delegates to tool.Resume
+// unconditionally, whether the child's own suspend was a direct
+// (declared-client-tool) call or itself nested through the child's own
+// delegate tool — tool.Resume already handles both uniformly, so no
+// path/stack bookkeeping is needed here for multi-level nesting: each level
+// only ever prefixes by the one segment it owns.
+func (t *delegateTool) Resume(ctx context.Context, resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+	var child gantry.State
+	if err := json.Unmarshal(resume, &child); err != nil {
+		return nil, fmt.Errorf("%s: decoding suspended child state: %w", t.name, err)
+	}
+
+	depth := depthFrom(ctx)
+	runCtx := withDepth(ctx, depth+1)
+	if !t.passSink {
+		runCtx = gantry.WithoutSink(runCtx)
+	}
+	if t.timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(runCtx, t.timeout)
+		defer cancel()
+	}
+
+	st, err := tool.Resume(runCtx, t.child, t.childReg, &child, results)
+	if rec, ok := usageRecorderFrom(ctx); ok {
+		rec.add(st.Usage)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: child run failed: %w", t.name, err)
+	}
+	return t.asResult(st)
+}
+
+// asResult converts a child run's terminal (or suspended) *gantry.State into
+// this delegate's own Invoke/Resume return shape: {"output":...} on a clean
+// finish, or a *gantry.PendingResult carrying the whole child state if it
+// suspended (again).
+func (t *delegateTool) asResult(st *gantry.State) (json.RawMessage, error) {
+	if st.DoneReason == gantry.DoneClientToolCall {
+		marshaled, err := json.Marshal(st)
+		if err != nil {
+			return nil, fmt.Errorf("%s: encoding suspended child state: %w", t.name, err)
+		}
+		return nil, &gantry.PendingResult{Pending: st.PendingToolCalls, Resume: marshaled}
+	}
+	out, err := json.Marshal(map[string]string{"output": st.FinalOutput})
+	if err != nil {
+		return nil, fmt.Errorf("%s: encoding output: %w", t.name, err)
 	}
 	return out, nil
 }
