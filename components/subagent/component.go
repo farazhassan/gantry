@@ -13,6 +13,7 @@ const usageFoldName = "components/subagent:usage_fold"
 type component struct {
 	parallelism int
 	tools       []tool.Tool
+	reg         *tool.Registry
 }
 
 // Component wires tools into an agent like tool.FromTools AND installs a
@@ -30,11 +31,31 @@ type component struct {
 // the recorder's total into state.Usage. Tool.Invoke cannot reach the parent
 // *State directly; this ctx seam is the bridge.
 func Component(parallelism int, tools ...tool.Tool) gantry.Component {
-	return &component{parallelism: parallelism, tools: tools}
+	c, _ := newComponent(parallelism, tools)
+	return c
+}
+
+// ComponentWithRegistry is Component, additionally returning the
+// *tool.Registry it builds. Needed by tool.Resume (to look up which
+// ResumableTool owns a pending call) and by a parent delegate tool's own
+// WithChildRegistry when this agent is itself wired as someone else's child
+// (more than one level of nesting). Component itself is unchanged and
+// remains the right choice for callers that never resume a suspended run.
+func ComponentWithRegistry(parallelism int, tools ...tool.Tool) (gantry.Component, *tool.Registry) {
+	return newComponent(parallelism, tools)
+}
+
+func newComponent(parallelism int, tools []tool.Tool) (*component, *tool.Registry) {
+	reg := tool.NewRegistry()
+	for _, t := range tools {
+		reg.Add(t)
+	}
+	c := &component{parallelism: parallelism, tools: tools, reg: reg}
+	return c, reg
 }
 
 func (c *component) Install(a *gantry.Agent) error {
-	if err := a.With(tool.FromTools(c.parallelism, c.tools...)); err != nil {
+	if err := a.With(tool.New(c.reg, c.parallelism)); err != nil {
 		return err
 	}
 	return a.UseNamed(gantry.PhaseToolExec, usageFoldName, func(next gantry.Handler) gantry.Handler {
