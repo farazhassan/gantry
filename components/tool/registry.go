@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -57,7 +58,9 @@ func (r *Registry) Definitions() []gantry.ToolDef {
 	return out
 }
 
-// Invoke runs the tool referenced by the call. Errors are wrapped with
+// Invoke runs the tool referenced by the call. A *gantry.PendingResult from
+// the tool's own Invoke is passed through unwrapped (it is a suspend signal,
+// not an execution failure). Any other error is wrapped with
 // gantry.ErrToolExecution.
 func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMessage, error) {
 	t, ok := r.Lookup(call.Name)
@@ -66,6 +69,10 @@ func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMe
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
+		var pending *gantry.PendingResult
+		if errors.As(err, &pending) {
+			return out, pending
+		}
 		return out, fmt.Errorf("%w: %w", gantry.ErrToolExecution, err)
 	}
 	return out, nil
