@@ -89,3 +89,27 @@ func TestRegistryInvokePreservesToolSentinel(t *testing.T) {
 		t.Errorf("err should also wrap the tool's own ErrToolAuth; got %v", err)
 	}
 }
+
+func TestRegistryInvokePassesPendingResultThroughUnwrapped(t *testing.T) {
+	r := tool.NewRegistry()
+	want := &gantry.PendingResult{
+		Pending: []gantry.ToolCall{{ID: "leaf1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+		Resume:  json.RawMessage(`{"step":1}`),
+	}
+	r.Add(&fakeResumable{
+		def:       gantry.ToolDef{Name: "resumable", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: want,
+	})
+
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "resumable", Input: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected an error (the PendingResult)")
+	}
+	if errors.Is(err, gantry.ErrToolExecution) {
+		t.Error("a pending call must NOT wrap ErrToolExecution — it isn't an execution failure")
+	}
+	var got *gantry.PendingResult
+	if !errors.As(err, &got) || got != want {
+		t.Errorf("errors.As did not recover the original *PendingResult; got %#v", got)
+	}
+}

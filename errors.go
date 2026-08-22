@@ -43,16 +43,20 @@ const (
 	DoneGuardrailBlocked DoneReason = "guardrail_blocked"
 	DoneHumanAborted     DoneReason = "human_aborted"
 	DoneError            DoneReason = "error"
-	// DoneClientToolCall means the run suspended awaiting client fulfillment of
-	// a client-side tool call: the model invoked a tool that has no server
-	// implementation, so the unfulfilled call(s) are left in
-	// state.PendingToolCalls for the caller to fulfill. The suspended State is
-	// terminal (Done == true), so Resume/ResumeStream no-op on it as-is: the
-	// caller appends a tool-result Message for each pending call and must first
-	// clear the terminal fields (Done = false, DoneReason = "", PendingToolCalls
-	// = nil) or rebuild a fresh non-terminal State from the transcript before
-	// resuming (see tool.Client). Distinct from DoneMaxIterations and
-	// the normal DoneNoToolCalls finish.
+	// DoneClientToolCall means the run suspended awaiting fulfillment of a
+	// pending tool call: either the model invoked a tool that has no server
+	// implementation (see components/tool.Client/DynamicClient), or a
+	// registered tool's Invoke/Resume returned a *PendingResult signaling it
+	// isn't finished yet (see components/tool.ResumableTool). Either way the
+	// unfulfilled call(s) are left in state.PendingToolCalls for the caller
+	// to fulfill. The suspended State is terminal (Done == true), so
+	// Resume/ResumeStream no-op on it as-is: the caller must either use
+	// components/tool.Resume (handles both cases uniformly) or, for the
+	// declared-client-tool case only, append a tool-result Message for each
+	// pending call and clear the terminal fields (Done = false,
+	// DoneReason = "", PendingToolCalls = nil) before calling Resume
+	// directly. Distinct from DoneMaxIterations and the normal
+	// DoneNoToolCalls finish.
 	DoneClientToolCall DoneReason = "client_tool_call"
 	// DoneHandoff means routing middleware terminated the run to hand the
 	// conversation to another agent; state.Handoff carries the target and
