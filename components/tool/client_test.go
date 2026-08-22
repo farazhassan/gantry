@@ -386,6 +386,28 @@ func TestClientAndDynamicClientCannotBothInstall(t *testing.T) {
 	}
 }
 
+// TestDynamicClientAndClientCannotBothInstallReverseOrder is
+// TestClientAndDynamicClientCannotBothInstall with the two components
+// installed in the opposite order. Client.Install and DynamicClient.Install
+// each now check SuspendClientCallsInstalled before installing it (so they
+// compose order-independently with registryComponent's own auto-install —
+// see TestMixedTurnRunsServerToolsAndSuspends), which means the mutual
+// exclusion between Client and DynamicClient can no longer rely on that
+// shared-middleware-name collision to fire in this direction. It is enforced
+// explicitly instead (clientInstalled/DynamicClientInstalled checks in each
+// Install), and this proves that guard actually fires for both install
+// orders, not just the one exercised above.
+func TestDynamicClientAndClientCannotBothInstallReverseOrder(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.DynamicClient()); err != nil {
+		t.Fatalf("install dynamic client: %v", err)
+	}
+	if err := a.With(tool.Client(askDef())); err == nil {
+		t.Fatal("installing Client after DynamicClient: want error, got nil")
+	}
+}
+
 func TestDynamicClientStaleNameDoesNotResuspendOnLaterResume(t *testing.T) {
 	// Regression: a name marked client-side by SetPendingClientTools on one
 	// run/resume of a *State must not linger into a later run/resume of the

@@ -56,8 +56,7 @@ type clientComponent struct{ defs []gantry.ToolDef }
 // the run suspends at the observe boundary with state.DoneReason ==
 // gantry.DoneClientToolCall and the call(s) left in state.PendingToolCalls.
 // Installing client tools twice on the same agent, an empty tool name, a
-// duplicate name, or installing alongside DynamicClient (both install the
-// same suspend middleware — see SuspendClientCalls) returns an error.
+// duplicate name, or installing alongside DynamicClient returns an error.
 //
 // Use DynamicClient instead when the tool set varies per caller/session
 // (e.g. an AG-UI handler wrapping CopilotKit frontend actions) rather
@@ -71,10 +70,22 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 	if err != nil {
 		return err
 	}
+	if DynamicClientInstalled(a) {
+		return errors.New("tool: Client cannot be installed alongside DynamicClient")
+	}
 	defsCopy := append([]gantry.ToolDef(nil), c.defs...)
 
-	if err := SuspendClientCalls().Install(a); err != nil {
-		return err
+	// SuspendClientCalls is also auto-installed by registryComponent
+	// (tool.New/FromTools) when a bare agent needs suspend detection for a
+	// ResumableTool with no Client/DynamicClient present — check first so
+	// installing Client after that composes instead of colliding on the
+	// shared middleware name. Mutual exclusion with DynamicClient is
+	// enforced explicitly above, not by this collision, since both of those
+	// would otherwise also be safely order-tolerant here.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
 	}
 
 	// PhaseStart: advertise the fixed defs to the LLM and mark their names as
@@ -130,15 +141,22 @@ type dynamicClientComponent struct{}
 // client tool defs set via SetPendingClientTools, instead of a fixed list
 // installed once. Install this at agent construction when the tool set is
 // only known per-request. Installing it twice, or alongside Client, on the
-// same agent returns an error (both install the same PhaseObserve suspend
-// middleware — see SuspendClientCalls).
+// same agent returns an error.
 func DynamicClient() gantry.Component {
 	return &dynamicClientComponent{}
 }
 
 func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
-	if err := SuspendClientCalls().Install(a); err != nil {
-		return err
+	if clientInstalled(a) {
+		return errors.New("tool: DynamicClient cannot be installed alongside Client")
+	}
+	// See the matching comment in clientComponent.Install: check first so
+	// this composes with registryComponent's own auto-install instead of
+	// colliding on the shared middleware name.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
 	}
 	return a.UseNamed(gantry.PhaseStart, dynamicClientAdvertiseName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
@@ -262,6 +280,22 @@ func SuspendClientCallsInstalled(a *gantry.Agent) bool {
 func DynamicClientInstalled(a *gantry.Agent) bool {
 	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
 		if name == dynamicClientAdvertiseName {
+			return true
+		}
+	}
+	return false
+}
+
+// clientInstalled reports whether Client specifically (not DynamicClient) is
+// installed on a. Mirrors DynamicClientInstalled's shape, checking for
+// advertiseClientName instead. Unexported: it exists only to give
+// dynamicClientComponent.Install an explicit Client-vs-DynamicClient mutual
+// exclusion check that's independent of the SuspendClientCalls
+// already-registered collision (see the comments in both Install methods),
+// so there's no need to expose it publicly the way DynamicClientInstalled is.
+func clientInstalled(a *gantry.Agent) bool {
+	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
+		if name == advertiseClientName {
 			return true
 		}
 	}
