@@ -398,6 +398,96 @@ func TestResumeRoutesToResumableToolAndReSuspends(t *testing.T) {
 	}
 }
 
+// TestResumeReSuspendWithEmptyPendingResultBecomesToolError proves the
+// re-suspend-via-Resume half of the whole-branch-review fix: a
+// ResumableTool.Resume call that itself returns a *gantry.PendingResult
+// with Pending nil is a contract violation, just like an empty-Pending
+// result from a fresh Invoke — "suspend with nothing to wait for" is a
+// contradiction. resume.go's nested-call loop builds this case directly
+// (it never goes through SuspendClientCalls, unlike a fresh Invoke's
+// result), so it needs its own check: without it, origin c1 would get no
+// tool_result message at all, and a stale pending-resume entry for it would
+// linger in state.Meta even though nothing is left pending.
+func TestResumeReSuspendWithEmptyPendingResultBecomesToolError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			// Contract violation: pending again, but with nothing to wait
+			// on.
+			return nil, &gantry.PendingResult{Resume: json.RawMessage(`{"step":2}`)}
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.Done && final.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("re-suspended (DoneReason=%q) on an empty-Pending PendingResult from Resume; want it treated as a plain tool error", final.DoneReason)
+	}
+	if len(final.PendingToolCalls) != 0 {
+		t.Fatalf("PendingToolCalls = %#v, want none left pending", final.PendingToolCalls)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", final.Done, final.DoneReason, final.FinalOutput)
+	}
+	if _, ok := final.Meta["components/tool:pending_resume"]; ok {
+		t.Error("state.Meta still has a stale components/tool:pending_resume entry for origin c1, which is no longer pending")
+	}
+
+	var found bool
+	for _, m := range final.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if !strings.Contains(m.Content, "specialist") || !strings.Contains(m.Content, "PendingResult") {
+				t.Errorf("tool_result content for c1 = %q, want it to identify the tool and the contract violation", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no tool_result message for origin c1 in final.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", final.Messages)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("LLM requests = %d, want 2 (Resume must continue to a second LLM turn once nothing is left pending)", len(reqs))
+	}
+	found = false
+	for _, m := range reqs[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("second LLM request has no tool_result message for c1; messages: %+v (transcript corruption reaching the LLM)", reqs[1].Messages)
+	}
+}
+
 func TestResumeSurvivesSimulatedCheckpointRoundTrip(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

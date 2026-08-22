@@ -194,18 +194,27 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					if err != nil {
 						var pending *gantry.PendingResult
 						if errors.As(err, &pending) {
-							// A pending call is not a failure: it must not
-							// trigger OnFailure/Disposition policy (abort,
-							// cancel siblings, HarnessStop). Err is preserved so
-							// the unified suspend middleware (SuspendClientCalls,
-							// Task 5) can recognize and route it; that
-							// middleware removes it from ToolResults before
-							// DefaultObserveHandler ever sees it, so
-							// IsError/Content here are never folded into the
-							// transcript.
-							results[i] = gantry.ToolResult{CallID: call.ID, Err: pending}
-							emitLive(ctx, results[i])
-							return nil
+							if len(pending.Pending) > 0 {
+								// A pending call is not a failure: it must not
+								// trigger OnFailure/Disposition policy (abort,
+								// cancel siblings, HarnessStop). Err is preserved so
+								// the unified suspend middleware (SuspendClientCalls,
+								// Task 5) can recognize and route it; that
+								// middleware removes it from ToolResults before
+								// DefaultObserveHandler ever sees it, so
+								// IsError/Content here are never folded into the
+								// transcript.
+								results[i] = gantry.ToolResult{CallID: call.ID, Err: pending}
+								emitLive(ctx, results[i])
+								return nil
+							}
+							// Pending is empty: "suspend with nothing to wait
+							// for" is a contradiction (see
+							// gantry.PendingResult's doc comment) — treat this
+							// as a plain tool error instead of a suspend
+							// signal, falling through to the normal
+							// error-handling below.
+							err = pendingResultContractErr(call.Name)
 						}
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,

@@ -135,15 +135,24 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 		if err != nil {
 			var pending *gantry.PendingResult
 			if errors.As(err, &pending) {
-				entries[origin] = pendingEntry{ToolName: entry.ToolName, Resume: pending.Resume}
-				for _, p := range pending.Pending {
-					remaining = append(remaining, gantry.ToolCall{
-						ID:    origin + pendingIDSep + p.ID,
-						Name:  p.Name,
-						Input: p.Input,
-					})
+				if len(pending.Pending) > 0 {
+					entries[origin] = pendingEntry{ToolName: entry.ToolName, Resume: pending.Resume}
+					for _, p := range pending.Pending {
+						remaining = append(remaining, gantry.ToolCall{
+							ID:    origin + pendingIDSep + p.ID,
+							Name:  p.Name,
+							Input: p.Input,
+						})
+					}
+					continue
 				}
-				continue
+				// Pending is empty: "suspend with nothing to wait for" is a
+				// contradiction (see gantry.PendingResult's doc comment) —
+				// this origin is not really pending again, so fold a
+				// normal tool-error message instead of leaving it
+				// suspended (and entries already has origin deleted above,
+				// so no stale continuation token is left behind).
+				err = pendingResultContractErr(entry.ToolName)
 			}
 			state.Messages = append(state.Messages, gantry.Message{
 				Role:       gantry.RoleTool,

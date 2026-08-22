@@ -1166,6 +1166,67 @@ func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
 	}
 }
 
+// TestDispatchEmptyPendingResultBecomesToolErrorNotSuspend proves the fix
+// for the whole-branch-review bug: a *gantry.PendingResult with Pending nil
+// (only Resume set) is a contract violation — "suspend with nothing to wait
+// for" is a contradiction — so it must be folded as a plain tool ERROR
+// result, not treated as a suspend signal. Before the fix, this would leave
+// c1 (the originating tool_use call) with no matching tool_result message
+// at all once SuspendClientCalls stripped it out of s.ToolResults with
+// nothing added to toolPending/clientCalls, corrupting the transcript for
+// the next LLM turn. This test proves all three symptoms are fixed: the run
+// does not suspend, a real tool-error result is folded for c1, and a
+// subsequent LLM turn actually receives a valid transcript (a tool_result
+// for every tool_use).
+func TestDispatchEmptyPendingResultBecomesToolErrorNotSuspend(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	specialist := &fakeResumable{
+		def:       gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{Resume: json.RawMessage(`{"step":1}`)},
+	}
+	if err := a.With(tool.FromTools(1, specialist)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.Done && state.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("run suspended (DoneReason=%q) on an empty-Pending PendingResult; want it treated as a plain tool error and the run to continue", state.DoneReason)
+	}
+	if state.DoneReason != gantry.DoneNoToolCalls || state.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", state.Done, state.DoneReason, state.FinalOutput)
+	}
+	if _, ok := state.Meta["components/tool:pending_resume"]; ok {
+		t.Error("state.Meta still has a stale components/tool:pending_resume entry for a call that never actually suspended")
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2 (a second LLM turn must occur)", len(reqs))
+	}
+	var found bool
+	for _, m := range reqs[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if !strings.Contains(m.Content, "specialist") || !strings.Contains(m.Content, "PendingResult") {
+				t.Errorf("tool_result content = %q, want it to identify the tool and the contract violation", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("second LLM request has no tool_result message for c1; messages: %+v (transcript corruption: a tool_use with no matching tool_result)", reqs[1].Messages)
+	}
+}
+
 func TestBareFromToolsSuspendsOnResumableToolWithoutClient(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

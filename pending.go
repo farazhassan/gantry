@@ -11,7 +11,10 @@ import "encoding/json"
 type PendingResult struct {
 	// Pending lists the still-open calls to surface in the suspended run's
 	// PendingToolCalls for a caller to answer — real Name/Input, exactly as
-	// the underlying call declared them.
+	// the underlying call declared them. Pending must be non-empty: a
+	// PendingResult with no pending calls is invalid — "suspend with
+	// nothing to wait for" is a contradiction — and is treated as a tool
+	// error, not a suspend, wherever it's produced.
 	Pending []ToolCall
 	// Resume is opaque continuation state. It is round-tripped through
 	// State.Meta (including across a checkpoint save/load) and handed back

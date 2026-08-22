@@ -3,6 +3,7 @@ package tool
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/farazhassan/gantry"
@@ -86,6 +87,19 @@ func splitPendingID(id string) (origin, leaf string, nested bool) {
 		return "", "", false
 	}
 	return id[:i], id[i+len(pendingIDSep):], true
+}
+
+// pendingResultContractErr returns the error to fold as a plain tool error
+// in place of a *gantry.PendingResult whose Pending is empty — "suspend
+// with nothing to wait for" is a contradiction (see
+// gantry.PendingResult's doc comment), so there is no sensible way to
+// actually suspend on it. Shared by middleware.go's dispatch (a fresh
+// Tool.Invoke returning *gantry.PendingResult) and resume.go's re-suspend
+// branch (a ResumableTool.Resume call returning one) — the two places a
+// *gantry.PendingResult is produced directly from tool code, before it
+// could otherwise reach SuspendClientCalls's stripping logic.
+func pendingResultContractErr(toolName string) error {
+	return fmt.Errorf("tool: %s returned a PendingResult with no Pending calls (nothing to suspend on)", toolName)
 }
 
 // toolNameFor looks up the Name of the pending call with the given ID in
