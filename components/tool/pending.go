@@ -55,8 +55,14 @@ func pendingEntriesFrom(s *gantry.State) map[string]pendingEntry {
 	return m
 }
 
-// setPendingEntries replaces the pending-call stash on s.Meta wholesale. An
-// empty m removes the key entirely rather than leaving an empty map behind.
+// setPendingEntries replaces the pending-call stash on s.Meta wholesale — it
+// does not merge m into whatever was there before. Callers must ensure that
+// any entry omitted from m is already resolved, not merely absent from the
+// current pass: the suspend middleware in client.go relies on this by
+// calling setPendingEntries with only the entries found in that PhaseObserve
+// pass, which is safe only once tool.Resume (a later task) establishes the
+// invariant that a resolved entry is removed from the stash rather than
+// carried forward unresolved.
 func setPendingEntries(s *gantry.State, m map[string]pendingEntry) {
 	if len(m) == 0 {
 		if s.Meta != nil {
