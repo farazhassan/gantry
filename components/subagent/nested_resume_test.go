@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/tool"
@@ -257,6 +260,29 @@ func TestTwoLevelNestedSuspendAndResume(t *testing.T) {
 	if len(parentMock.Requests()) != 2 {
 		t.Errorf("parent LLM called %d times, want 2", len(parentMock.Requests()))
 	}
+
+	// Prove the answer actually reached the grandchild's second LLM turn
+	// intact, rather than merely producing matching call counts while being
+	// dropped, corrupted, or misrouted along the two-level path back down.
+	grandchildReqs := grandchildMock.Requests()
+	if len(grandchildReqs) < 2 {
+		t.Fatalf("grandchild LLM called %d times, want at least 2", len(grandchildReqs))
+	}
+	var got string
+	found := false
+	for _, m := range grandchildReqs[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "ask1" {
+			got = m.Content
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("grandchild second LLM request has no RoleTool message for ask1; messages=%#v", grandchildReqs[1].Messages)
+	}
+	const wantAnswer = `{"answer":"the deep answer"}`
+	if got != wantAnswer {
+		t.Errorf("grandchild received answer %q, want %q (content preserved through two nested levels)", got, wantAnswer)
+	}
 }
 
 func TestResumeReappliesDepthLimitToFurtherNestingAfterResuming(t *testing.T) {
@@ -343,4 +369,156 @@ func TestResumeReappliesDepthLimitToFurtherNestingAfterResuming(t *testing.T) {
 	if len(tooDeepMock.Requests()) != 0 {
 		t.Errorf("tooDeepChild received %d LLM requests, want 0 (must be refused before ever running — see tooDeepMock's comment above)", len(tooDeepMock.Requests()))
 	}
+}
+
+// suspendThenBlockLLM answers the first Generate call with a suspending
+// ask_user call, then blocks on every subsequent call until ctx is done — a
+// stand-in for a hung provider on the child's post-resume turn, mirroring
+// runctx_test.go's blockingLLM but only from the second call onward so the
+// first (suspending) turn completes normally.
+type suspendThenBlockLLM struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (l *suspendThenBlockLLM) Generate(ctx context.Context, _ gantry.LLMRequest) (gantry.LLMResponse, error) {
+	l.mu.Lock()
+	l.calls++
+	first := l.calls == 1
+	l.mu.Unlock()
+	if first {
+		return gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		}, nil
+	}
+	<-ctx.Done()
+	return gantry.LLMResponse{}, ctx.Err()
+}
+
+func TestWithTimeoutAppliesToResumeLegNotJustInvoke(t *testing.T) {
+	// Mirrors TestWithTimeoutCancelsChildRun (runctx_test.go) but on the
+	// Resume leg: the child suspends on ask_user (no timeout involved yet),
+	// then the RESUME leg's own child work hangs and must be cut off by the
+	// same WithTimeout duration. This proves the timeout is genuinely
+	// re-applied on Resume — not merely remembered from Invoke (which would
+	// incorrectly let a slow resume run forever) and not inherited from
+	// Invoke's now-cancelled context (which would incorrectly kill Resume
+	// immediately even with plenty of time left).
+	child, err := gantry.NewAgent(gantry.WithLLM(&suspendThenBlockLLM{}))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	if err := child.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools on child: %v", err)
+	}
+	tl := New("slow_specialist", "d", child, WithTimeout(30*time.Millisecond))
+	rt, ok := tl.(tool.ResumableTool)
+	if !ok {
+		t.Fatalf("delegate tool does not implement tool.ResumableTool")
+	}
+
+	_, err = tl.Invoke(context.Background(), json.RawMessage(`{"goal":"g"}`))
+	var pending *gantry.PendingResult
+	if !errors.As(err, &pending) {
+		t.Fatalf("Invoke err = %v, want a *gantry.PendingResult (child asked a question)", err)
+	}
+
+	_, err = rt.Resume(context.Background(), pending.Resume, []gantry.ToolResult{
+		{CallID: pending.Pending[0].ID, Content: `{"answer":"yes"}`},
+	})
+	if err == nil {
+		t.Fatalf("Resume = nil error, want a deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want errors.Is(err, context.DeadlineExceeded)", err)
+	}
+}
+
+func TestEventPassthroughAndScopingParityAcrossResume(t *testing.T) {
+	// Mirrors TestWithEventPassthroughKeepsAmbientSink and
+	// TestChildEventsScopedOutByDefault (runctx_test.go), but exercises the
+	// Resume leg after a suspend rather than a plain one-shot Invoke: proves
+	// both the opt-in passthrough and the scoped-out default are re-applied
+	// on Resume, matching Invoke's behavior instead of being forgotten (or
+	// wrongly left enabled) once the run continues past a suspend.
+	newAskingChild := func(t *testing.T) *gantry.Agent {
+		t.Helper()
+		mock := eval.NewMockLLMClient(
+			gantry.LLMResponse{
+				ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}},
+				StopReason: gantry.StopReasonToolUse,
+			},
+			gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+		)
+		c, err := gantry.NewAgent(gantry.WithLLM(mock))
+		if err != nil {
+			t.Fatalf("NewAgent: %v", err)
+		}
+		if err := c.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+			t.Fatalf("install client tools: %v", err)
+		}
+		return c
+	}
+
+	// suspend runs Invoke to the point of suspension and returns the
+	// PendingResult plus the tool cast to ResumableTool for the Resume call.
+	suspend := func(t *testing.T, tl tool.Tool, ctx context.Context) (*gantry.PendingResult, tool.ResumableTool) {
+		t.Helper()
+		rt, ok := tl.(tool.ResumableTool)
+		if !ok {
+			t.Fatalf("delegate tool does not implement tool.ResumableTool")
+		}
+		_, err := tl.Invoke(ctx, json.RawMessage(`{"goal":"g"}`))
+		var pending *gantry.PendingResult
+		if !errors.As(err, &pending) {
+			t.Fatalf("Invoke err = %v, want a *gantry.PendingResult (child asked a question)", err)
+		}
+		return pending, rt
+	}
+
+	t.Run("passthrough survives resume", func(t *testing.T) {
+		tl := New("specialist", "d", newAskingChild(t), WithEventPassthrough())
+
+		var events int
+		ctx := gantry.WithSink(context.Background(), func(gantry.Event) error {
+			events++
+			return nil
+		})
+		pending, rt := suspend(t, tl, ctx)
+
+		// Reset the counter so what follows measures only the Resume leg's
+		// own contribution, isolated from whatever Invoke already produced
+		// before the suspend.
+		events = 0
+		if _, err := rt.Resume(ctx, pending.Resume, []gantry.ToolResult{
+			{CallID: pending.Pending[0].ID, Content: `{"answer":"yes"}`},
+		}); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if events == 0 {
+			t.Errorf("ambient sink saw no events from the Resume leg, want phase/done events with passthrough")
+		}
+	})
+
+	t.Run("scoped out by default on resume", func(t *testing.T) {
+		tl := New("specialist", "d", newAskingChild(t))
+
+		var events int
+		ctx := gantry.WithSink(context.Background(), func(gantry.Event) error {
+			events++
+			return nil
+		})
+		pending, rt := suspend(t, tl, ctx)
+
+		events = 0
+		if _, err := rt.Resume(ctx, pending.Resume, []gantry.ToolResult{
+			{CallID: pending.Pending[0].ID, Content: `{"answer":"yes"}`},
+		}); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if events != 0 {
+			t.Errorf("ambient sink saw %d events from the Resume leg, want 0 (scoped out by default, matching Invoke)", events)
+		}
+	})
 }
