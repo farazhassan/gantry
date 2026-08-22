@@ -74,6 +74,17 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 		return err
 	}
 
+	// A ResumableTool's suspend needs SuspendClientCalls installed even when
+	// no tool.Client/DynamicClient is present on this agent (subagent's
+	// delegate tool is the motivating case). Check first so this composes
+	// cleanly regardless of install order and leaves Client/DynamicClient's
+	// own double-install error guards untouched.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
+	}
+
 	return a.UseNamed(gantry.PhaseToolExec, dispatchName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)

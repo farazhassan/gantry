@@ -54,9 +54,17 @@ func RunLiveExample(ctx context.Context, model, ollamaURL string, dispatchTimeou
 	// Server tools execute inline and buffer spawns into the task collector.
 	// ask_user MUST be a client tool: only a client-tool call parks the task at
 	// awaiting_input (a server tool would execute inline and never suspend).
+	//
+	// tool.Client must install before tool.FromTools: both share the same
+	// underlying suspend-detection middleware (components/tool.
+	// SuspendClientCalls), and only the first of the two to install actually
+	// claims it — Client's own Install has no "already installed" guard for
+	// it (unlike FromTools's, added so a bare FromTools/New agent with no
+	// Client also gets suspend detection), so installing Client second would
+	// hit that already-registered error.
 	if err := agent.With(
-		tool.FromTools(1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool()),
 		tool.Client(ask.Definition()),
+		tool.FromTools(1, taskmanager.NewCreateTaskTool(), taskmanager.NewSpawnSessionTool()),
 	); err != nil {
 		return err
 	}

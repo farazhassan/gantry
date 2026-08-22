@@ -1116,6 +1116,15 @@ func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
 	}
 }
 
+// TestDispatchPendingResultDoesNotTriggerFailurePolicy proves that a pending
+// call never trips OnFailure/Disposition policy (abort, cancel siblings,
+// HarnessStop) — it also never used to reach a second LLM turn once Task 6
+// made a bare tool.New/FromTools install auto-install suspend detection (see
+// TestBareFromToolsSuspendsOnResumableToolWithoutClient): the run now
+// suspends with DoneClientToolCall on the very turn the pending call
+// appears, instead of continuing past it. Before Task 6, this test observed
+// the sibling's result on the *next* LLM request; now it must be observed in
+// the suspended state itself, since there is no next request.
 func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
@@ -1125,7 +1134,6 @@ func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
 			},
 			StopReason: gantry.StopReasonToolUse,
 		},
-		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	policy := tool.Policy{Parallelism: 2, OnFailure: tool.StopCancelInFlight, Disposition: tool.HarnessStop}
@@ -1144,13 +1152,48 @@ func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
 	if state.DoneReason == gantry.DoneToolPolicyAborted {
 		t.Errorf("DoneReason = %q, want no policy abort triggered by a merely-pending call", state.DoneReason)
 	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want a suspend triggered by the pending call, not a policy abort or normal completion", state.Done, state.DoneReason)
+	}
 	var sawServerResult bool
-	for _, m := range mock.Requests()[1].Messages {
+	for _, m := range state.Messages {
 		if m.Role == gantry.RoleTool && m.ToolCallID == "s1" && m.Content == "6" {
 			sawServerResult = true
 		}
 	}
 	if !sawServerResult {
 		t.Error("sibling server call must still complete and feed back under a stopping OnFailure policy")
+	}
+}
+
+func TestBareFromToolsSuspendsOnResumableToolWithoutClient(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+		},
+	}
+	// No tool.Client / tool.DynamicClient anywhere — this is exactly how
+	// components/subagent wires a delegate tool.
+	if err := a.With(tool.FromTools(1, specialist)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend with no tool.Client installed", state.Done, state.DoneReason)
+	}
+	if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].Name != "ask_user" {
+		t.Fatalf("PendingToolCalls = %#v, want the leaf ask_user call", state.PendingToolCalls)
 	}
 }
