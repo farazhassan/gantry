@@ -551,4 +551,3 @@ func TestResumeSurvivesCheckpointRoundTripThroughReSuspend(t *testing.T) {
 		t.Fatalf("specialist.Resume called %d times, want exactly 2", resumeCalls)
 	}
 }
-
