@@ -56,6 +56,19 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 
 	var remaining []gantry.ToolCall
 
+	// commit writes whatever progress has accumulated so far in remaining
+	// and entries into state, so that any exit path — success or error —
+	// leaves already-resolved origins reflected in state.PendingToolCalls
+	// and the Meta pending-entries stash. Without this, an error return
+	// partway through the nested-call loop would silently discard progress
+	// made on origins already processed this call, causing a retry to
+	// re-invoke an already-succeeded ResumableTool.Resume and duplicate its
+	// side effects and RoleTool message.
+	commit := func() {
+		state.PendingToolCalls = remaining
+		setPendingEntries(state, entries)
+	}
+
 	// Flat calls: fulfill by direct message injection — the manual pattern
 	// this supersedes — or leave pending if unanswered this round.
 	for _, call := range flat {
@@ -99,12 +112,21 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 			continue
 		}
 
+		if reg == nil {
+			remaining = append(remaining, calls...)
+			commit()
+			return state, fmt.Errorf("tool: Resume: pending call %q requires a non-nil Registry (got nil)", origin)
+		}
 		t, found := reg.Lookup(entry.ToolName)
 		if !found {
+			remaining = append(remaining, calls...)
+			commit()
 			return state, fmt.Errorf("tool: Resume: unknown tool %q for pending call %q", entry.ToolName, origin)
 		}
 		rt, ok := t.(ResumableTool)
 		if !ok {
+			remaining = append(remaining, calls...)
+			commit()
 			return state, fmt.Errorf("tool: Resume: tool %q does not implement ResumableTool", entry.ToolName)
 		}
 
@@ -138,8 +160,7 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 		})
 	}
 
-	state.PendingToolCalls = remaining
-	setPendingEntries(state, entries)
+	commit()
 
 	if len(state.PendingToolCalls) == 0 {
 		state.Done = false
