@@ -27,7 +27,11 @@ type registryComponent struct {
 // to state.Tools) and PhaseToolExec "components/tool:dispatch" (dispatches pending
 // tool calls against reg with up to parallelism concurrent invocations;
 // parallelism <= 0 means full parallelism). Installing tool dispatch twice on the
-// same agent returns an error. Equivalent to
+// same agent returns an error. It also ensures SuspendClientCalls (a
+// PhaseObserve middleware) is installed if not already present, so a
+// ResumableTool's suspend works even on an agent with no tool.Client/
+// DynamicClient — see SuspendClientCallsInstalled to check this ahead of
+// time, and SuspendClientCalls for what it does. Equivalent to
 // NewWithPolicy(reg, Policy{Parallelism: parallelism}).
 func New(reg *Registry, parallelism int) gantry.Component {
 	return NewWithPolicy(reg, Policy{Parallelism: parallelism})
@@ -42,8 +46,9 @@ func NewWithPolicy(reg *Registry, policy Policy) gantry.Component {
 // FromTools returns a Component that builds a Registry from the given tools and
 // wires it in with parallel dispatch up to parallelism simultaneous calls. It is
 // sugar over New for callers that do not need to retain the Registry. For a single
-// tool with sequential dispatch, use FromTools(1, t). Equivalent to
-// FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...).
+// tool with sequential dispatch, use FromTools(1, t). Like New, it also ensures
+// SuspendClientCalls is installed if not already present (see New's doc comment).
+// Equivalent to FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...).
 func FromTools(parallelism int, tools ...Tool) gantry.Component {
 	return FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...)
 }

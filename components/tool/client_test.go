@@ -43,45 +43,60 @@ func TestClientOnlyTurnSuspends(t *testing.T) {
 	}
 }
 
+// TestMixedTurnRunsServerToolsAndSuspends proves tool.FromTools/tool.New
+// composes with tool.Client regardless of which of the two installs first —
+// both orders are exercised as subtests, mirroring
+// TestDynamicClientComposesWithFromToolsInEitherOrder's shape (which covers
+// the same thing for tool.DynamicClient). Before this, only
+// from_tools_then_client was covered here.
 func TestMixedTurnRunsServerToolsAndSuspends(t *testing.T) {
-	mock := eval.NewMockLLMClient(
-		gantry.LLMResponse{
-			ToolCalls: []gantry.ToolCall{
-				{ID: "s1", Name: "add_one", Input: json.RawMessage(`5`)},
-				{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"ok?"}`)},
-			},
-			StopReason: gantry.StopReasonToolUse,
-		},
-	)
-	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
-	if err := a.With(tool.FromTools(1, addOneTool{})); err != nil {
-		t.Fatalf("install tool: %v", err)
-	}
-	if err := a.With(tool.Client(askDef())); err != nil {
-		t.Fatalf("install client tools: %v", err)
-	}
+	for _, order := range []string{"from_tools_then_client", "client_then_from_tools"} {
+		t.Run(order, func(t *testing.T) {
+			mock := eval.NewMockLLMClient(
+				gantry.LLMResponse{
+					ToolCalls: []gantry.ToolCall{
+						{ID: "s1", Name: "add_one", Input: json.RawMessage(`5`)},
+						{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"ok?"}`)},
+					},
+					StopReason: gantry.StopReasonToolUse,
+				},
+			)
+			a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+			client := tool.Client(askDef())
+			fromTools := tool.FromTools(1, addOneTool{})
+			var installErr error
+			if order == "from_tools_then_client" {
+				installErr = a.With(fromTools, client)
+			} else {
+				installErr = a.With(client, fromTools)
+			}
+			if installErr != nil {
+				t.Fatalf("install (%s): %v", order, installErr)
+			}
 
-	state, err := a.Run(context.Background(), "go")
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
-		t.Fatalf("Done=%v reason=%q, want suspend", state.Done, state.DoneReason)
-	}
-	if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "q1" {
-		t.Fatalf("PendingToolCalls = %#v, want only q1", state.PendingToolCalls)
-	}
-	var sawServerResult bool
-	for _, m := range state.Messages {
-		if m.Role == gantry.RoleTool && m.ToolCallID == "s1" && m.Content == "6" {
-			sawServerResult = true
-		}
-		if m.Role == gantry.RoleTool && m.ToolCallID == "q1" {
-			t.Fatalf("client call q1 must not have a tool result")
-		}
-	}
-	if !sawServerResult {
-		t.Fatalf("server tool result for s1 missing; messages: %#v", state.Messages)
+			state, err := a.Run(context.Background(), "go")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+				t.Fatalf("Done=%v reason=%q, want suspend", state.Done, state.DoneReason)
+			}
+			if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "q1" {
+				t.Fatalf("PendingToolCalls = %#v, want only q1", state.PendingToolCalls)
+			}
+			var sawServerResult bool
+			for _, m := range state.Messages {
+				if m.Role == gantry.RoleTool && m.ToolCallID == "s1" && m.Content == "6" {
+					sawServerResult = true
+				}
+				if m.Role == gantry.RoleTool && m.ToolCallID == "q1" {
+					t.Fatalf("client call q1 must not have a tool result")
+				}
+			}
+			if !sawServerResult {
+				t.Fatalf("server tool result for s1 missing; messages: %#v", state.Messages)
+			}
+		})
 	}
 }
 
