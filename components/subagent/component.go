@@ -12,7 +12,6 @@ const usageFoldName = "components/subagent:usage_fold"
 
 type component struct {
 	parallelism int
-	tools       []tool.Tool
 	reg         *tool.Registry
 }
 
@@ -50,7 +49,7 @@ func newComponent(parallelism int, tools []tool.Tool) (*component, *tool.Registr
 	for _, t := range tools {
 		reg.Add(t)
 	}
-	c := &component{parallelism: parallelism, tools: tools, reg: reg}
+	c := &component{parallelism: parallelism, reg: reg}
 	return c, reg
 }
 

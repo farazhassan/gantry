@@ -607,8 +607,9 @@ func TestResumableToolSuspendSurfacesOnPendingToolCalls(t *testing.T) {
 	)
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	// tool.Client() with no defs installs suspend detection without
-	// declaring any client-side name — stands in here for a future task's
-	// automatic installation.
+	// declaring any client-side name. Redundant here since tool.FromTools
+	// below now installs it automatically too, but kept to also cover the
+	// case of an agent that installs Client explicitly alongside a registry.
 	if err := a.With(tool.Client()); err != nil {
 		t.Fatalf("install client: %v", err)
 	}
