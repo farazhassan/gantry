@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -181,4 +182,165 @@ func TestTwoSiblingDelegateCallsSuspendAndResumeIndependently(t *testing.T) {
 	}
 	requireOwnAnswer(t, "childA", mockA, answerA)
 	requireOwnAnswer(t, "childB", mockB, answerB)
+}
+
+func TestTwoLevelNestedSuspendAndResume(t *testing.T) {
+	grandchildMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"deep question?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "grandchild done", StopReason: gantry.StopReasonEnd},
+	)
+	grandchild, err := gantry.NewAgent(gantry.WithLLM(grandchildMock))
+	if err != nil {
+		t.Fatalf("NewAgent(grandchild): %v", err)
+	}
+	if err := grandchild.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools on grandchild: %v", err)
+	}
+	deepDelegate := New("deep_specialist", "d", grandchild)
+
+	childMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "g1", Name: "deep_specialist", Input: json.RawMessage(`{"goal":"dig deeper"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "child used the grandchild's answer", StopReason: gantry.StopReasonEnd},
+	)
+	childComp, childReg := ComponentWithRegistry(1, deepDelegate)
+	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithComponents(childComp))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	delegate := New("specialist", "d", child, WithChildRegistry(childReg))
+
+	parentMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{"goal":"go deep"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "parent finished", StopReason: gantry.StopReasonEnd},
+	)
+	parentComp, parentReg := ComponentWithRegistry(1, delegate)
+	parent, err := gantry.NewAgent(gantry.WithLLM(parentMock), gantry.WithComponents(parentComp))
+	if err != nil {
+		t.Fatalf("NewAgent(parent): %v", err)
+	}
+
+	suspended, err := parent.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !suspended.Done || suspended.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspended by the grandchild's ask_user call", suspended.Done, suspended.DoneReason)
+	}
+	if len(suspended.PendingToolCalls) != 1 || suspended.PendingToolCalls[0].Name != "ask_user" {
+		t.Fatalf("PendingToolCalls = %#v, want the grandchild's ask_user call surfaced through two levels", suspended.PendingToolCalls)
+	}
+
+	final, err := tool.Resume(context.Background(), parent, parentReg, suspended, []gantry.ToolResult{
+		{CallID: suspended.PendingToolCalls[0].ID, Content: `{"answer":"the deep answer"}`},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "parent finished" {
+		t.Fatalf("Done=%q out=%q, want the parent to finish normally after resuming through two nested levels", final.DoneReason, final.FinalOutput)
+	}
+	if len(grandchildMock.Requests()) != 2 {
+		t.Errorf("grandchild LLM called %d times, want 2", len(grandchildMock.Requests()))
+	}
+	if len(childMock.Requests()) != 2 {
+		t.Errorf("child LLM called %d times, want 2", len(childMock.Requests()))
+	}
+	if len(parentMock.Requests()) != 2 {
+		t.Errorf("parent LLM called %d times, want 2", len(parentMock.Requests()))
+	}
+}
+
+func TestResumeReappliesDepthLimitToFurtherNestingAfterResuming(t *testing.T) {
+	// A resumed child that goes on to dispatch a NEW grandchild past
+	// WithMaxDepth must still be refused — depth tracking must survive the
+	// suspend/resume boundary (the original dispatch's depth-carrying ctx
+	// does not, since Invoke already returned once the child suspended).
+	//
+	// tooDeepMock is scripted with a response it must NEVER reach: if depth
+	// tracking wrongly reset to 0 across the resume boundary, the refusal
+	// check (depth >= maxDepth) would not fire and this mock would actually
+	// run and succeed, silently masking the regression this test exists to
+	// catch — a scriptless mock would fail either way (refused, or merely
+	// exhausted) and couldn't tell the two apart.
+	tooDeepMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "should never run", StopReason: gantry.StopReasonEnd})
+	tooDeepChild, err := gantry.NewAgent(gantry.WithLLM(tooDeepMock))
+	if err != nil {
+		t.Fatalf("NewAgent(tooDeepChild): %v", err)
+	}
+	blockedDelegate := New("blocked", "d", tooDeepChild, WithMaxDepth(1))
+
+	childMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{
+			// After resuming, the child itself tries to go one level deeper
+			// than its own WithMaxDepth(1) allows.
+			ToolCalls:  []gantry.ToolCall{{ID: "g1", Name: "blocked", Input: json.RawMessage(`{"goal":"too deep"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "recovered after the depth error", StopReason: gantry.StopReasonEnd},
+	)
+	childComp, childReg := ComponentWithRegistry(1, blockedDelegate)
+	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithComponents(childComp))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	if err := child.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
+		t.Fatalf("install client tools on child: %v", err)
+	}
+	delegate := New("specialist", "d", child, WithChildRegistry(childReg), WithMaxDepth(1))
+
+	parentMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{"goal":"go"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "parent finished", StopReason: gantry.StopReasonEnd},
+	)
+	parentComp, parentReg := ComponentWithRegistry(1, delegate)
+	parent, err := gantry.NewAgent(gantry.WithLLM(parentMock), gantry.WithComponents(parentComp))
+	if err != nil {
+		t.Fatalf("NewAgent(parent): %v", err)
+	}
+
+	suspended, err := parent.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, err := tool.Resume(context.Background(), parent, parentReg, suspended, []gantry.ToolResult{
+		{CallID: suspended.PendingToolCalls[0].ID, Content: `{"answer":"ok"}`},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "parent finished" {
+		t.Fatalf("Done=%q out=%q, want the run to recover past the depth-limit tool error to a normal finish", final.DoneReason, final.FinalOutput)
+	}
+	var sawDepthError bool
+	for _, m := range childMock.Requests()[len(childMock.Requests())-1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "g1" {
+			sawDepthError = true
+			if !strings.Contains(m.Content, "depth limit reached") {
+				t.Errorf("g1 result content = %q, want it to specifically name the depth limit (proves depth, not something else, was enforced)", m.Content)
+			}
+		}
+	}
+	if !sawDepthError {
+		t.Error("expected the depth-limited grandchild call to fold as an error result, proving the limit was actually enforced on resume")
+	}
+	if len(tooDeepMock.Requests()) != 0 {
+		t.Errorf("tooDeepChild received %d LLM requests, want 0 (must be refused before ever running — see tooDeepMock's comment above)", len(tooDeepMock.Requests()))
+	}
 }
