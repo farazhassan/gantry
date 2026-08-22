@@ -493,3 +493,52 @@ func TestSetPendingClientToolsDuplicateNameReturnsError(t *testing.T) {
 		t.Fatalf("state.Meta = %#v, want untouched after validation failure", prior.Meta)
 	}
 }
+
+func TestResumableToolSuspendSurfacesOnPendingToolCalls(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	// tool.Client() with no defs installs suspend detection without
+	// declaring any client-side name — stands in here for a future task's
+	// automatic installation.
+	if err := a.With(tool.Client()); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"ok?"}`)}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+	}
+	if err := a.With(tool.FromTools(1, specialist)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend", state.Done, state.DoneReason)
+	}
+	if len(state.PendingToolCalls) != 1 {
+		t.Fatalf("PendingToolCalls = %#v, want exactly 1", state.PendingToolCalls)
+	}
+	pc := state.PendingToolCalls[0]
+	if pc.Name != "ask_user" || string(pc.Input) != `{"q":"ok?"}` {
+		t.Errorf("surfaced call = %+v, want the leaf's real Name/Input untouched", pc)
+	}
+	if pc.ID == "ask1" || pc.ID == "c1" {
+		t.Errorf("surfaced ID %q should be a composite of the originating call and the leaf, not either alone", pc.ID)
+	}
+	for _, m := range state.Messages {
+		if m.ToolCallID == "c1" {
+			t.Errorf("originating call c1 must not have a folded tool result while pending; messages: %+v", state.Messages)
+		}
+	}
+}

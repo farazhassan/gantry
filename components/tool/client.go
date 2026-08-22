@@ -192,14 +192,44 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 					clientCalls = append(clientCalls, cl)
 				}
 			}
+
+			// Pull out any tool-pending results (a *gantry.PendingResult
+			// surfaced via ToolResult.Err — see components/tool's dispatch)
+			// before next folds ToolResults into the transcript, so a
+			// pending call is never mistaken for a finished one.
+			entries := map[string]pendingEntry{}
+			var toolPending []gantry.ToolCall
+			kept := s.ToolResults[:0]
+			for _, r := range s.ToolResults {
+				var pending *gantry.PendingResult
+				if errors.As(r.Err, &pending) {
+					entries[r.CallID] = pendingEntry{
+						ToolName: toolNameFor(s.PendingToolCalls, r.CallID),
+						Resume:   pending.Resume,
+					}
+					for _, p := range pending.Pending {
+						toolPending = append(toolPending, gantry.ToolCall{
+							ID:    r.CallID + pendingIDSep + p.ID,
+							Name:  p.Name,
+							Input: p.Input,
+						})
+					}
+					continue
+				}
+				kept = append(kept, r)
+			}
+			s.ToolResults = kept
+
 			if err := next(ctx, s); err != nil {
 				return err
 			}
-			if len(clientCalls) > 0 {
-				s.PendingToolCalls = append(s.PendingToolCalls[:0], clientCalls...)
+
+			if len(clientCalls) > 0 || len(toolPending) > 0 {
+				s.PendingToolCalls = append(append(s.PendingToolCalls[:0], clientCalls...), toolPending...)
 				s.Done = true
 				s.DoneReason = gantry.DoneClientToolCall
 			}
+			setPendingEntries(s, entries)
 			return nil
 		}
 	})
