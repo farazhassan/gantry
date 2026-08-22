@@ -12,8 +12,8 @@
 // client-side for the very next run/resume call via SetPendingClientTools
 // (e.g. an AG-UI handler decoding per-request tool declarations from a
 // CopilotKit frontend action). Client and DynamicClient are mutually
-// exclusive on one agent — both install the same suspend middleware
-// (SuspendClientCalls), so installing both returns an error. Use
+// exclusive on one agent — each explicitly checks for the other at install
+// time, so installing both returns an error regardless of install order. Use
 // SuspendClientCallsInstalled or DynamicClientInstalled to check ahead of
 // time whether an agent supports the (static or per-request, respectively)
 // client-tool mechanism.

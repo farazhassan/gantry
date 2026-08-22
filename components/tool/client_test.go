@@ -85,6 +85,73 @@ func TestMixedTurnRunsServerToolsAndSuspends(t *testing.T) {
 	}
 }
 
+// TestDynamicClientComposesWithFromToolsInEitherOrder is
+// TestMixedTurnRunsServerToolsAndSuspends's DynamicClient counterpart: it
+// proves tool.FromTools/tool.New (registryComponent's auto-installed
+// SuspendClientCalls, see TestBareFromToolsSuspendsOnResumableToolWithoutClient)
+// composes with tool.DynamicClient — not just tool.Client — regardless of
+// which of the two installs first, since only Client's static-tool case was
+// covered before.
+func TestDynamicClientComposesWithFromToolsInEitherOrder(t *testing.T) {
+	for _, order := range []string{"dynamic_client_then_from_tools", "from_tools_then_dynamic_client"} {
+		t.Run(order, func(t *testing.T) {
+			mock := eval.NewMockLLMClient(
+				gantry.LLMResponse{
+					ToolCalls: []gantry.ToolCall{
+						{ID: "s1", Name: "add_one", Input: json.RawMessage(`5`)},
+						{ID: "q1", Name: "get_location", Input: json.RawMessage(`{}`)},
+					},
+					StopReason: gantry.StopReasonToolUse,
+				},
+			)
+			a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+			dynamicClient := tool.DynamicClient()
+			fromTools := tool.FromTools(1, addOneTool{})
+			var installErr error
+			if order == "dynamic_client_then_from_tools" {
+				installErr = a.With(dynamicClient, fromTools)
+			} else {
+				installErr = a.With(fromTools, dynamicClient)
+			}
+			if installErr != nil {
+				t.Fatalf("install (%s): %v", order, installErr)
+			}
+
+			prior := &gantry.State{}
+			if err := tool.SetPendingClientTools(prior, gantry.ToolDef{
+				Name:        "get_location",
+				Description: "returns the browser's location",
+				Schema:      json.RawMessage(`{}`),
+			}); err != nil {
+				t.Fatalf("SetPendingClientTools: %v", err)
+			}
+
+			state, err := a.RunFrom(context.Background(), prior, "go")
+			if err != nil {
+				t.Fatalf("RunFrom: %v", err)
+			}
+			if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+				t.Fatalf("Done=%v DoneReason=%q, want suspend", state.Done, state.DoneReason)
+			}
+			if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "q1" {
+				t.Fatalf("PendingToolCalls = %#v, want only q1", state.PendingToolCalls)
+			}
+			var sawServerResult bool
+			for _, m := range state.Messages {
+				if m.Role == gantry.RoleTool && m.ToolCallID == "s1" && m.Content == "6" {
+					sawServerResult = true
+				}
+				if m.Role == gantry.RoleTool && m.ToolCallID == "q1" {
+					t.Fatalf("client call q1 must not have a tool result")
+				}
+			}
+			if !sawServerResult {
+				t.Fatalf("server tool result for s1 missing; messages: %#v", state.Messages)
+			}
+		})
+	}
+}
+
 func TestNoClientToolsLeavesLoopUnchanged(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
