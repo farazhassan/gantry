@@ -176,6 +176,21 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					}
 					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
 					if err != nil {
+						var pending *gantry.PendingResult
+						if errors.As(err, &pending) {
+							// A pending call is not a failure: it must not
+							// trigger OnFailure/Disposition policy (abort,
+							// cancel siblings, HarnessStop). Err is preserved so
+							// the unified suspend middleware (SuspendClientCalls,
+							// Task 5) can recognize and route it; that
+							// middleware removes it from ToolResults before
+							// DefaultObserveHandler ever sees it, so
+							// IsError/Content here are never folded into the
+							// transcript.
+							results[i] = gantry.ToolResult{CallID: call.ID, Err: pending}
+							emitLive(ctx, results[i])
+							return nil
+						}
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,
 							Content: err.Error(),

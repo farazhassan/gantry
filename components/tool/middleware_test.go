@@ -1115,3 +1115,42 @@ func TestFromToolsWithPolicyDispatchesPendingCalls(t *testing.T) {
 		t.Errorf("FinalOutput = %q", state.FinalOutput)
 	}
 }
+
+func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "p1", Name: "resumable", Input: json.RawMessage(`{}`)},
+				{ID: "s1", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	policy := tool.Policy{Parallelism: 2, OnFailure: tool.StopCancelInFlight, Disposition: tool.HarnessStop}
+	resumable := &fakeResumable{
+		def:       gantry.ToolDef{Name: "resumable", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{Pending: []gantry.ToolCall{{ID: "leaf1", Name: "ask_user"}}},
+	}
+	if err := a.With(tool.FromToolsWithPolicy(policy, resumable, addOneTool{})); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v (a pending call must not trigger HarnessStop)", err)
+	}
+	if state.DoneReason == gantry.DoneToolPolicyAborted {
+		t.Errorf("DoneReason = %q, want no policy abort triggered by a merely-pending call", state.DoneReason)
+	}
+	var sawServerResult bool
+	for _, m := range mock.Requests()[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "s1" && m.Content == "6" {
+			sawServerResult = true
+		}
+	}
+	if !sawServerResult {
+		t.Error("sibling server call must still complete and feed back under a stopping OnFailure policy")
+	}
+}
