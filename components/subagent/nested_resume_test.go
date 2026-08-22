@@ -2,6 +2,7 @@
 package subagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -75,7 +76,7 @@ func TestOneLevelNestedSuspendAndResume(t *testing.T) {
 }
 
 func TestTwoSiblingDelegateCallsSuspendAndResumeIndependently(t *testing.T) {
-	newAskingChild := func(t *testing.T, question string) *gantry.Agent {
+	newAskingChild := func(t *testing.T, question string) (*gantry.Agent, *eval.MockLLMClient) {
 		t.Helper()
 		mock := eval.NewMockLLMClient(
 			gantry.LLMResponse{
@@ -91,11 +92,11 @@ func TestTwoSiblingDelegateCallsSuspendAndResumeIndependently(t *testing.T) {
 		if err := c.With(tool.Client(gantry.ToolDef{Name: "ask_user", Description: "d", Schema: json.RawMessage(`{}`)})); err != nil {
 			t.Fatalf("install client tools: %v", err)
 		}
-		return c
+		return c, mock
 	}
 
-	childA := newAskingChild(t, "A?")
-	childB := newAskingChild(t, "B?")
+	childA, mockA := newAskingChild(t, "A?")
+	childB, mockB := newAskingChild(t, "B?")
 	delegateA := New("agentA", "d", childA)
 	delegateB := New("agentB", "d", childB)
 
@@ -122,10 +123,28 @@ func TestTwoSiblingDelegateCallsSuspendAndResumeIndependently(t *testing.T) {
 	if len(suspended.PendingToolCalls) != 2 {
 		t.Fatalf("PendingToolCalls = %#v, want 2 (one per sibling delegate)", suspended.PendingToolCalls)
 	}
+	for _, m := range suspended.Messages {
+		if m.ToolCallID == "c1" || m.ToolCallID == "c2" {
+			t.Errorf("originating delegate call %s must not have a folded result while its child is pending", m.ToolCallID)
+		}
+	}
 
+	// Give each sibling a distinguishable answer so that a routing bug that
+	// cross-wires the two children's answers is actually detectable below,
+	// rather than being masked by both children being handed the same
+	// content.
+	const answerA = `{"answer":"yes-for-A"}`
+	const answerB = `{"answer":"yes-for-B"}`
 	answers := make([]gantry.ToolResult, len(suspended.PendingToolCalls))
 	for i, pc := range suspended.PendingToolCalls {
-		answers[i] = gantry.ToolResult{CallID: pc.ID, Content: `{"answer":"yes"}`}
+		switch {
+		case bytes.Contains(pc.Input, []byte("A?")):
+			answers[i] = gantry.ToolResult{CallID: pc.ID, Content: answerA}
+		case bytes.Contains(pc.Input, []byte("B?")):
+			answers[i] = gantry.ToolResult{CallID: pc.ID, Content: answerB}
+		default:
+			t.Fatalf("pending call %#v does not match either sibling's question, cannot assign an answer", pc)
+		}
 	}
 	final, err := tool.Resume(context.Background(), parent, parentReg, suspended, answers)
 	if err != nil {
@@ -134,4 +153,32 @@ func TestTwoSiblingDelegateCallsSuspendAndResumeIndependently(t *testing.T) {
 	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "both done" {
 		t.Fatalf("Done=%q out=%q, want both siblings to finish and the parent to continue", final.DoneReason, final.FinalOutput)
 	}
+
+	// Prove the answers were not cross-wired: each child's own second LLM
+	// request (its continuation after being resumed) must carry the
+	// tool-result message that was actually addressed to it, and must not
+	// carry the sibling's answer instead.
+	requireOwnAnswer := func(t *testing.T, who string, mock *eval.MockLLMClient, want string) {
+		t.Helper()
+		reqs := mock.Requests()
+		if len(reqs) != 2 {
+			t.Fatalf("%s LLM called %d times, want 2 (initial call + continuation after its own answer)", who, len(reqs))
+		}
+		var got string
+		found := false
+		for _, m := range reqs[1].Messages {
+			if m.Role == gantry.RoleTool && m.ToolCallID == "ask1" {
+				got = m.Content
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s second LLM request has no RoleTool message for ask1; messages=%#v", who, reqs[1].Messages)
+		}
+		if got != want {
+			t.Errorf("%s received answer %q, want %q (its own answer, not its sibling's)", who, got, want)
+		}
+	}
+	requireOwnAnswer(t, "childA", mockA, answerA)
+	requireOwnAnswer(t, "childB", mockB, answerB)
 }
