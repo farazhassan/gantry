@@ -355,6 +355,12 @@ func TestResumeRoutesToResumableToolAndReSuspends(t *testing.T) {
 			Resume:  json.RawMessage(`{"step":1}`),
 		},
 		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			if string(resume) != `{"step":1}` {
+				t.Errorf("Resume got token %q, want the stashed one", resume)
+			}
+			if len(results) != 1 || results[0].CallID != "ask1" || results[0].Content != "first answer" {
+				t.Errorf("Resume got results %#v, want the ask1 answer", results)
+			}
 			return nil, &gantry.PendingResult{
 				Pending: []gantry.ToolCall{{ID: "ask2", Name: "ask_user"}},
 				Resume:  json.RawMessage(`{"step":2}`),
@@ -440,6 +446,109 @@ func TestResumeSurvivesSimulatedCheckpointRoundTrip(t *testing.T) {
 	}
 	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
 		t.Fatalf("Done=%q out=%q, want a normal finish after a checkpoint round-trip", final.DoneReason, final.FinalOutput)
+	}
+}
+
+// TestResumeSurvivesCheckpointRoundTripThroughReSuspend guards against a
+// regression where the map[string]pendingEntry that Resume writes back into
+// state.Meta on the re-suspend branch (via setPendingEntries) fails to
+// survive a second real JSON round-trip. A real checkpointer persists state
+// after every suspend, not just the first, so the freshly-constructed
+// pending entries produced mid-Resume-call must marshal/unmarshal just as
+// cleanly as the entries the SuspendClientCalls middleware originally wrote.
+func TestResumeSurvivesCheckpointRoundTripThroughReSuspend(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+
+	var resumeCalls int
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			resumeCalls++
+			if resumeCalls == 1 {
+				return nil, &gantry.PendingResult{
+					Pending: []gantry.ToolCall{{ID: "ask2", Name: "ask_user"}},
+					Resume:  json.RawMessage(`{"step":2}`),
+				}
+			}
+			return json.RawMessage(`{"output":"ok"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(suspended.PendingToolCalls) != 1 {
+		t.Fatalf("PendingToolCalls = %#v, want 1", suspended.PendingToolCalls)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	// First checkpoint round-trip: suspend -> JSON marshal/unmarshal.
+	data, err := json.Marshal(suspended)
+	if err != nil {
+		t.Fatalf("marshal (1st): %v", err)
+	}
+	var reloaded gantry.State
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatalf("unmarshal (1st): %v", err)
+	}
+
+	again, err := tool.Resume(context.Background(), a, reg, &reloaded, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (1st): %v", err)
+	}
+	if !again.Done || again.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want re-suspended", again.Done, again.DoneReason)
+	}
+	if len(again.PendingToolCalls) != 1 || again.PendingToolCalls[0].Name != "ask_user" {
+		t.Fatalf("PendingToolCalls = %#v, want the new ask2 leaf", again.PendingToolCalls)
+	}
+	if again.PendingToolCalls[0].ID == firstID {
+		t.Error("the re-suspended call must get a fresh composite ID, not reuse the first round's")
+	}
+	secondID := again.PendingToolCalls[0].ID
+
+	// Second checkpoint round-trip: the re-suspended state (with the
+	// map[string]pendingEntry that Resume wrote back into Meta mid-call)
+	// must itself survive a real JSON marshal/unmarshal.
+	data2, err := json.Marshal(again)
+	if err != nil {
+		t.Fatalf("marshal (2nd): %v", err)
+	}
+	var reloaded2 gantry.State
+	if err := json.Unmarshal(data2, &reloaded2); err != nil {
+		t.Fatalf("unmarshal (2nd): %v", err)
+	}
+
+	final, err := tool.Resume(context.Background(), a, reg, &reloaded2, []gantry.ToolResult{
+		{CallID: secondID, Content: "second answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (2nd): %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%q out=%q, want a normal finish after the second checkpoint round-trip", final.DoneReason, final.FinalOutput)
+	}
+	if resumeCalls != 2 {
+		t.Fatalf("specialist.Resume called %d times, want exactly 2", resumeCalls)
 	}
 }
 
