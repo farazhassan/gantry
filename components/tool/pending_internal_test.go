@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -49,6 +50,26 @@ func TestPendingEntriesRoundTripsThroughJSON(t *testing.T) {
 	got := pendingEntriesFrom(&reloaded)
 	if len(got) != 1 || got["c1"].ToolName != "specialist" || string(got["c1"].Resume) != `{"step":1}` {
 		t.Errorf("pendingEntriesFrom after round-trip = %#v, want %#v", got, want)
+	}
+}
+
+// TestPendingEntryPartialOmitemptyPreservesBackwardCompatibleShape guards
+// pendingEntry.Partial's `omitempty` JSON tag: an entry with no partial
+// answers yet (the common case — every flat, declared-client-tool pending
+// call, and any nested entry before its group is ever answered
+// incrementally) must marshal with no "partial" key at all, matching the
+// JSON shape pendingEntry had before Partial was added. A stray `"partial":
+// null` or `"partial": {}` key, while harmless to pendingEntriesFrom's own
+// unmarshal, would still be a gratuitous shape change for anything else
+// that happens to read state.Meta's raw JSON (e.g. a checkpoint diff/log).
+func TestPendingEntryPartialOmitemptyPreservesBackwardCompatibleShape(t *testing.T) {
+	entry := pendingEntry{ToolName: "specialist", Resume: json.RawMessage(`{"step":1}`)}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(data, []byte(`"partial"`)) {
+		t.Errorf("marshaled pendingEntry with nil Partial = %s, want no \"partial\" key at all", data)
 	}
 }
 

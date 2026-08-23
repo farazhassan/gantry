@@ -971,6 +971,141 @@ func TestResumeNestedGroupPartialAnswerSurvivesCheckpointRoundTrip(t *testing.T)
 	}
 }
 
+// TestResumeNestedGroupPartialAnswerSurvivesIntermediateValidationError
+// guards the fix for the finding that a nested group's merge-into-Partial
+// step only ran on the "still incomplete" path: if a group became complete
+// this round (this round's byID answers plus a prior round's Partial
+// together covered every leaf) but then hit one of the reg==nil/!found/!ok
+// validation checks before reaching rt.Resume, this round's freshly supplied
+// answer(s) were never written back into entries[origin] before commit()
+// persisted it — so they were silently lost, and a later Resume call (even
+// with a fixed Registry and no new answers) would find the group still
+// missing exactly what was supplied in the round that errored, contradicting
+// the "already-supplied answers are retained" guarantee.
+//
+// Round 1 answers leaf A (persists via the existing merge path). Round 2
+// answers leaf B AND passes a nil Registry: the group is now complete (A
+// from Partial, B from byID), but the nil-Registry check fires before
+// rt.Resume is reached — B's answer must still be persisted into Partial
+// despite the error. Round 3, with a valid Registry and no new answers at
+// all, must now succeed, with rt.Resume seeing both A's and B's answers.
+func TestResumeNestedGroupPartialAnswerSurvivesIntermediateValidationError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "all set", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+
+	var resumeCalls int
+	var gotResults []gantry.ToolResult
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{
+				{ID: "askA", Name: "ask_user", Input: json.RawMessage(`{"q":"a?"}`)},
+				{ID: "askB", Name: "ask_user", Input: json.RawMessage(`{"q":"b?"}`)},
+			},
+			Resume: json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			resumeCalls++
+			gotResults = results
+			return json.RawMessage(`{"output":"done"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(suspended.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls = %#v, want 2 (one composite group of 2 leaves)", suspended.PendingToolCalls)
+	}
+
+	var idA, idB string
+	for _, pc := range suspended.PendingToolCalls {
+		switch {
+		case strings.Contains(string(pc.Input), `"a?"`):
+			idA = pc.ID
+		case strings.Contains(string(pc.Input), `"b?"`):
+			idB = pc.ID
+		}
+	}
+	if idA == "" || idB == "" {
+		t.Fatalf("could not identify leaf IDs: %#v", suspended.PendingToolCalls)
+	}
+
+	// Round 1: answer only leaf A. Group stays incomplete, A's answer
+	// persists into Partial via the existing path.
+	round1, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: idA, Content: "answer A"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (round 1): %v", err)
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("specialist.Resume called %d times after round 1, want 0 (group is still incomplete)", resumeCalls)
+	}
+	if len(round1.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls after round 1 = %#v, want both leaves still pending (group incomplete)", round1.PendingToolCalls)
+	}
+
+	// Round 2: answer leaf B, but pass a nil Registry. The group becomes
+	// complete (A from Partial, B from this round's byID), but the nil
+	// Registry must produce an error before rt.Resume is reached. B's answer
+	// must still be persisted into Partial despite the error.
+	round2, err := tool.Resume(context.Background(), a, nil, round1, []gantry.ToolResult{
+		{CallID: idB, Content: "answer B"},
+	})
+	if err == nil {
+		t.Fatal("Resume (round 2) with nil Registry: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "Registry") {
+		t.Errorf("Resume (round 2) error = %v, want it to identify the nil-Registry problem", err)
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("specialist.Resume called %d times after round 2, want 0 (rt.Resume must never be reached when reg is nil)", resumeCalls)
+	}
+	if len(round2.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls after round 2 = %#v, want both leaves still pending (errored before rt.Resume)", round2.PendingToolCalls)
+	}
+
+	// Round 3: valid Registry, no new answers supplied at all. This must now
+	// succeed purely from the retained Partial (A from round 1, B from round
+	// 2 despite its error), proving B's answer was not lost.
+	final, err := tool.Resume(context.Background(), a, reg, round2, nil)
+	if err != nil {
+		t.Fatalf("Resume (round 3, no new answers): %v", err)
+	}
+	if resumeCalls != 1 {
+		t.Fatalf("specialist.Resume called %d times after round 3, want exactly 1", resumeCalls)
+	}
+	if len(gotResults) != 2 {
+		t.Fatalf("rt.Resume got %d results, want 2 (both leaves, B recovered from Partial despite round 2's error)", len(gotResults))
+	}
+	byCallID := map[string]gantry.ToolResult{}
+	for _, r := range gotResults {
+		byCallID[r.CallID] = r
+	}
+	if r, ok := byCallID["askA"]; !ok || r.Content != "answer A" {
+		t.Errorf("results for askA = %#v (present=%v), want Content %q", r, ok, "answer A")
+	}
+	if r, ok := byCallID["askB"]; !ok || r.Content != "answer B" {
+		t.Errorf("results for askB = %#v (present=%v), want Content %q recovered from Partial", r, ok, "answer B")
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "all set" {
+		t.Fatalf("Done=%q out=%q, want normal finish after the group finally completes", final.DoneReason, final.FinalOutput)
+	}
+}
+
 func TestResumeSurvivesSimulatedCheckpointRoundTrip(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

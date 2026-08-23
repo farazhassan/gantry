@@ -122,11 +122,26 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 	// Nested calls: one group per originating ResumableTool call. A group is
 	// only handed to Resume once every leaf in it has an answer — from
 	// either this round's byID or a prior round's accumulated entry.Partial.
-	// A still-incomplete group stays pending, but this round's newly
-	// supplied answers (if any) are merged into entry.Partial before moving
-	// on, so a multi-item suspend can genuinely be answered incrementally:
-	// a later Resume call needs only the still-missing leaves, never a
-	// re-supply of one already given.
+	// This round's newly supplied answers (if any) are merged into
+	// entry.Partial, and entries[origin] is written back with that merged
+	// value, UNCONDITIONALLY — before checking whether the group is
+	// complete and before the reg/found/ok validation checks below run. That
+	// ordering matters: a group can turn out complete this round (this
+	// round's byID answers plus a prior round's Partial together cover every
+	// leaf) and yet still never reach rt.Resume, because reg is nil, the
+	// tool name is unknown, or the tool doesn't implement ResumableTool. If
+	// the merge only happened for a still-incomplete group (as it once did),
+	// this round's byID contribution to an already-complete group would be
+	// lost the moment one of those checks failed — commit() would persist
+	// entries[origin] without it, and a later Resume call, even with a fixed
+	// registry, would see the group as incomplete again, missing exactly the
+	// answer(s) supplied in the round that hit the validation error. Merging
+	// unconditionally means entries[origin] always reflects every answer
+	// supplied so far for this origin by the time commit() runs on any exit
+	// path, so a multi-item suspend can genuinely be answered incrementally
+	// — a later Resume call needs only the still-missing leaves, never a
+	// re-supply of one already given, regardless of what happens later in
+	// this round.
 	for _, origin := range originOrder {
 		calls := nestedByOrigin[origin]
 		entry, ok := entries[origin]
@@ -148,7 +163,16 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 		for _, call := range calls {
 			_, leaf, _ := splitPendingID(call.ID)
 			ans, ok := byID[call.ID]
-			if !ok {
+			if ok {
+				// Fold this round's freshly supplied answer into
+				// entry.Partial right away, regardless of whether the group
+				// turns out complete or not — see the comment above the
+				// loop for why this can't wait until completeness is known.
+				if entry.Partial == nil {
+					entry.Partial = map[string]gantry.ToolResult{}
+				}
+				entry.Partial[leaf] = ans
+			} else {
 				ans, ok = entry.Partial[leaf]
 			}
 			if !ok {
@@ -157,32 +181,25 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 			}
 			group = append(group, gantry.ToolResult{CallID: leaf, Content: ans.Content, IsError: ans.IsError})
 		}
+		entries[origin] = entry
+
 		if !complete {
-			// Merge any freshly supplied answers for this still-incomplete
-			// group into entry.Partial before moving on, so they aren't lost
-			// — a later Resume call will find them here even though byID
-			// (this call's local answers map) won't exist anymore by then.
-			for _, call := range calls {
-				_, leaf, _ := splitPendingID(call.ID)
-				ans, ok := byID[call.ID]
-				if !ok {
-					continue
-				}
-				if entry.Partial == nil {
-					entry.Partial = map[string]gantry.ToolResult{}
-				}
-				entry.Partial[leaf] = ans
-			}
-			entries[origin] = entry
 			remaining = append(remaining, calls...)
 			continue
 		}
 		// The group is complete: entry.Partial (if any) has now been fully
-		// folded into group above and is no longer needed. Clear it so it
-		// doesn't leak into whatever fresh pendingEntry this origin gets
-		// reused for below, if rt.Resume re-suspends again with a new
-		// Pending set under the same origin.
-		entry.Partial = nil
+		// folded into group above. It's deliberately left as-is (not
+		// cleared) rather than reset to nil here: if rt.Resume below is
+		// actually reached and resolves (success, a genuine error, or a
+		// contract-violation error), entries[origin] is deleted
+		// unconditionally right after the call, so a stale Partial at that
+		// point is harmless — it's never read again for this origin, and a
+		// re-suspend constructs a wholly fresh pendingEntry rather than
+		// reusing this one. But if rt.Resume is never reached because one of
+		// the reg/found/ok checks below fails, the entry survives for a
+		// later retry, and it needs Partial to still hold every answer
+		// already given so that retry can succeed with no new answers
+		// supplied.
 
 		if reg == nil {
 			remaining = append(remaining, calls...)
