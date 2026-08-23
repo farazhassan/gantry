@@ -206,10 +206,34 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)
 			var clientCalls []gantry.ToolCall
+			// badClientResults collects a synthetic error ToolResult for each
+			// declared client-tool call whose own ID already contains
+			// pendingIDSep. A declared client-tool call is never invoked
+			// server-side (that's the point of it), so it produces no
+			// ToolResult of its own to fold an error into the way the
+			// r.CallID check below does for a ResumableTool's origin — this
+			// call ID is this level's own freshly-dispatched LLM tool_call
+			// ID, never itself composite, so (like r.CallID, and unlike a
+			// Pending[i].ID) it is safe to reject centrally here: nothing
+			// about legitimate nesting ever produces one containing the
+			// separator. See pendingIDSepContractErr's doc comment for why
+			// the same reasoning does not extend to Pending[i].ID.
+			var badClientResults []gantry.ToolResult
 			for _, cl := range s.PendingToolCalls {
-				if set[cl.Name] {
-					clientCalls = append(clientCalls, cl)
+				if !set[cl.Name] {
+					continue
 				}
+				if strings.Contains(cl.ID, pendingIDSep) {
+					err := pendingIDSepClientCallErr(cl.Name, cl.ID)
+					badClientResults = append(badClientResults, gantry.ToolResult{
+						CallID:  cl.ID,
+						Content: err.Error(),
+						IsError: true,
+						Err:     err,
+					})
+					continue
+				}
+				clientCalls = append(clientCalls, cl)
 			}
 
 			// Pull out any tool-pending results (a *gantry.PendingResult
@@ -283,7 +307,7 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 				}
 				kept = append(kept, r)
 			}
-			s.ToolResults = kept
+			s.ToolResults = append(kept, badClientResults...)
 
 			if err := next(ctx, s); err != nil {
 				return err

@@ -688,6 +688,65 @@ func TestSuspendClientCallsRejectsOriginCallIDContainingSeparator(t *testing.T) 
 	}
 }
 
+// TestSuspendClientCallsRejectsFlatCallIDContainingSeparator guards the
+// other point of origin pendingIDSepContractErr's doc comment identifies as
+// unvalidated by that check alone: a declared client-tool call
+// (tool.Client/tool.DynamicClient) never goes through the composite-ID
+// construction site that check guards (it has no server-side Invoke, so it
+// never produces a ToolResult), so a pathological provider-generated ID
+// containing pendingIDSep would otherwise reach PendingToolCalls completely
+// unvalidated. Unlike a PendingResult.Pending[i].ID, a flat call's own ID is
+// always this level's freshly-dispatched LLM tool_call ID — never
+// legitimately composite — so it's safe to reject centrally here, the same
+// way the origin CallID case is. Proven here with a second, well-formed
+// client-tool call in the same turn to confirm only the bad one is affected.
+func TestSuspendClientCallsRejectsFlatCallIDContainingSeparator(t *testing.T) {
+	const sep = "\x1f" // must match components/tool's unexported pendingIDSep
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "c" + sep + "bad", Name: "ask_user", Input: json.RawMessage(`{}`)},
+				{ID: "cgood", Name: "ask_user", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend (the good call is still pending)", state.Done, state.DoneReason)
+	}
+
+	// The bad call must never be surfaced as still-pending.
+	if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "cgood" {
+		t.Fatalf("PendingToolCalls = %#v, want exactly the good call (cgood)", state.PendingToolCalls)
+	}
+
+	badID := "c" + sep + "bad"
+	var badMsg *gantry.Message
+	for i, m := range state.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == badID {
+			badMsg = &state.Messages[i]
+		}
+		if m.Role == gantry.RoleTool && m.ToolCallID == "cgood" {
+			t.Errorf("cgood must not have a folded tool result while still pending; messages: %+v", state.Messages)
+		}
+	}
+	if badMsg == nil {
+		t.Fatalf("no tool_result message for the bad call in state.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", state.Messages)
+	}
+	if !strings.Contains(badMsg.Content, "ask_user") || !strings.Contains(badMsg.Content, "separator") {
+		t.Errorf("tool_result content for the bad call = %q, want it to identify the tool and the reserved-separator problem", badMsg.Content)
+	}
+}
+
 // TestSuspendClientCallsTypedNilPendingResultPassesThroughNotPanics guards
 // SuspendClientCalls's PhaseObserve loop over s.ToolResults against the same
 // footgun other tests in this file guard elsewhere in the pipeline: a

@@ -135,8 +135,35 @@ func pendingResultContractErr(toolName string) error {
 // exactly that. Each level only ever splits once and forwards its own
 // residual leaf opaquely to the level below, so an embedded separator there
 // causes no misparse.
+//
+// This asymmetry means a non-delegating ResumableTool's own terminal
+// Pending[i].ID — one not itself forwarded from a nested ResumableTool's
+// suspend — is NOT validated anywhere in this package: a delegating tool's
+// legitimately-composite forwarded child ID and a non-delegating tool's
+// pathologically separator-containing ID are indistinguishable strings at
+// this generic middleware, and rejecting the former would break legitimate
+// nesting. Only the tool that owns a terminal ID knows whether it is meant
+// to be composite, so guarding against this (a non-conforming LLM
+// provider/gateway or a buggy tool author supplying a non-alphanumeric ID —
+// see pendingIDSep's doc comment; real provider IDs never do this) is each
+// non-delegating ResumableTool's own responsibility, not something
+// components/tool can centrally enforce.
 func pendingIDSepContractErr(toolName, badID string) error {
 	return fmt.Errorf("tool: %s's PendingResult originating call ID %q contains the reserved pending-ID separator %q; tool-call IDs must not contain it", toolName, badID, pendingIDSep)
+}
+
+// pendingIDSepClientCallErr is pendingIDSepContractErr's counterpart for a
+// declared client-tool call (tool.Client/tool.DynamicClient) whose own ID
+// already contains pendingIDSep, caught in client.go's SuspendClientCalls
+// before the call is ever surfaced in PendingToolCalls. Unlike a
+// PendingResult's Pending[i].ID (see pendingIDSepContractErr's doc comment
+// above), a declared client-tool call's ID is always this level's own
+// freshly-dispatched LLM tool_call ID — never itself composite, and never
+// legitimately forwarded from a nested suspend — so, like the originating
+// CallID pendingIDSepContractErr guards, it is safe to reject centrally
+// here.
+func pendingIDSepClientCallErr(toolName, badID string) error {
+	return fmt.Errorf("tool: declared client tool %s's call ID %q contains the reserved pending-ID separator %q; tool-call IDs must not contain it", toolName, badID, pendingIDSep)
 }
 
 // toolNameFor looks up the Name of the pending call with the given ID in
