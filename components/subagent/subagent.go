@@ -81,6 +81,12 @@ func WithEventPassthrough() Option {
 // answer down through more than one level of nesting; omit it when the
 // child only ever suspends on a declared tool.Client/DynamicClient call (no
 // ResumableTools of its own).
+//
+// Callers fulfilling a suspend that may involve this delegate should resume
+// the top-level state with subagent.Resume, not tool.Resume directly, to get
+// correct usage accounting — see subagent.Resume's doc comment. A bare
+// tool.Resume call is still fine when usage accounting isn't a concern for
+// your use case.
 func WithChildRegistry(reg *tool.Registry) Option {
 	return func(t *delegateTool) { t.childReg = reg }
 }
@@ -200,6 +206,14 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 // delegate tool — tool.Resume already handles both uniformly, so no
 // path/stack bookkeeping is needed here for multi-level nesting: each level
 // only ever prefixes by the one segment it owns.
+//
+// This method only folds its own usage delta into a recorder it finds
+// already installed in ctx (see usageRecorderFrom below) — it does not
+// install one itself. A top-level caller resuming an application's
+// suspended run should call the package-level subagent.Resume, not this
+// method or tool.Resume directly, so a recorder is actually present and this
+// fold has somewhere to land; see subagent.Resume's doc comment for why a
+// bare tool.Resume call cannot do this.
 func (t *delegateTool) Resume(ctx context.Context, resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
 	var child gantry.State
 	if err := json.Unmarshal(resume, &child); err != nil {
