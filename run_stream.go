@@ -103,7 +103,14 @@ func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) er
 			// composite ID/Name/Input to a live consumer (that's a separate,
 			// larger protocol-design question, out of scope here).
 			var pending *PendingResult
-			if errors.As(tr.Err, &pending) {
+			// errors.As can match and still leave pending nil: a tool that
+			// mistakenly does `var pr *PendingResult; return out, pr`
+			// returns a non-nil error interface wrapping a nil pointer. That
+			// is not a genuine suspend signal — it's a completed (if
+			// malformed) error result — so without this check it would be
+			// wrongly skipped here, hiding the EventToolResult a streaming
+			// consumer needs to see.
+			if errors.As(tr.Err, &pending) && pending != nil {
 				continue
 			}
 			if err := emit(ctx, Event{Type: EventToolResult, Iteration: state.Iteration, ToolResult: &tr}); err != nil {

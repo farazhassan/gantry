@@ -221,7 +221,15 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 			kept := s.ToolResults[:0]
 			for _, r := range s.ToolResults {
 				var pending *gantry.PendingResult
-				if errors.As(r.Err, &pending) {
+				// errors.As can match and still leave pending nil: a tool that
+				// mistakenly does
+				// `var pr *gantry.PendingResult; return out, pr` returns a
+				// non-nil error interface wrapping a nil pointer.
+				// Treating that as a genuine suspend signal would panic
+				// below on pending.Resume — pending != nil routes it to
+				// the fallthrough below instead, which passes r through
+				// unchanged as a normal, already-resolved ToolResult.
+				if errors.As(r.Err, &pending) && pending != nil {
 					toolName := toolNameFor(s.PendingToolCalls, r.CallID)
 
 					// r.CallID already containing pendingIDSep would corrupt

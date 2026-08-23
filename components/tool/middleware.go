@@ -193,7 +193,15 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
 					if err != nil {
 						var pending *gantry.PendingResult
-						if errors.As(err, &pending) {
+						// errors.As can match and still leave pending nil: a
+						// tool that mistakenly does
+						// `var pr *gantry.PendingResult; return out, pr`
+						// returns a non-nil error interface wrapping a nil
+						// pointer. Treating that as a genuine suspend signal
+						// would panic below on pending.Pending, so route that
+						// case to the plain error-wrapping tail below (using
+						// the original err) instead.
+						if errors.As(err, &pending) && pending != nil {
 							if len(pending.Pending) > 0 {
 								// A pending call is not a failure: it must not
 								// trigger OnFailure/Disposition policy (abort,

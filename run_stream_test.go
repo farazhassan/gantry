@@ -259,3 +259,62 @@ func TestRunStreamSuppressesToolResultEventForPendingCall(t *testing.T) {
 		t.Error("got a tool_result event for the still-pending call pending1; want it suppressed")
 	}
 }
+
+// TestRunStreamEmitsToolResultEventForTypedNilPendingResult guards against a
+// footgun adjacent to the suppression tested above: a tool can buggily
+// return a non-nil error interface wrapping a nil *PendingResult pointer
+// (`var pr *PendingResult; return out, pr`). errors.As(tr.Err, &pending)
+// still matches that, leaving pending nil. That is not a genuine suspend
+// signal — it's an ordinary (if malformed) completed error result — so
+// emitPhaseEffects must neither panic on it nor wrongly suppress its
+// EventToolResult the way it correctly does for a real pending entry.
+func TestRunStreamEmitsToolResultEventForTypedNilPendingResult(t *testing.T) {
+	a, _ := gantry.NewAgent(gantry.WithLLM(twoTurnMock()))
+	var nilPending *gantry.PendingResult
+	var wrapped error = nilPending // non-nil interface wrapping a nil *PendingResult
+	a.Use(gantry.PhaseToolExec, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			for _, call := range s.PendingToolCalls {
+				s.ToolResults = append(s.ToolResults, gantry.ToolResult{
+					CallID:  call.ID,
+					Content: "fake:" + call.Name,
+				})
+			}
+			s.ToolResults = append(s.ToolResults, gantry.ToolResult{
+				CallID:  "nilpending1",
+				IsError: true,
+				Content: "typed-nil pending result",
+				Err:     wrapped,
+			})
+			return next(ctx, s)
+		}
+	})
+
+	var events []gantry.Event
+	_, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	var sawRealResult, sawNilPendingResult bool
+	for _, ev := range events {
+		if ev.Type != gantry.EventToolResult || ev.ToolResult == nil {
+			continue
+		}
+		switch ev.ToolResult.CallID {
+		case "c1":
+			sawRealResult = true
+		case "nilpending1":
+			sawNilPendingResult = true
+		}
+	}
+	if !sawRealResult {
+		t.Error("expected a tool_result event for the real, completed call c1")
+	}
+	if !sawNilPendingResult {
+		t.Error("expected a tool_result event for nilpending1 (a typed-nil PendingResult is a completed result, not a genuine suspend); want it NOT suppressed")
+	}
+}

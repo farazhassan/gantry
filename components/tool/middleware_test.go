@@ -1278,6 +1278,65 @@ func TestDispatchEmptyPendingResultBecomesToolErrorNotSuspend(t *testing.T) {
 	}
 }
 
+// TestDispatchTypedNilPendingResultBecomesToolErrorNotPanic guards the
+// dispatch job closure against the same footgun
+// TestDispatchEmptyPendingResultBecomesToolErrorNotSuspend guards elsewhere
+// in this file: a tool can buggily return a non-nil error interface
+// wrapping a nil *gantry.PendingResult pointer
+// (`var pr *gantry.PendingResult; return out, pr`), which errors.As still
+// matches. Registry.Invoke's own root-cause fix already stops this error
+// from remaining errors.As-matchable by the time it reaches this dispatch
+// closure, but the closure's own `pending != nil` check (added as
+// defense-in-depth) must not regress: if it were ever removed,
+// len(pending.Pending) on the matched-but-nil pointer would panic instead
+// of producing a normal error ToolResult.
+func TestDispatchTypedNilPendingResultBecomesToolErrorNotPanic(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "buggy", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	var nilPending *gantry.PendingResult
+	buggy := &fakeResumable{
+		def:       gantry.ToolDef{Name: "buggy", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: nilPending,
+	}
+	if err := a.With(tool.FromTools(1, buggy)); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.Done && state.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("run suspended (DoneReason=%q) on a typed-nil PendingResult; want it treated as a plain tool error and the run to continue", state.DoneReason)
+	}
+	if state.DoneReason != gantry.DoneNoToolCalls || state.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", state.Done, state.DoneReason, state.FinalOutput)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2 (a second LLM turn must occur)", len(reqs))
+	}
+	var found bool
+	for _, m := range reqs[1].Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if !strings.Contains(m.Content, "tool execution error") {
+				t.Errorf("tool_result content = %q, want it to reflect a normal ErrToolExecution-wrapped error, not a raw/opaque message", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("second LLM request has no tool_result message for c1; messages: %+v (transcript corruption: a tool_use with no matching tool_result)", reqs[1].Messages)
+	}
+}
+
 func TestBareFromToolsSuspendsOnResumableToolWithoutClient(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

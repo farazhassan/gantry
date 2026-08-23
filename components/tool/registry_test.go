@@ -143,3 +143,62 @@ func TestRegistryInvokePassesPendingResultThroughUnwrapped(t *testing.T) {
 		t.Errorf("errors.As did not recover the original *PendingResult; got %#v", got)
 	}
 }
+
+// TestRegistryInvokeTypedNilPendingResultBreaksErrorsAsChain is a stricter
+// companion to TestRegistryInvokeTypedNilPendingResultBecomesToolErrorNotPanic
+// above: it pins down exactly which of the two possible safe outcomes
+// Registry.Invoke produces for a tool that buggily returns a typed-nil
+// *gantry.PendingResult (`var pr *gantry.PendingResult; return out, pr`) —
+// errors.As on the returned error must be false entirely, not merely "true
+// but nil". Wrapping the original err with %w (the pre-fix behavior) would
+// let errors.As keep matching *gantry.PendingResult all the way through, so
+// any downstream errors.As(returnedErr, &pending) call would still recover a
+// nil pending and panic on first field access. Breaking the match here is
+// what makes the defense-in-depth pending != nil guards elsewhere
+// (middleware.go, client.go, run_stream.go) belt-and-suspenders rather than
+// load-bearing.
+func TestRegistryInvokeTypedNilPendingResultBreaksErrorsAsChain(t *testing.T) {
+	r := tool.NewRegistry()
+	var nilPending *gantry.PendingResult
+	r.Add(&fakeResumable{
+		def:       gantry.ToolDef{Name: "buggy_nil", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: nilPending,
+	})
+
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "buggy_nil", Input: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected a non-nil error, got nil")
+	}
+	if !errors.Is(err, gantry.ErrToolExecution) {
+		t.Errorf("err should wrap gantry.ErrToolExecution; got %v", err)
+	}
+
+	var pending *gantry.PendingResult
+	if errors.As(err, &pending) {
+		t.Errorf("errors.As(err, &pending) = true, want false: the returned error must not remain matchable as *gantry.PendingResult (pending=%#v)", pending)
+	}
+}
+
+// TestRegistryInvokePreservesToolSentinelThroughFallback guards the sibling
+// risk introduced while fixing the typed-nil case above: the fallback
+// branch in Registry.Invoke must only special-case the "matched but nil"
+// PendingResult case, not every non-pending error. A tool returning an
+// ordinary sentinel error (e.g. gantry.ErrToolAuth) must still be reachable
+// via errors.Is on the returned error, exactly as before —
+// TestRegistryInvokePreservesToolSentinel already covers this; this is a
+// second, differently-named copy tied directly to this fix so a future edit
+// to the fallback's error-wrapping verb doesn't silently regress it again.
+func TestRegistryInvokePreservesToolSentinelThroughFallback(t *testing.T) {
+	r := tool.NewRegistry()
+	r.Add(authFailingTool{})
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "auth_failing", Input: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, gantry.ErrToolExecution) {
+		t.Errorf("err should wrap ErrToolExecution; got %v", err)
+	}
+	if !errors.Is(err, gantry.ErrToolAuth) {
+		t.Errorf("err should still wrap the tool's own ErrToolAuth via errors.Is; got %v", err)
+	}
+}

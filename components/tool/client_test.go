@@ -688,6 +688,70 @@ func TestSuspendClientCallsRejectsOriginCallIDContainingSeparator(t *testing.T) 
 	}
 }
 
+// TestSuspendClientCallsTypedNilPendingResultPassesThroughNotPanics guards
+// SuspendClientCalls's PhaseObserve loop over s.ToolResults against the same
+// footgun other tests in this file guard elsewhere in the pipeline: a
+// ToolResult whose Err is a non-nil error interface wrapping a nil
+// *gantry.PendingResult pointer still matches errors.As, but dereferencing
+// pending.Resume on it would panic. The ToolResult is constructed directly
+// (via a custom PhaseToolExec middleware standing in for the normal
+// dispatch/registry pipeline) so this test exercises SuspendClientCalls in
+// isolation, regardless of whether an upstream fix (Registry.Invoke,
+// dispatch) already prevents such a value from arising through the normal
+// tool-call path. A typed-nil PendingResult is not a genuine suspend signal,
+// so the result must pass through to the transcript unchanged, and the run
+// must finish normally rather than suspend.
+func TestSuspendClientCallsTypedNilPendingResultPassesThroughNotPanics(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "buggy", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.SuspendClientCalls()); err != nil {
+		t.Fatalf("install SuspendClientCalls: %v", err)
+	}
+
+	var nilPending *gantry.PendingResult
+	var wrapped error = nilPending // non-nil interface wrapping a nil *PendingResult
+	a.Use(gantry.PhaseToolExec, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.ToolResults = append(s.ToolResults, gantry.ToolResult{
+				CallID:  "c1",
+				Content: "unaffected content",
+				Err:     wrapped,
+			})
+			return next(ctx, s)
+		}
+	})
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.Done && state.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("run suspended (DoneReason=%q) on a typed-nil PendingResult; want it passed through as a normal result and the run to continue", state.DoneReason)
+	}
+	if state.DoneReason != gantry.DoneNoToolCalls || state.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", state.Done, state.DoneReason, state.FinalOutput)
+	}
+
+	var found bool
+	for _, m := range state.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if m.Content != "unaffected content" {
+				t.Errorf("tool_result content = %q, want the original ToolResult.Content passed through unchanged", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no tool_result message for c1 in state.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", state.Messages)
+	}
+}
+
 func TestResumableToolSuspendSurfacesOnPendingToolCalls(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
