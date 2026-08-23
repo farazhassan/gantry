@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -57,7 +58,9 @@ func (r *Registry) Definitions() []gantry.ToolDef {
 	return out
 }
 
-// Invoke runs the tool referenced by the call. Errors are wrapped with
+// Invoke runs the tool referenced by the call. A *gantry.PendingResult from
+// the tool's own Invoke is passed through unwrapped (it is a suspend signal,
+// not an execution failure). Any other error is wrapped with
 // gantry.ErrToolExecution.
 func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMessage, error) {
 	t, ok := r.Lookup(call.Name)
@@ -66,6 +69,29 @@ func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMe
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
+		var pending *gantry.PendingResult
+		matched := errors.As(err, &pending)
+		if matched && pending != nil {
+			return out, pending
+		}
+		if matched {
+			// errors.As can match and still leave pending nil: a tool that
+			// mistakenly does `var pr *gantry.PendingResult; return out, pr`
+			// returns a non-nil error interface wrapping a nil pointer.
+			// Treating that as a genuine suspend signal would panic
+			// downstream on pending.Pending. Use %s (not %w) for err here:
+			// wrapping it with %w would let errors.As keep matching
+			// *gantry.PendingResult through this returned error's chain
+			// (Go's errors.As unwraps through %w even when the immediate
+			// value here doesn't match), so any caller doing
+			// errors.As(returnedErr, &pending) would hit the same
+			// nil-pending trap this branch exists to avoid. %s captures
+			// err's message text without carrying it as an unwrappable
+			// target. This case is distinct from the "no match at all"
+			// case below, which must keep %w so ordinary tool sentinels
+			// (e.g. gantry.ErrToolAuth) still propagate via errors.Is.
+			return out, fmt.Errorf("%w: %s", gantry.ErrToolExecution, err.Error())
+		}
 		return out, fmt.Errorf("%w: %w", gantry.ErrToolExecution, err)
 	}
 	return out, nil

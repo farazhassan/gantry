@@ -574,6 +574,51 @@ func TestMapperActivitySnapshotThenDelta(t *testing.T) {
 	}
 }
 
+// TestMapperToolPendingTranslatesToToolCall is the regression test for the
+// gap flagged in GitHub PR #80 review comment 3839773517: SuspendClientCalls
+// (components/tool/client.go) emits gantry.EventToolPending for a newly
+// surfaced nested pending leaf, but Mapper's switch had no case for it, so
+// the composite leaf ID/name/input a client needs in order to answer a
+// nested suspend never reached the AG-UI wire at all. EventToolPending
+// carries the same ToolCall shape as EventToolCall, so it must translate to
+// the same TOOL_CALL_START/ARGS/END triple.
+func TestMapperToolPendingTranslatesToToolCall(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+	tc := &gantry.ToolCall{ID: "origin\x1fleaf", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolPending, ToolCall: tc, RunID: "run-1"})
+	want := []Event{
+		newToolCallStart("origin\x1fleaf", "ask_user").withIdentity(id),
+		newToolCallArgs("origin\x1fleaf", `{"q":"proceed?"}`).withIdentity(id),
+		newToolCallEnd("origin\x1fleaf").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperToolPendingClosesOpenText mirrors TestMapperToolCallClosesOpenText:
+// EventToolPending represents gantry surfacing a new call to answer, exactly
+// like EventToolCall, so it must close an in-progress text message the same
+// way.
+func TestMapperToolPendingClosesOpenText(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	id := identity{RunID: "run-1"}
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"}) // RunStarted + start + content
+	tc := &gantry.ToolCall{ID: "origin\x1fleaf", Name: "ask_user", Input: json.RawMessage(`{}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolPending, ToolCall: tc, RunID: "run-1"})
+	want := []Event{
+		newTextMessageEnd("run-1:msg:1").withIdentity(id),
+		newToolCallStart("origin\x1fleaf", "ask_user").withIdentity(id),
+		newToolCallArgs("origin\x1fleaf", `{}`).withIdentity(id),
+		newToolCallEnd("origin\x1fleaf").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperActivityDoesNotCloseOpenText(t *testing.T) {
 	// Activity is metadata-like (same precedent as usage/events_dropped
 	// CUSTOM events): it must not force-close an in-progress text message.

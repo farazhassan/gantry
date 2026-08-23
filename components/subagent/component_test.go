@@ -146,6 +146,40 @@ func TestNestedDelegatesFoldOnceAtEachLevel(t *testing.T) {
 	}
 }
 
+func TestComponentWithRegistryReturnsUsableRegistry(t *testing.T) {
+	child := newChildAgent(t, gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	delegate := New("specialist", "d", child)
+
+	comp, reg := ComponentWithRegistry(1, delegate)
+	if reg == nil {
+		t.Fatal("ComponentWithRegistry returned a nil *tool.Registry")
+	}
+	got, ok := reg.Lookup("specialist")
+	if !ok || got.Definition().Name != "specialist" {
+		t.Errorf("reg.Lookup(specialist) = (%#v, %v), want the delegate tool", got, ok)
+	}
+
+	// The returned Component must still install and dispatch exactly like
+	// Component — this is not a second, disconnected registry.
+	parentLLM := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{"goal":"g"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	parent, err := gantry.NewAgent(gantry.WithLLM(parentLLM), gantry.WithComponents(comp))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if _, err := parent.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(parentLLM.Requests()) != 2 {
+		t.Fatalf("requests = %d, want 2 (dispatch ran normally)", len(parentLLM.Requests()))
+	}
+}
+
 func TestComponentInstallTwiceErrors(t *testing.T) {
 	child := newChildAgent(t)
 	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient()))

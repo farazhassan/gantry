@@ -257,14 +257,18 @@ func TestHandlerRejectsToolsWithoutClientSupport(t *testing.T) {
 }
 
 // TestHandlerRejectsToolsWithOnlyStaticClientSupport is a regression test for
-// a real gap: tool.Client and tool.DynamicClient both install the same
-// PhaseObserve suspend middleware, but only DynamicClient's PhaseStart
-// middleware reads the per-run pending-defs Meta key that request-declared
-// tools are stashed under (via tool.SetPendingClientTools). An agent with
-// only tool.Client installed would previously pass the safety-net check
-// (since some client-tool suspend support existed) and return 200, while the
+// a real gap: tool.Client and tool.DynamicClient both ensure the same
+// PhaseObserve suspend middleware (SuspendClientCalls) ends up installed —
+// so tool.SuspendClientCallsInstalled reports true for either — but only
+// DynamicClient's PhaseStart middleware reads the per-run pending-defs Meta
+// key that request-declared tools are stashed under (via
+// tool.SetPendingClientTools). An agent with only tool.Client installed
+// would previously pass a safety-net check based on
+// SuspendClientCallsInstalled alone and return 200, while the
 // request-declared tool was silently never advertised to the LLM — exactly
-// the "unexplained gap" failure mode the safety net exists to catch.
+// the "unexplained gap" failure mode the safety net exists to catch. That's
+// why the handler below checks tool.DynamicClientInstalled specifically
+// instead.
 func TestHandlerRejectsToolsWithOnlyStaticClientSupport(t *testing.T) {
 	a := newTestAgent(t, gantry.LLMResponse{Content: "x", StopReason: gantry.StopReasonEnd})
 	if err := a.With(tool.Client(ask.Definition())); err != nil {

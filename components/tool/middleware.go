@@ -27,7 +27,11 @@ type registryComponent struct {
 // to state.Tools) and PhaseToolExec "components/tool:dispatch" (dispatches pending
 // tool calls against reg with up to parallelism concurrent invocations;
 // parallelism <= 0 means full parallelism). Installing tool dispatch twice on the
-// same agent returns an error. Equivalent to
+// same agent returns an error. It also ensures SuspendClientCalls (a
+// PhaseObserve middleware) is installed if not already present, so a
+// ResumableTool's suspend works even on an agent with no tool.Client/
+// DynamicClient — see SuspendClientCallsInstalled to check this ahead of
+// time, and SuspendClientCalls for what it does. Equivalent to
 // NewWithPolicy(reg, Policy{Parallelism: parallelism}).
 func New(reg *Registry, parallelism int) gantry.Component {
 	return NewWithPolicy(reg, Policy{Parallelism: parallelism})
@@ -42,8 +46,9 @@ func NewWithPolicy(reg *Registry, policy Policy) gantry.Component {
 // FromTools returns a Component that builds a Registry from the given tools and
 // wires it in with parallel dispatch up to parallelism simultaneous calls. It is
 // sugar over New for callers that do not need to retain the Registry. For a single
-// tool with sequential dispatch, use FromTools(1, t). Equivalent to
-// FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...).
+// tool with sequential dispatch, use FromTools(1, t). Like New, it also ensures
+// SuspendClientCalls is installed if not already present (see New's doc comment).
+// Equivalent to FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...).
 func FromTools(parallelism int, tools ...Tool) gantry.Component {
 	return FromToolsWithPolicy(Policy{Parallelism: parallelism}, tools...)
 }
@@ -72,6 +77,17 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 		}
 	}); err != nil {
 		return err
+	}
+
+	// A ResumableTool's suspend needs SuspendClientCalls installed even when
+	// no tool.Client/DynamicClient is present on this agent (subagent's
+	// delegate tool is the motivating case). Check first so this composes
+	// cleanly regardless of install order and leaves Client/DynamicClient's
+	// own double-install error guards untouched.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
 	}
 
 	return a.UseNamed(gantry.PhaseToolExec, dispatchName, func(next gantry.Handler) gantry.Handler {
@@ -176,6 +192,48 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					}
 					out, err := c.reg.Invoke(WithCallID(ctx, call.ID), call)
 					if err != nil {
+						var pending *gantry.PendingResult
+						// errors.As can match and still leave pending nil: a
+						// tool that mistakenly does
+						// `var pr *gantry.PendingResult; return out, pr`
+						// returns a non-nil error interface wrapping a nil
+						// pointer. Treating that as a genuine suspend signal
+						// would panic below on pending.Pending, so route that
+						// case to the plain error-wrapping tail below (using
+						// the original err) instead.
+						if errors.As(err, &pending) && pending != nil {
+							if len(pending.Pending) > 0 {
+								// A pending call is not a failure: it must not
+								// trigger OnFailure/Disposition policy (abort,
+								// cancel siblings, HarnessStop). Err is preserved so
+								// the unified suspend middleware (SuspendClientCalls,
+								// Task 5) can recognize and route it; that
+								// middleware removes it from ToolResults before
+								// DefaultObserveHandler ever sees it, so
+								// IsError/Content here are never folded into the
+								// transcript.
+								//
+								// Deliberately no emitLive here: this call
+								// hasn't actually resolved (it's still
+								// pending, waiting on SuspendClientCalls to
+								// route it), so a "this call is done" live
+								// event — with an empty, non-error payload,
+								// no less — would be exactly as misleading to
+								// a streaming consumer as the batched
+								// EventToolResult that run_stream.go's
+								// emitPhaseEffects separately suppresses for
+								// this same entry.
+								results[i] = gantry.ToolResult{CallID: call.ID, Err: pending}
+								return nil
+							}
+							// Pending is empty: "suspend with nothing to wait
+							// for" is a contradiction (see
+							// gantry.PendingResult's doc comment) — treat this
+							// as a plain tool error instead of a suspend
+							// signal, falling through to the normal
+							// error-handling below.
+							err = pendingResultContractErr(call.Name)
+						}
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,
 							Content: err.Error(),

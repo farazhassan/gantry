@@ -45,7 +45,13 @@ const (
 	EventReasoningDelta EventType = "reasoning_delta"
 	EventRaw            EventType = "raw"
 	EventToolCall       EventType = "tool_call"
-	EventToolResult     EventType = "tool_result"
+	// EventToolResult is emitted for each entry in a PhaseToolExec batch once
+	// the batch completes, with one exception: an entry whose ToolResult.Err
+	// is a *PendingResult has not actually finished (it is still awaiting
+	// PhaseObserve's suspend handling — see components/tool) and is skipped,
+	// so a streaming consumer never sees a false "done" result for a call
+	// that is really still pending.
+	EventToolResult EventType = "tool_result"
 	// EventToolResultLive fires the instant a single tool call resolves
 	// (success, failure, or a policy-driven skip — see components/tool.Policy),
 	// carrying the same ToolResult payload shape as EventToolResult. Unlike
@@ -57,7 +63,27 @@ const (
 	// middleware, not the core run loop; see components/tool/middleware.go.
 	// Sink errors returned for this event are discarded (best-effort,
 	// observational only) rather than aborting the run — see EventSink.
-	EventToolResultLive  EventType = "tool_result_live"
+	EventToolResultLive EventType = "tool_result_live"
+	// EventToolPending is emitted for each newly-surfaced nested pending
+	// call the instant a ResumableTool's (or a components/subagent
+	// delegate's) suspend adds new leaf entries to state.PendingToolCalls.
+	// PhasePostLLM's EventToolCall emission (see Agent.emitPhaseEffects)
+	// only covers calls the LLM itself just dispatched; a leaf surfaced by
+	// components/tool's SuspendClientCalls middleware — built from a
+	// ToolResult's *PendingResult during PhaseObserve, after PhasePostLLM's
+	// emission already ran — never gets one of those. ToolCall carries the
+	// composite ID (origin+leaf, opaque — see components/tool.Resume's doc
+	// comment), the real tool Name, and Input exactly as the underlying
+	// pending call declared them: enough for a streaming consumer to
+	// construct and send back an answer without inspecting the run's
+	// returned *State. A declared client-tool call (tool.Client/
+	// DynamicClient) already got its own EventToolCall from PhasePostLLM
+	// and is not duplicated here. Emitted directly by SuspendClientCalls
+	// (PhaseObserve), not the core run loop — like EventToolResultLive, it
+	// is not subject to Event's "after phase_end" ordering note below, which
+	// describes only the core loop's own EventToolCall/EventToolResult
+	// emission.
+	EventToolPending     EventType = "tool_pending"
 	EventPlanStepChanged EventType = "plan_step_changed"
 	EventDone            EventType = "done"
 )

@@ -73,7 +73,9 @@ func (a *Agent) ResumeStream(ctx context.Context, prior *State, sink EventSink) 
 // emitPhaseEffects emits the State-derived events produced by a phase: tool
 // calls become visible after PhasePostLLM (state.PendingToolCalls), and tool
 // results after PhaseToolExec (state.ToolResults, before PhaseObserve clears
-// them). It is a no-op when no sink is active.
+// them). It is a no-op when no sink is active. One exception: an entry whose
+// Err is a *PendingResult is not yet a finished result — see the PhaseToolExec
+// case below — so it is skipped rather than reported as an EventToolResult.
 func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) error {
 	if _, ok := SinkFrom(ctx); !ok {
 		return nil
@@ -89,6 +91,28 @@ func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) er
 	case PhaseToolExec:
 		for i := range state.ToolResults {
 			tr := state.ToolResults[i]
+			// A *PendingResult in Err means this call has not actually
+			// finished — it's still waiting on PhaseObserve's
+			// SuspendClientCalls middleware to strip it out of
+			// state.ToolResults and turn it into a proper suspended pending
+			// call (see components/tool's unified suspend handling).
+			// Reporting it here as an EventToolResult — even one with an
+			// empty, non-error Content — would tell a streaming consumer
+			// this call is done when it isn't. Skip it; SuspendClientCalls
+			// (components/tool/client.go) emits EventToolPending for each
+			// newly-surfaced leaf once its composite ID is known, during the
+			// PhaseObserve that follows this one.
+			var pending *PendingResult
+			// errors.As can match and still leave pending nil: a tool that
+			// mistakenly does `var pr *PendingResult; return out, pr`
+			// returns a non-nil error interface wrapping a nil pointer. That
+			// is not a genuine suspend signal — it's a completed (if
+			// malformed) error result — so without this check it would be
+			// wrongly skipped here, hiding the EventToolResult a streaming
+			// consumer needs to see.
+			if errors.As(tr.Err, &pending) && pending != nil {
+				continue
+			}
 			if err := emit(ctx, Event{Type: EventToolResult, Iteration: state.Iteration, ToolResult: &tr}); err != nil {
 				return err
 			}

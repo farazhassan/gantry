@@ -2,7 +2,10 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/farazhassan/gantry"
 )
@@ -27,6 +30,18 @@ const (
 	// RunFromStream/Resume/ResumeStream call), so state.Tools itself cannot
 	// be used to pass defs into a run — only state.Meta survives that reset.
 	pendingClientDefsMetaKey = "components/tool:pending_client_defs"
+
+	// dynamicClientDefsMetaKey durably records the dynamic client tool defs
+	// most recently advertised on a *State by DynamicClient's PhaseStart
+	// middleware. Unlike pendingClientDefsMetaKey (consumed and deleted the
+	// instant PhaseStart reads it — see that key's doc comment), this key is
+	// never deleted, so it survives both a same-process Resume and a JSON
+	// round-trip of state.Meta (e.g. a suspended child *gantry.State
+	// marshaled as subagent's delegateTool continuation payload). It is the
+	// durable record CarryDynamicClientTools reads back to reinstall the
+	// defs for a caller with no other way to resupply them — see that
+	// function's doc comment.
+	dynamicClientDefsMetaKey = "components/tool:dynamic_client_last_defs"
 )
 
 // validateClientDefNames checks defs for the constraints every client-tool
@@ -56,8 +71,7 @@ type clientComponent struct{ defs []gantry.ToolDef }
 // the run suspends at the observe boundary with state.DoneReason ==
 // gantry.DoneClientToolCall and the call(s) left in state.PendingToolCalls.
 // Installing client tools twice on the same agent, an empty tool name, a
-// duplicate name, or installing alongside DynamicClient (both install the
-// same suspend middleware — see SuspendClientCalls) returns an error.
+// duplicate name, or installing alongside DynamicClient returns an error.
 //
 // Use DynamicClient instead when the tool set varies per caller/session
 // (e.g. an AG-UI handler wrapping CopilotKit frontend actions) rather
@@ -71,10 +85,22 @@ func (c *clientComponent) Install(a *gantry.Agent) error {
 	if err != nil {
 		return err
 	}
+	if DynamicClientInstalled(a) {
+		return errors.New("tool: Client cannot be installed alongside DynamicClient")
+	}
 	defsCopy := append([]gantry.ToolDef(nil), c.defs...)
 
-	if err := SuspendClientCalls().Install(a); err != nil {
-		return err
+	// SuspendClientCalls is also auto-installed by registryComponent
+	// (tool.New/FromTools) when a bare agent needs suspend detection for a
+	// ResumableTool with no Client/DynamicClient present — check first so
+	// installing Client after that composes instead of colliding on the
+	// shared middleware name. Mutual exclusion with DynamicClient is
+	// enforced explicitly above, not by this collision, since both of those
+	// would otherwise also be safely order-tolerant here.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
 	}
 
 	// PhaseStart: advertise the fixed defs to the LLM and mark their names as
@@ -124,21 +150,81 @@ func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) error {
 	return nil
 }
 
+// CarryDynamicClientTools reinstalls the dynamic client tool defs most
+// recently advertised on s by DynamicClient's PhaseStart middleware, staging
+// them as pending for the very next Run/RunFrom/RunStream/RunFromStream/
+// Resume/ResumeStream call on s — exactly as if the original caller had
+// called SetPendingClientTools again with the same defs.
+//
+// SetPendingClientTools's contract is "the very next call on s, and no
+// further" (see its doc comment): by design nothing reinstates it
+// automatically, so a direct caller driving Run/Resume itself (e.g. an
+// AG-UI handler decoding tool defs from each request) must resupply them on
+// every call, and a stale set must not silently linger — see
+// TestDynamicClientDoesNotReadvertiseOnLaterResumeWithoutResetting.
+// CarryDynamicClientTools exists for a different kind of caller: one that is
+// NOT the original request-decoding caller and has no way to resupply the
+// defs itself — chiefly subagent's delegateTool.Resume, continuing a
+// suspended child *gantry.State it only has as an opaque, marshaled
+// continuation payload, with no independent knowledge of what dynamic defs
+// the child's own construction advertised on its first run. Call this on
+// such a state before driving it further (e.g. before tool.Resume) so a
+// second dynamic client tool call gets recognized and marked client-side
+// exactly as the first one was, instead of falling through as an ordinary,
+// unregistered tool call.
+//
+// A no-op, leaving s unchanged, when DynamicClient never advertised any defs
+// on s — nothing to carry forward.
+func CarryDynamicClientTools(s *gantry.State) error {
+	if s.Meta == nil {
+		return nil
+	}
+	raw, ok := s.Meta[dynamicClientDefsMetaKey]
+	if !ok {
+		return nil
+	}
+	// raw may be the original []gantry.ToolDef (same-process) or a generic
+	// []interface{} of map[string]interface{} (has been through a JSON
+	// round-trip — e.g. delegateTool.asResult/Resume's marshal/unmarshal of
+	// the whole child *gantry.State). Re-marshal then re-unmarshal works
+	// uniformly for either, mirroring pendingEntriesFrom's own handling of
+	// this same round-trip shape (see its doc comment in pending.go).
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("tool: CarryDynamicClientTools: %w", err)
+	}
+	var defs []gantry.ToolDef
+	if err := json.Unmarshal(b, &defs); err != nil {
+		return fmt.Errorf("tool: CarryDynamicClientTools: decoding stored defs: %w", err)
+	}
+	if len(defs) == 0 {
+		return nil
+	}
+	return SetPendingClientTools(s, defs...)
+}
+
 type dynamicClientComponent struct{}
 
 // DynamicClient returns a Component that advertises and suspends on per-run
 // client tool defs set via SetPendingClientTools, instead of a fixed list
 // installed once. Install this at agent construction when the tool set is
 // only known per-request. Installing it twice, or alongside Client, on the
-// same agent returns an error (both install the same PhaseObserve suspend
-// middleware — see SuspendClientCalls).
+// same agent returns an error.
 func DynamicClient() gantry.Component {
 	return &dynamicClientComponent{}
 }
 
 func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
-	if err := SuspendClientCalls().Install(a); err != nil {
-		return err
+	if clientInstalled(a) {
+		return errors.New("tool: DynamicClient cannot be installed alongside Client")
+	}
+	// See the matching comment in clientComponent.Install: check first so
+	// this composes with registryComponent's own auto-install instead of
+	// colliding on the shared middleware name.
+	if !SuspendClientCallsInstalled(a) {
+		if err := SuspendClientCalls().Install(a); err != nil {
+			return err
+		}
 	}
 	return a.UseNamed(gantry.PhaseStart, dynamicClientAdvertiseName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
@@ -154,6 +240,13 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 				for _, d := range defs {
 					names[d.Name] = true
 				}
+				// Durably remember this set (see dynamicClientDefsMetaKey's
+				// doc comment) — separately from the pending key just
+				// deleted above, and never cleared here: a run with no fresh
+				// SetPendingClientTools call leaves the last-known set
+				// available for CarryDynamicClientTools to reinstall, without
+				// affecting this run's own (correctly empty) advertisement.
+				s.Meta[dynamicClientDefsMetaKey] = defs
 			}
 			// Unlike Client's fixed name set (safe to merge every call via
 			// markClientNames, since it's the same names every time),
@@ -172,10 +265,15 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 
 // SuspendClientCalls installs the PhaseObserve middleware that suspends a
 // run when any pending tool call's name was marked client-side this run (by
-// Client's or DynamicClient's PhaseStart middleware). Client and
-// DynamicClient both install this internally — most callers want one of
-// those, not this directly. Installing it twice on the same agent returns
-// an error.
+// Client's or DynamicClient's PhaseStart middleware), and — regardless of
+// whether Client/DynamicClient are installed — folds any *gantry.PendingResult
+// surfaced by a ResumableTool's Invoke/Resume into new composite-ID leaf
+// entries on state.PendingToolCalls. When a sink is active (RunStream), each
+// such newly-surfaced leaf gets its own gantry.EventToolPending event, since
+// it has no other way to reach a streaming consumer (see EventToolPending's
+// doc comment). Client and DynamicClient both install this internally — most
+// callers want one of those, not this directly. Installing it twice on the
+// same agent returns an error.
 func SuspendClientCalls() gantry.Component {
 	return suspendComponent{}
 }
@@ -187,18 +285,159 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)
 			var clientCalls []gantry.ToolCall
+			// badClientResults collects a synthetic error ToolResult for each
+			// declared client-tool call whose own ID already contains
+			// pendingIDSep. A declared client-tool call is never invoked
+			// server-side (that's the point of it), so it produces no
+			// ToolResult of its own to fold an error into the way the
+			// r.CallID check below does for a ResumableTool's origin — this
+			// call ID is this level's own freshly-dispatched LLM tool_call
+			// ID, never itself composite, so (like r.CallID, and unlike a
+			// Pending[i].ID) it is safe to reject centrally here: nothing
+			// about legitimate nesting ever produces one containing the
+			// separator. See pendingIDSepContractErr's doc comment for why
+			// the same reasoning does not extend to Pending[i].ID.
+			var badClientResults []gantry.ToolResult
 			for _, cl := range s.PendingToolCalls {
-				if set[cl.Name] {
-					clientCalls = append(clientCalls, cl)
+				if !set[cl.Name] {
+					continue
 				}
+				if strings.Contains(cl.ID, pendingIDSep) {
+					err := pendingIDSepClientCallErr(cl.Name, cl.ID)
+					badClientResults = append(badClientResults, gantry.ToolResult{
+						CallID:  cl.ID,
+						Content: err.Error(),
+						IsError: true,
+						Err:     err,
+					})
+					continue
+				}
+				clientCalls = append(clientCalls, cl)
 			}
+
+			// Pull out any tool-pending results (a *gantry.PendingResult
+			// surfaced via ToolResult.Err — see components/tool's dispatch)
+			// before next folds ToolResults into the transcript, so a
+			// pending call is never mistaken for a finished one.
+			entries := map[string]pendingEntry{}
+			var toolPending []gantry.ToolCall
+			kept := s.ToolResults[:0]
+			for _, r := range s.ToolResults {
+				var pending *gantry.PendingResult
+				// errors.As can match and still leave pending nil: a tool that
+				// mistakenly does
+				// `var pr *gantry.PendingResult; return out, pr` returns a
+				// non-nil error interface wrapping a nil pointer.
+				// Treating that as a genuine suspend signal would panic
+				// below on pending.Resume — pending != nil routes it to
+				// the fallthrough below instead, which passes r through
+				// unchanged as a normal, already-resolved ToolResult.
+				if errors.As(r.Err, &pending) && pending != nil {
+					toolName := toolNameFor(s.PendingToolCalls, r.CallID)
+
+					// r.CallID already containing pendingIDSep would corrupt
+					// the composite ID (origin + pendingIDSep + leaf) built
+					// below: splitPendingID only ever splits at the FIRST
+					// separator, so the entries map (keyed by the real,
+					// full r.CallID) would become unreachable from the
+					// surfaced composite ID, whose recovered "origin" is
+					// only the prefix up to that first separator — a
+					// genuine mismatch, not a false positive. r.CallID is
+					// always this level's own freshly-dispatched LLM
+					// tool_call ID (never itself composite — composite IDs
+					// are only ever introduced by this very construction),
+					// so this check cannot fire on legitimate nesting.
+					//
+					// A Pending[i].ID containing pendingIDSep, by contrast,
+					// is deliberately NOT checked here: multi-level nesting
+					// (an agent-as-tool delegate whose own child already
+					// suspended) legitimately passes an already-composite
+					// child ID straight through as Pending[i].ID — see
+					// splitPendingID's doc comment ("leaf ... may itself
+					// still be composite, for more than one level of
+					// nesting") and subagent's delegateTool.asResult, which
+					// does exactly that. Each level only ever splits once,
+					// forwarding its own residual leaf opaquely to the next
+					// level down, so an embedded separator there causes no
+					// misparse; rejecting it would break that design.
+					if strings.Contains(r.CallID, pendingIDSep) {
+						err := pendingIDSepContractErr(toolName, r.CallID)
+						kept = append(kept, gantry.ToolResult{
+							CallID:  r.CallID,
+							Content: err.Error(),
+							IsError: true,
+							Err:     err,
+						})
+						continue
+					}
+
+					// Two Pending leaves sharing the same ID would produce
+					// identical composite IDs — see duplicatePendingLeafErr's
+					// doc comment. Reject the whole origin the same way a
+					// separator-containing ID is rejected above, rather than
+					// construct a corrupted, indistinguishable pair.
+					if dup := duplicatePendingLeafID(pending.Pending); dup != "" {
+						err := duplicatePendingLeafErr(toolName, dup)
+						kept = append(kept, gantry.ToolResult{
+							CallID:  r.CallID,
+							Content: err.Error(),
+							IsError: true,
+							Err:     err,
+						})
+						continue
+					}
+
+					entries[r.CallID] = pendingEntry{
+						ToolName: toolName,
+						Resume:   pending.Resume,
+					}
+					for _, p := range pending.Pending {
+						toolPending = append(toolPending, gantry.ToolCall{
+							ID:    r.CallID + pendingIDSep + p.ID,
+							Name:  p.Name,
+							Input: p.Input,
+						})
+					}
+					continue
+				}
+				kept = append(kept, r)
+			}
+			s.ToolResults = append(kept, badClientResults...)
+
 			if err := next(ctx, s); err != nil {
 				return err
 			}
-			if len(clientCalls) > 0 {
-				s.PendingToolCalls = append(s.PendingToolCalls[:0], clientCalls...)
+
+			if len(clientCalls) > 0 || len(toolPending) > 0 {
+				s.PendingToolCalls = append(append(s.PendingToolCalls[:0], clientCalls...), toolPending...)
 				s.Done = true
 				s.DoneReason = gantry.DoneClientToolCall
+			}
+
+			// setPendingEntries must run before the EventToolPending emit
+			// loop below, not after: a sink error mid-loop returns early, and
+			// a state left with PendingToolCalls/Done/DoneReason already set
+			// but no continuation metadata stashed would make every pending
+			// call permanently unresolvable — tool.Resume's own commit
+			// contract (see resume.go) requires state.Meta to reflect
+			// whatever PendingToolCalls already promises, on every exit path.
+			setPendingEntries(s, entries)
+
+			// clientCalls already got an EventToolCall from PhasePostLLM's
+			// own emission (they were already in s.PendingToolCalls at that
+			// point); toolPending's composite IDs are only known now, so it
+			// is the only one of the two that needs its own event — see
+			// EventToolPending's doc comment for why PhasePostLLM's emission
+			// can't cover it.
+			for i := range toolPending {
+				tc := toolPending[i]
+				if err := gantry.Emit(ctx, gantry.Event{
+					Type:      gantry.EventToolPending,
+					Iteration: s.Iteration,
+					ToolCall:  &tc,
+				}); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -232,6 +471,22 @@ func SuspendClientCallsInstalled(a *gantry.Agent) bool {
 func DynamicClientInstalled(a *gantry.Agent) bool {
 	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
 		if name == dynamicClientAdvertiseName {
+			return true
+		}
+	}
+	return false
+}
+
+// clientInstalled reports whether Client specifically (not DynamicClient) is
+// installed on a. Mirrors DynamicClientInstalled's shape, checking for
+// advertiseClientName instead. Unexported: it exists only to give
+// dynamicClientComponent.Install an explicit Client-vs-DynamicClient mutual
+// exclusion check that's independent of the SuspendClientCalls
+// already-registered collision (see the comments in both Install methods),
+// so there's no need to expose it publicly the way DynamicClientInstalled is.
+func clientInstalled(a *gantry.Agent) bool {
+	for _, name := range a.MiddlewareNames(gantry.PhaseStart) {
+		if name == advertiseClientName {
 			return true
 		}
 	}
