@@ -396,25 +396,33 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 				s.PendingToolCalls = append(append(s.PendingToolCalls[:0], clientCalls...), toolPending...)
 				s.Done = true
 				s.DoneReason = gantry.DoneClientToolCall
+			}
 
-				// clientCalls already got an EventToolCall from
-				// PhasePostLLM's own emission (they were already in
-				// s.PendingToolCalls at that point); toolPending's composite
-				// IDs are only known now, so it is the only one of the two
-				// that needs its own event — see EventToolPending's doc
-				// comment for why PhasePostLLM's emission can't cover it.
-				for i := range toolPending {
-					tc := toolPending[i]
-					if err := gantry.Emit(ctx, gantry.Event{
-						Type:      gantry.EventToolPending,
-						Iteration: s.Iteration,
-						ToolCall:  &tc,
-					}); err != nil {
-						return err
-					}
+			// setPendingEntries must run before the EventToolPending emit
+			// loop below, not after: a sink error mid-loop returns early, and
+			// a state left with PendingToolCalls/Done/DoneReason already set
+			// but no continuation metadata stashed would make every pending
+			// call permanently unresolvable — tool.Resume's own commit
+			// contract (see resume.go) requires state.Meta to reflect
+			// whatever PendingToolCalls already promises, on every exit path.
+			setPendingEntries(s, entries)
+
+			// clientCalls already got an EventToolCall from PhasePostLLM's
+			// own emission (they were already in s.PendingToolCalls at that
+			// point); toolPending's composite IDs are only known now, so it
+			// is the only one of the two that needs its own event — see
+			// EventToolPending's doc comment for why PhasePostLLM's emission
+			// can't cover it.
+			for i := range toolPending {
+				tc := toolPending[i]
+				if err := gantry.Emit(ctx, gantry.Event{
+					Type:      gantry.EventToolPending,
+					Iteration: s.Iteration,
+					ToolCall:  &tc,
+				}); err != nil {
+					return err
 				}
 			}
-			setPendingEntries(s, entries)
 			return nil
 		}
 	})

@@ -965,3 +965,108 @@ func TestSuspendClientCallsEmitsToolPendingEventForNestedSuspend(t *testing.T) {
 		t.Fatalf("Done=%q out=%q, want a normal finish", final.DoneReason, final.FinalOutput)
 	}
 }
+
+// TestSuspendClientCallsEmitsToolPendingEventForEachOfMultipleSimultaneousSuspends
+// covers two ResumableTools suspending in the same turn — the scenario where
+// SuspendClientCalls' EventToolPending emit loop runs more than once. It
+// exists to guard the ordering fix in SuspendClientCalls' PhaseObserve
+// middleware: setPendingEntries(s, entries) must commit ALL entries
+// (including the second origin's) before the emit loop runs, not after —
+// otherwise a hypothetical sink error on the first event would return early
+// and leave the second origin's continuation metadata never stashed, even
+// though its call already appears suspended in state.PendingToolCalls. Both
+// leaves resolving successfully via tool.Resume, using only the composite
+// IDs captured off their respective events, proves that ordering holds.
+func TestSuspendClientCallsEmitsToolPendingEventForEachOfMultipleSimultaneousSuspends(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "c1", Name: "specialist_a", Input: json.RawMessage(`{}`)},
+				{ID: "c2", Name: "specialist_b", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "used both specialists' answers", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialistA := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist_a", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "askA", Name: "ask_user", Input: json.RawMessage(`{"q":"a?"}`)}},
+			Resume:  json.RawMessage(`{"step":"a"}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return json.RawMessage(`{"output":"a finished"}`), nil
+		},
+	}
+	specialistB := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist_b", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "askB", Name: "ask_user", Input: json.RawMessage(`{"q":"b?"}`)}},
+			Resume:  json.RawMessage(`{"step":"b"}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return json.RawMessage(`{"output":"b finished"}`), nil
+		},
+	}
+	reg.Add(specialistA)
+	reg.Add(specialistB)
+	if err := a.With(tool.New(reg, 2)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	var events []gantry.Event
+	suspended, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if !suspended.Done || suspended.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend", suspended.Done, suspended.DoneReason)
+	}
+	if len(suspended.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls = %#v, want 2", suspended.PendingToolCalls)
+	}
+
+	var pendingEvents []gantry.Event
+	for _, ev := range events {
+		if ev.Type == gantry.EventToolPending {
+			pendingEvents = append(pendingEvents, ev)
+		}
+	}
+	if len(pendingEvents) != 2 {
+		t.Fatalf("EventToolPending count = %d, want exactly 2 (one per simultaneous suspend); events: %#v", len(pendingEvents), events)
+	}
+
+	var answers []gantry.ToolResult
+	for _, ev := range pendingEvents {
+		tc := ev.ToolCall
+		if tc == nil {
+			t.Fatalf("EventToolPending has nil ToolCall")
+		}
+		var content string
+		switch string(tc.Input) {
+		case `{"q":"a?"}`:
+			content = "answer A"
+		case `{"q":"b?"}`:
+			content = "answer B"
+		default:
+			t.Fatalf("EventToolPending ToolCall.Input = %q, want a? or b?", tc.Input)
+		}
+		answers = append(answers, gantry.ToolResult{CallID: tc.ID, Content: content})
+	}
+
+	// Both leaves' continuation metadata must be resolvable purely from the
+	// composite IDs the events surfaced — proving setPendingEntries committed
+	// every origin before either event was emitted, not just the first.
+	final, err := tool.Resume(context.Background(), a, reg, suspended, answers)
+	if err != nil {
+		t.Fatalf("Resume using event-derived composite IDs for both leaves: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "used both specialists' answers" {
+		t.Fatalf("Done=%q out=%q, want a normal finish", final.DoneReason, final.FinalOutput)
+	}
+}
