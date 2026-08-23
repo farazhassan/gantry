@@ -57,9 +57,9 @@ func NewMapper(threadID, runID string) *Mapper {
 // kind's still-open message (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
 // REASONING_END) before opening their own — text and reasoning are mutually
 // exclusive per run, so a client never sees interleaved content within a
-// single message — and EventToolCall/EventToolResult/EventPhaseStart/
-// EventPhaseEnd/EventDone close both, since those events represent gantry
-// moving past whatever the model was saying/thinking.
+// single message — and EventToolCall/EventToolPending/EventToolResult/
+// EventPhaseStart/EventPhaseEnd/EventDone close both, since those events
+// represent gantry moving past whatever the model was saying/thinking.
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
@@ -118,6 +118,23 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		}
 
 	case gantry.EventToolCall:
+		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
+		if tc := ev.ToolCall; tc != nil {
+			out = append(out,
+				newToolCallStart(tc.ID, tc.Name).withIdentity(id),
+				newToolCallArgs(tc.ID, string(tc.Input)).withIdentity(id),
+				newToolCallEnd(tc.ID).withIdentity(id),
+			)
+		}
+
+	case gantry.EventToolPending:
+		// A newly-surfaced nested pending leaf (see EventToolPending's doc
+		// comment) carries the same ToolCall shape as — and, from a client's
+		// perspective, needs answering exactly like — an EventToolCall the
+		// LLM itself just dispatched, so it translates to the same
+		// TOOL_CALL_START/ARGS/END triple and closes text/reasoning the same
+		// way.
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if tc := ev.ToolCall; tc != nil {
