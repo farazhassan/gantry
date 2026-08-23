@@ -45,7 +45,13 @@ const (
 	EventReasoningDelta EventType = "reasoning_delta"
 	EventRaw            EventType = "raw"
 	EventToolCall       EventType = "tool_call"
-	EventToolResult     EventType = "tool_result"
+	// EventToolResult is emitted for each entry in a PhaseToolExec batch once
+	// the batch completes, with one exception: an entry whose ToolResult.Err
+	// is a *PendingResult has not actually finished (it is still awaiting
+	// PhaseObserve's suspend handling — see components/tool) and is skipped,
+	// so a streaming consumer never sees a false "done" result for a call
+	// that is really still pending.
+	EventToolResult EventType = "tool_result"
 	// EventToolResultLive fires the instant a single tool call resolves
 	// (success, failure, or a policy-driven skip — see components/tool.Policy),
 	// carrying the same ToolResult payload shape as EventToolResult. Unlike

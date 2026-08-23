@@ -204,8 +204,18 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 								// DefaultObserveHandler ever sees it, so
 								// IsError/Content here are never folded into the
 								// transcript.
+								//
+								// Deliberately no emitLive here: this call
+								// hasn't actually resolved (it's still
+								// pending, waiting on SuspendClientCalls to
+								// route it), so a "this call is done" live
+								// event — with an empty, non-error payload,
+								// no less — would be exactly as misleading to
+								// a streaming consumer as the batched
+								// EventToolResult that run_stream.go's
+								// emitPhaseEffects separately suppresses for
+								// this same entry.
 								results[i] = gantry.ToolResult{CallID: call.ID, Err: pending}
-								emitLive(ctx, results[i])
 								return nil
 							}
 							// Pending is empty: "suspend with nothing to wait

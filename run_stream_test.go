@@ -199,3 +199,63 @@ func TestRunStreamSinkErrorAborts(t *testing.T) {
 		t.Error("state must be non-nil even on sink error")
 	}
 }
+
+// TestRunStreamSuppressesToolResultEventForPendingCall proves that
+// emitPhaseEffects' PhaseToolExec case skips an EventToolResult for any
+// state.ToolResults entry whose Err is a *PendingResult. Such an entry has
+// not actually finished — PhaseObserve's SuspendClientCalls middleware (see
+// components/tool) hasn't run yet to strip it out of state.ToolResults and
+// turn it into a proper suspended pending call — so reporting it here would
+// falsely tell a streaming consumer the call completed (with an empty,
+// non-error result, no less). A real, ordinary result in the same batch must
+// still get its normal EventToolResult, proving the skip is targeted rather
+// than suppressing the whole batch.
+func TestRunStreamSuppressesToolResultEventForPendingCall(t *testing.T) {
+	a, _ := gantry.NewAgent(gantry.WithLLM(twoTurnMock()))
+	a.Use(gantry.PhaseToolExec, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			for _, call := range s.PendingToolCalls {
+				s.ToolResults = append(s.ToolResults, gantry.ToolResult{
+					CallID:  call.ID,
+					Content: "fake:" + call.Name,
+				})
+			}
+			// Simulate a second, still-pending call alongside the real one,
+			// exactly as components/tool's dispatch middleware would leave it
+			// after a Tool.Invoke returns *gantry.PendingResult.
+			s.ToolResults = append(s.ToolResults, gantry.ToolResult{
+				CallID: "pending1",
+				Err:    &gantry.PendingResult{Pending: []gantry.ToolCall{{ID: "leaf1", Name: "ask_user"}}},
+			})
+			return next(ctx, s)
+		}
+	})
+
+	var events []gantry.Event
+	_, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	var sawRealResult, sawPendingResult bool
+	for _, ev := range events {
+		if ev.Type != gantry.EventToolResult || ev.ToolResult == nil {
+			continue
+		}
+		switch ev.ToolResult.CallID {
+		case "c1":
+			sawRealResult = true
+		case "pending1":
+			sawPendingResult = true
+		}
+	}
+	if !sawRealResult {
+		t.Error("expected a tool_result event for the real, completed call c1")
+	}
+	if sawPendingResult {
+		t.Error("got a tool_result event for the still-pending call pending1; want it suppressed")
+	}
+}

@@ -1166,6 +1166,57 @@ func TestDispatchPendingResultDoesNotTriggerFailurePolicy(t *testing.T) {
 	}
 }
 
+// TestDispatchDoesNotEmitLiveResultEventForPendingCall proves that the
+// dispatch job's pending-result branch does not call emitLive: a call whose
+// Invoke returns *gantry.PendingResult (with a non-empty Pending) has not
+// actually resolved, so an EventToolResultLive for it — carrying an empty,
+// non-error ToolResult — would be exactly as misleading to a streaming
+// consumer as the batched EventToolResult that run_stream.go's
+// emitPhaseEffects separately suppresses for the same entry. The sibling
+// real call in the same batch must still get its own live event, proving
+// the suppression is targeted to the pending call and not the whole batch.
+func TestDispatchDoesNotEmitLiveResultEventForPendingCall(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "p1", Name: "resumable", Input: json.RawMessage(`{}`)},
+				{ID: "s1", Name: "add_one", Input: json.RawMessage(`5`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	resumable := &fakeResumable{
+		def:       gantry.ToolDef{Name: "resumable", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{Pending: []gantry.ToolCall{{ID: "leaf1", Name: "ask_user"}}},
+	}
+	if err := a.With(tool.FromToolsWithPolicy(tool.Policy{Parallelism: 2}, resumable, addOneTool{})); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	var sawPendingLive, sawRealLive bool
+	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil {
+			switch ev.ToolResult.CallID {
+			case "p1":
+				sawPendingLive = true
+			case "s1":
+				sawRealLive = true
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	if sawPendingLive {
+		t.Error("got a tool_result_live event for the still-pending call p1; want it suppressed")
+	}
+	if !sawRealLive {
+		t.Error("expected a tool_result_live event for the real, completed call s1")
+	}
+}
+
 // TestDispatchEmptyPendingResultBecomesToolErrorNotSuspend proves the fix
 // for the whole-branch-review bug: a *gantry.PendingResult with Pending nil
 // (only Resume set) is a contract violation — "suspend with nothing to wait

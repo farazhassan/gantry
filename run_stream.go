@@ -73,7 +73,9 @@ func (a *Agent) ResumeStream(ctx context.Context, prior *State, sink EventSink) 
 // emitPhaseEffects emits the State-derived events produced by a phase: tool
 // calls become visible after PhasePostLLM (state.PendingToolCalls), and tool
 // results after PhaseToolExec (state.ToolResults, before PhaseObserve clears
-// them). It is a no-op when no sink is active.
+// them). It is a no-op when no sink is active. One exception: an entry whose
+// Err is a *PendingResult is not yet a finished result — see the PhaseToolExec
+// case below — so it is skipped rather than reported as an EventToolResult.
 func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) error {
 	if _, ok := SinkFrom(ctx); !ok {
 		return nil
@@ -89,6 +91,21 @@ func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) er
 	case PhaseToolExec:
 		for i := range state.ToolResults {
 			tr := state.ToolResults[i]
+			// A *PendingResult in Err means this call has not actually
+			// finished — it's still waiting on PhaseObserve's
+			// SuspendClientCalls middleware to strip it out of
+			// state.ToolResults and turn it into a proper suspended pending
+			// call (see components/tool's unified suspend handling).
+			// Reporting it here as an EventToolResult — even one with an
+			// empty, non-error Content — would tell a streaming consumer
+			// this call is done when it isn't. Skip it; there is currently
+			// no streaming event that surfaces a newly-pending call's
+			// composite ID/Name/Input to a live consumer (that's a separate,
+			// larger protocol-design question, out of scope here).
+			var pending *PendingResult
+			if errors.As(tr.Err, &pending) {
+				continue
+			}
 			if err := emit(ctx, Event{Type: EventToolResult, Iteration: state.Iteration, ToolResult: &tr}); err != nil {
 				return err
 			}
