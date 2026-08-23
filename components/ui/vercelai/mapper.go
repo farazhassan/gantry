@@ -94,6 +94,20 @@ func (m *Mapper) Map(ev gantry.Event) []Chunk {
 			)
 		}
 
+	case gantry.EventToolPending:
+		// A newly-surfaced nested pending leaf (see EventToolPending's doc
+		// comment in gantry) carries the same ToolCall shape as — and needs
+		// answering exactly like — an EventToolCall the LLM itself just
+		// dispatched, so it translates the same way.
+		out = append(out, m.closeText()...)
+		out = append(out, m.closeReasoning()...)
+		if tc := ev.ToolCall; tc != nil {
+			out = append(out,
+				newToolInputStart(tc.ID, tc.Name),
+				newToolInputAvailable(tc.ID, tc.Name, tc.Input),
+			)
+		}
+
 	case gantry.EventToolResult:
 		out = append(out, m.closeText()...)
 		out = append(out, m.closeReasoning()...)

@@ -71,6 +71,45 @@ func TestMapperToolCallClosesOpenText(t *testing.T) {
 	}
 }
 
+// TestMapperToolPendingTranslatesToToolInput is the regression test for the
+// gap flagged in GitHub PR #80 review comment 3839493769: SuspendClientCalls
+// (components/tool/client.go) emits gantry.EventToolPending for a newly
+// surfaced nested pending leaf, but Mapper's switch had no case for it, so
+// the composite leaf ID/name/input a client needs in order to answer a
+// nested suspend never reached the Vercel AI SDK wire at all.
+// EventToolPending carries the same ToolCall shape as EventToolCall, so it
+// must translate the same way.
+func TestMapperToolPendingTranslatesToToolInput(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	tc := &gantry.ToolCall{ID: "origin\x1fleaf", Name: "ask_user", Input: json.RawMessage(`{"q":"proceed?"}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolPending, ToolCall: tc})
+	want := []Chunk{
+		newToolInputStart("origin\x1fleaf", "ask_user"),
+		newToolInputAvailable("origin\x1fleaf", "ask_user", json.RawMessage(`{"q":"proceed?"}`)),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperToolPendingClosesOpenText mirrors TestMapperToolCallClosesOpenText.
+func TestMapperToolPendingClosesOpenText(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi"})
+	tc := &gantry.ToolCall{ID: "origin\x1fleaf", Name: "ask_user", Input: json.RawMessage(`{}`)}
+	got := m.Map(gantry.Event{Type: gantry.EventToolPending, ToolCall: tc})
+	want := []Chunk{
+		newTextEnd("m1:text:1"),
+		newToolInputStart("origin\x1fleaf", "ask_user"),
+		newToolInputAvailable("origin\x1fleaf", "ask_user", json.RawMessage(`{}`)),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperToolResult(t *testing.T) {
 	m := NewMapper("m1")
 	m.started = true
