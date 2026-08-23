@@ -98,10 +98,10 @@ func (a *Agent) emitPhaseEffects(ctx context.Context, ph Phase, state *State) er
 			// call (see components/tool's unified suspend handling).
 			// Reporting it here as an EventToolResult — even one with an
 			// empty, non-error Content — would tell a streaming consumer
-			// this call is done when it isn't. Skip it; there is currently
-			// no streaming event that surfaces a newly-pending call's
-			// composite ID/Name/Input to a live consumer (that's a separate,
-			// larger protocol-design question, out of scope here).
+			// this call is done when it isn't. Skip it; SuspendClientCalls
+			// (components/tool/client.go) emits EventToolPending for each
+			// newly-surfaced leaf once its composite ID is known, during the
+			// PhaseObserve that follows this one.
 			var pending *PendingResult
 			// errors.As can match and still leave pending nil: a tool that
 			// mistakenly does `var pr *PendingResult; return out, pr`

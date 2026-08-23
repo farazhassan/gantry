@@ -191,10 +191,15 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 
 // SuspendClientCalls installs the PhaseObserve middleware that suspends a
 // run when any pending tool call's name was marked client-side this run (by
-// Client's or DynamicClient's PhaseStart middleware). Client and
-// DynamicClient both install this internally — most callers want one of
-// those, not this directly. Installing it twice on the same agent returns
-// an error.
+// Client's or DynamicClient's PhaseStart middleware), and — regardless of
+// whether Client/DynamicClient are installed — folds any *gantry.PendingResult
+// surfaced by a ResumableTool's Invoke/Resume into new composite-ID leaf
+// entries on state.PendingToolCalls. When a sink is active (RunStream), each
+// such newly-surfaced leaf gets its own gantry.EventToolPending event, since
+// it has no other way to reach a streaming consumer (see EventToolPending's
+// doc comment). Client and DynamicClient both install this internally — most
+// callers want one of those, not this directly. Installing it twice on the
+// same agent returns an error.
 func SuspendClientCalls() gantry.Component {
 	return suspendComponent{}
 }
@@ -317,6 +322,23 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 				s.PendingToolCalls = append(append(s.PendingToolCalls[:0], clientCalls...), toolPending...)
 				s.Done = true
 				s.DoneReason = gantry.DoneClientToolCall
+
+				// clientCalls already got an EventToolCall from
+				// PhasePostLLM's own emission (they were already in
+				// s.PendingToolCalls at that point); toolPending's composite
+				// IDs are only known now, so it is the only one of the two
+				// that needs its own event — see EventToolPending's doc
+				// comment for why PhasePostLLM's emission can't cover it.
+				for i := range toolPending {
+					tc := toolPending[i]
+					if err := gantry.Emit(ctx, gantry.Event{
+						Type:      gantry.EventToolPending,
+						Iteration: s.Iteration,
+						ToolCall:  &tc,
+					}); err != nil {
+						return err
+					}
+				}
 			}
 			setPendingEntries(s, entries)
 			return nil

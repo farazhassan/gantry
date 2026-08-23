@@ -860,3 +860,108 @@ func TestResumableToolSuspendSurfacesOnPendingToolCalls(t *testing.T) {
 		}
 	}
 }
+
+// TestSuspendClientCallsEmitsToolPendingEventForNestedSuspend guards the gap
+// GitHub Copilot flagged on PR #80: TestResumableToolSuspendSurfacesOnPendingToolCalls
+// above proves a nested ResumableTool suspend lands the leaf's composite
+// ID/Name/Input on state.PendingToolCalls, but a RunStream consumer never
+// sees a *State — only Events — and until now nothing streamed that leaf's
+// composite ID/Name/Input at all: PhasePostLLM's EventToolCall emission (see
+// emitPhaseEffects in run_stream.go) fires before SuspendClientCalls'
+// PhaseObserve middleware ever builds the composite ID, so a live consumer
+// only ever saw the original "specialist" tool_call and had no way to
+// discover what its suspended child actually needs answered.
+//
+// This test proves the fix (SuspendClientCalls now emits EventToolPending
+// for each newly-surfaced leaf) is sufficient for a streaming consumer to
+// act: it builds the Resume answer's CallID entirely from the composite ID
+// captured off the EventToolPending event, never touching
+// suspended.PendingToolCalls, and confirms that answer actually resolves
+// the suspended specialist and lets the run finish.
+func TestSuspendClientCallsEmitsToolPendingEventForNestedSuspend(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "used the specialist's answer", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"q":"name?"}`)}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			if len(results) != 1 || results[0].Content != "Ada" {
+				t.Errorf("Resume got results %#v, want the ask1 answer", results)
+			}
+			return json.RawMessage(`{"output":"specialist finished"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	var events []gantry.Event
+	suspended, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if !suspended.Done || suspended.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend", suspended.Done, suspended.DoneReason)
+	}
+
+	var pendingEvents []gantry.Event
+	for _, ev := range events {
+		if ev.Type == gantry.EventToolPending {
+			pendingEvents = append(pendingEvents, ev)
+		}
+	}
+	if len(pendingEvents) != 1 {
+		t.Fatalf("EventToolPending count = %d, want exactly 1; events: %#v", len(pendingEvents), events)
+	}
+	tc := pendingEvents[0].ToolCall
+	if tc == nil {
+		t.Fatalf("EventToolPending has nil ToolCall")
+	}
+	if tc.Name != "ask_user" || string(tc.Input) != `{"q":"name?"}` {
+		t.Errorf("EventToolPending ToolCall = %+v, want the leaf's real Name/Input", tc)
+	}
+	if tc.ID == "ask1" || tc.ID == "c1" {
+		t.Errorf("EventToolPending ToolCall.ID %q should be a composite of the originating call and the leaf, not either alone", tc.ID)
+	}
+
+	// The event must never masquerade as a finished result: no EventToolResult
+	// for the still-pending leaf, and the still-pending origin c1 must not
+	// yet have a folded tool result in the transcript either.
+	eventCompositeID := tc.ID
+	for _, ev := range events {
+		if ev.Type == gantry.EventToolResult && ev.ToolResult != nil && ev.ToolResult.CallID == eventCompositeID {
+			t.Errorf("EventToolResult fired for still-pending leaf %q; a pending call must never be reported as finished", eventCompositeID)
+		}
+	}
+	for _, m := range suspended.Messages {
+		if m.ToolCallID == "c1" {
+			t.Errorf("originating call c1 must not have a folded tool result while still pending; messages: %+v", suspended.Messages)
+		}
+	}
+
+	// A real streaming consumer never sees suspended.PendingToolCalls — build
+	// the answer purely from what the event surfaced.
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: eventCompositeID, Content: "Ada"},
+	})
+	if err != nil {
+		t.Fatalf("Resume using the event-derived composite ID: %v", err)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "used the specialist's answer" {
+		t.Fatalf("Done=%q out=%q, want a normal finish", final.DoneReason, final.FinalOutput)
+	}
+}
