@@ -2,6 +2,7 @@
 package tool
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -44,12 +45,69 @@ type pendingEntry struct {
 	Partial  map[string]gantry.ToolResult `json:"partial,omitempty"`
 }
 
+// pendingEntryWire is pendingEntry's on-the-wire shape: Resume is carried as
+// a base64 string instead of embedded raw JSON. This is what
+// pendingEntry.MarshalJSON/UnmarshalJSON actually encode/decode — see those
+// methods' doc comment for why.
+type pendingEntryWire struct {
+	ToolName string                       `json:"tool_name"`
+	Resume   string                       `json:"resume"`
+	Partial  map[string]gantry.ToolResult `json:"partial,omitempty"`
+}
+
+// MarshalJSON and UnmarshalJSON make pendingEntry carry Resume as a base64
+// string on the wire rather than embedding it as raw JSON. Resume is an
+// opaque continuation payload handed back verbatim to a ResumableTool's
+// Resume method — its bytes must survive persistence exactly, but
+// state.Meta (map[string]any) can go through a generic JSON round-trip
+// before pendingEntriesFrom ever sees it (e.g. a checkpoint save/load via
+// components/checkpointer.StoreCheckpointer), which decodes any embedded
+// JSON number as float64. A float64 cannot exactly represent every int64,
+// so a large integer (or even just unusual formatting) inside Resume could
+// be silently altered by that intermediate decode — a decode this package
+// doesn't control and can't recover from after the fact. A JSON string,
+// by contrast, always decodes to a Go string under a generic
+// map[string]interface{}, never coerced to a numeric type, so encoding
+// Resume as base64 text makes it immune to that failure mode regardless of
+// what it contains.
+func (e pendingEntry) MarshalJSON() ([]byte, error) {
+	w := pendingEntryWire{ToolName: e.ToolName, Partial: e.Partial}
+	if e.Resume != nil {
+		w.Resume = base64.StdEncoding.EncodeToString(e.Resume)
+	}
+	return json.Marshal(w)
+}
+
+func (e *pendingEntry) UnmarshalJSON(data []byte) error {
+	var w pendingEntryWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	var resume json.RawMessage
+	if w.Resume != "" {
+		b, err := base64.StdEncoding.DecodeString(w.Resume)
+		if err != nil {
+			return fmt.Errorf("tool: pendingEntry resume is not valid base64: %w", err)
+		}
+		resume = b
+	}
+	e.ToolName = w.ToolName
+	e.Resume = resume
+	e.Partial = w.Partial
+	return nil
+}
+
 // pendingEntriesFrom reads the pending-call stash from s.Meta, or nil if
 // none is present. The value may be the original map[string]pendingEntry
 // (same-process, never serialized) or a generic map[string]interface{} (has
 // been through a JSON round-trip, e.g. a checkpoint save/load) — re-marshal
 // then re-unmarshal works uniformly for either, since JSON is idempotent
-// under that operation.
+// under that operation. This is safe from precision/formatting loss in
+// Resume specifically because pendingEntry.MarshalJSON/UnmarshalJSON carry
+// it as a base64 string rather than embedded JSON — a plain Go string
+// survives the intervening generic map[string]interface{} decode
+// byte-for-byte, unlike a JSON number decoded into that shape (see those
+// methods' doc comment).
 func pendingEntriesFrom(s *gantry.State) map[string]pendingEntry {
 	raw, ok := s.Meta[pendingResumeMetaKey]
 	if !ok {

@@ -2,10 +2,13 @@ package tool
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/checkpointer"
+	checkpointermem "github.com/farazhassan/gantry/components/checkpointer/mem"
 )
 
 func TestSplitPendingID(t *testing.T) {
@@ -70,6 +73,49 @@ func TestPendingEntryPartialOmitemptyPreservesBackwardCompatibleShape(t *testing
 	}
 	if bytes.Contains(data, []byte(`"partial"`)) {
 		t.Errorf("marshaled pendingEntry with nil Partial = %s, want no \"partial\" key at all", data)
+	}
+}
+
+// TestPendingEntryResumeSurvivesCheckpointRoundTripByteForByte guards
+// against the failure mode described on pendingEntry.MarshalJSON: a
+// Resume payload containing a large integer (beyond float64's 2^53 exact
+// range) must come back byte-identical after a REAL checkpoint save/load,
+// not just after pendingEntriesFrom's own re-marshal/re-unmarshal. Before
+// Resume was carried as base64, checkpointer.StoreCheckpointer's
+// json.Marshal(state)/json.Unmarshal(data, &state) round-trip decoded
+// state.Meta generically, turning any JSON number embedded in Resume into
+// a float64 and silently rounding it (e.g. 9007199254740993, which is
+// 2^53+1, became 9007199254740992) by the time pendingEntriesFrom ever ran
+// — a loss that had already happened upstream, outside pendingEntriesFrom's
+// control, and that its own idempotent-looking re-marshal could not
+// recover from.
+func TestPendingEntryResumeSurvivesCheckpointRoundTripByteForByte(t *testing.T) {
+	const wantResume = `{"id":9007199254740993}` // 2^53 + 1: not exactly representable as float64
+
+	s := gantry.NewState("hi")
+	setPendingEntries(s, map[string]pendingEntry{
+		"c1": {ToolName: "specialist", Resume: json.RawMessage(wantResume)},
+	})
+
+	cp, err := checkpointer.FromStore(checkpointermem.NewStore())
+	if err != nil {
+		t.Fatalf("FromStore: %v", err)
+	}
+	ctx := context.Background()
+	if err := cp.Save(ctx, "run1", s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := cp.Load(ctx, "run1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := pendingEntriesFrom(loaded)
+	if len(got) != 1 {
+		t.Fatalf("pendingEntriesFrom after checkpoint round-trip = %#v, want 1 entry", got)
+	}
+	if gotResume := string(got["c1"].Resume); gotResume != wantResume {
+		t.Errorf("Resume after checkpoint round-trip = %s, want %s (byte-for-byte)", gotResume, wantResume)
 	}
 }
 
