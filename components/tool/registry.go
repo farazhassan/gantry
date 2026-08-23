@@ -70,9 +70,14 @@ func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMe
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
 		var pending *gantry.PendingResult
-		if errors.As(err, &pending) {
+		if errors.As(err, &pending) && pending != nil {
 			return out, pending
 		}
+		// errors.As can match and still leave pending nil: a tool that
+		// mistakenly does `var pr *gantry.PendingResult; return out, pr`
+		// returns a non-nil error interface wrapping a nil pointer. Treating
+		// that as a genuine suspend signal would panic downstream on
+		// pending.Pending — fall through to a normal tool error instead.
 		return out, fmt.Errorf("%w: %w", gantry.ErrToolExecution, err)
 	}
 	return out, nil

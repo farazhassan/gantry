@@ -90,6 +90,36 @@ func TestRegistryInvokePreservesToolSentinel(t *testing.T) {
 	}
 }
 
+// TestRegistryInvokeTypedNilPendingResultBecomesToolErrorNotPanic guards
+// against a classic Go footgun: a buggy tool can do
+// `var pr *gantry.PendingResult; return output, pr`, returning a non-nil
+// error interface value that wraps a nil *PendingResult pointer.
+// errors.As(err, &pending) still matches and sets pending to that nil
+// pointer; treating it as a genuine suspend signal panics the moment
+// something does len(pending.Pending). Invoke must recognize this and fall
+// through to the normal ErrToolExecution path instead.
+func TestRegistryInvokeTypedNilPendingResultBecomesToolErrorNotPanic(t *testing.T) {
+	r := tool.NewRegistry()
+	var nilPending *gantry.PendingResult
+	r.Add(&fakeResumable{
+		def:       gantry.ToolDef{Name: "buggy", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: nilPending,
+	})
+
+	out, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "buggy", Input: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected a normal tool error, got nil")
+	}
+	if !errors.Is(err, gantry.ErrToolExecution) {
+		t.Errorf("err should wrap ErrToolExecution (typed-nil PendingResult is not a real suspend signal); got %v", err)
+	}
+	var got *gantry.PendingResult
+	if errors.As(err, &got) && got != nil {
+		t.Errorf("errors.As should not recover a non-nil *PendingResult from this error; got %#v", got)
+	}
+	_ = out
+}
+
 func TestRegistryInvokePassesPendingResultThroughUnwrapped(t *testing.T) {
 	r := tool.NewRegistry()
 	want := &gantry.PendingResult{

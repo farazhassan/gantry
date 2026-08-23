@@ -598,6 +598,96 @@ func TestSetPendingClientToolsDuplicateNameReturnsError(t *testing.T) {
 	}
 }
 
+// TestSuspendClientCallsRejectsOriginCallIDContainingSeparator guards
+// against a provider-generated tool-call ID that happens to already contain
+// pendingIDSep ("\x1f", the separator SuspendClientCalls uses to build the
+// composite ID surfaced in PendingToolCalls) silently corrupting the
+// composite-ID scheme: splitPendingID only ever recovers the prefix up to
+// the FIRST separator as the origin, so the entries map (keyed by the real,
+// full call ID) would become unreachable from the surfaced composite ID.
+// This must be caught at the point the composite ID is built: the offending
+// origin's whole PendingResult folds as a normal tool error instead of
+// suspending on a broken ID, while any other, well-formed pending call in
+// the same batch is processed normally — proven here with a second,
+// well-formed ResumableTool call in the same turn.
+//
+// Deliberately not covering a Pending[i].ID (as opposed to the originating
+// CallID) containing the separator: multi-level nesting (an agent-as-tool
+// delegate whose own child already suspended) legitimately produces exactly
+// that — see pendingIDSepContractErr's doc comment in pending.go and
+// components/subagent's TestTwoLevelNestedSuspendAndResume, which relies on
+// it.
+func TestSuspendClientCallsRejectsOriginCallIDContainingSeparator(t *testing.T) {
+	const sep = "\x1f" // must match components/tool's unexported pendingIDSep
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls: []gantry.ToolCall{
+				{ID: "c" + sep + "bad", Name: "specialist_bad", Input: json.RawMessage(`{}`)},
+				{ID: "cgood", Name: "specialist_good", Input: json.RawMessage(`{}`)},
+			},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.Client()); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+	badSpecialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist_bad", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "leaf1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+	}
+	goodSpecialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist_good", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ok1", Name: "ask_user", Input: json.RawMessage(`{}`)}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+	}
+	if err := a.With(tool.FromTools(1, badSpecialist, goodSpecialist)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !state.Done || state.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want suspend (the good specialist's leaf is still pending)", state.Done, state.DoneReason)
+	}
+
+	// The bad origin's leaf must never be surfaced as a pending call — it
+	// would carry a corrupted composite ID.
+	if len(state.PendingToolCalls) != 1 {
+		t.Fatalf("PendingToolCalls = %#v, want exactly 1 (only the good specialist's leaf)", state.PendingToolCalls)
+	}
+	pc := state.PendingToolCalls[0]
+	if strings.Contains(pc.ID, "bad") || !strings.Contains(pc.ID, "cgood") {
+		t.Errorf("surfaced pending call = %+v, want it to be the good specialist's leaf, not the bad one's", pc)
+	}
+
+	// The bad origin must instead get a normal folded tool-error message,
+	// keyed by its own (separator-containing) CallID.
+	badOriginID := "c" + sep + "bad"
+	var badMsg *gantry.Message
+	for i, m := range state.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == badOriginID {
+			badMsg = &state.Messages[i]
+		}
+		if m.Role == gantry.RoleTool && m.ToolCallID == "cgood" {
+			t.Errorf("cgood must not have a folded tool result while still pending; messages: %+v", state.Messages)
+		}
+	}
+	if badMsg == nil {
+		t.Fatalf("no tool_result message for the bad origin in state.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", state.Messages)
+	}
+	if !strings.Contains(badMsg.Content, "specialist_bad") || !strings.Contains(badMsg.Content, "separator") {
+		t.Errorf("tool_result content for the bad origin = %q, want it to identify the tool and the reserved-separator problem", badMsg.Content)
+	}
+}
+
 func TestResumableToolSuspendSurfacesOnPendingToolCalls(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

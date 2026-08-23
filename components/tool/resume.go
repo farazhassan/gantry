@@ -28,7 +28,35 @@ import (
 // tool.NewWithPolicy/subagent.ComponentWithRegistry instead if they intend
 // to call Resume). reg may be nil, or omit tools, when none of the pending
 // calls trace back to a ResumableTool (e.g. a plain tool.Client suspend).
+//
+// A state with no PendingToolCalls at all is returned unchanged (no-op) —
+// mirroring gantry.Agent.Resume's own terminal-state no-op contract — since
+// there is nothing this call could possibly resolve.
 func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gantry.State, answers []gantry.ToolResult) (*gantry.State, error) {
+	if len(state.PendingToolCalls) == 0 {
+		return state, nil
+	}
+
+	// Validate answers against the actual pending-call ID set up front,
+	// before any processing/commit happens: an answer whose CallID doesn't
+	// match any currently-pending call, or two answers sharing the same
+	// CallID, are both caller mistakes that must be surfaced clearly rather
+	// than silently dropped/overwritten by the byID map built below.
+	pendingIDs := make(map[string]bool, len(state.PendingToolCalls))
+	for _, call := range state.PendingToolCalls {
+		pendingIDs[call.ID] = true
+	}
+	seenAnswer := make(map[string]bool, len(answers))
+	for _, ans := range answers {
+		if !pendingIDs[ans.CallID] {
+			return state, fmt.Errorf("tool: Resume: answer CallID %q does not match any pending call", ans.CallID)
+		}
+		if seenAnswer[ans.CallID] {
+			return state, fmt.Errorf("tool: Resume: duplicate answer CallID %q", ans.CallID)
+		}
+		seenAnswer[ans.CallID] = true
+	}
+
 	entries := pendingEntriesFrom(state)
 	if entries == nil {
 		entries = map[string]pendingEntry{}
@@ -92,8 +120,16 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 		calls := nestedByOrigin[origin]
 		entry, ok := entries[origin]
 		if !ok {
+			// state.Meta's pending-entries stash is out of sync with
+			// state.PendingToolCalls (e.g. lossy checkpoint projection, or
+			// hand-constructed state) — this call has no continuation
+			// metadata to route it. Unlike the "not answered yet this round"
+			// case, retrying forever will never resolve it, so this must be
+			// a clear error instead of silently re-adding it to remaining
+			// and leaving the run suspended forever with no diagnostic.
 			remaining = append(remaining, calls...)
-			continue
+			commit()
+			return state, fmt.Errorf("tool: Resume: pending call %q has no continuation metadata (lost or corrupted state.Meta?)", origin)
 		}
 
 		group := make([]gantry.ToolResult, 0, len(calls))
@@ -134,7 +170,13 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 		delete(entries, origin)
 		if err != nil {
 			var pending *gantry.PendingResult
-			if errors.As(err, &pending) {
+			// pending != nil guards against a buggy ResumableTool doing
+			// `var pr *gantry.PendingResult; return out, pr` — errors.As
+			// still matches and would leave pending nil, and treating that
+			// as a genuine suspend signal would panic on pending.Pending
+			// below. Fall through to the normal error path instead, same as
+			// any other non-PendingResult error here.
+			if errors.As(err, &pending) && pending != nil {
 				if len(pending.Pending) > 0 {
 					entries[origin] = pendingEntry{ToolName: entry.ToolName, Resume: pending.Resume}
 					for _, p := range pending.Pending {

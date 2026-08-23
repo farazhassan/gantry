@@ -12,6 +12,49 @@ import (
 	"github.com/farazhassan/gantry/eval"
 )
 
+// TestResumeOnAlreadyTerminalStateIsNoOp guards the terminal-state no-op
+// contract that gantry.Agent.Resume documents for itself ("A terminal prior
+// (Done == true) is returned unchanged (no-op)") but tool.Resume did not
+// replicate: calling tool.Resume on a state with no PendingToolCalls at all
+// (a caller mistake — e.g. calling it twice on the same already-resolved
+// state) must not force a brand new LLM turn. Before the fix, the flat/nested
+// loops were no-ops on such a state, and the final "nothing left pending"
+// check unconditionally cleared Done/DoneReason and called agent.Resume,
+// spending an extra LLM turn on an already-finished conversation.
+func TestResumeOnAlreadyTerminalStateIsNoOp(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{Content: "final answer", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+
+	state, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !state.Done || state.DoneReason == gantry.DoneClientToolCall || len(state.PendingToolCalls) != 0 {
+		t.Fatalf("precondition failed: state = %#v, want a plain terminal state with no pending calls", state)
+	}
+	if len(mock.Requests()) != 1 {
+		t.Fatalf("precondition failed: LLM called %d times, want 1", len(mock.Requests()))
+	}
+
+	got, err := tool.Resume(context.Background(), a, tool.NewRegistry(), state, []gantry.ToolResult{
+		{CallID: "irrelevant", Content: "irrelevant"},
+	})
+	if err != nil {
+		t.Fatalf("Resume on an already-terminal state: %v", err)
+	}
+	if got != state {
+		t.Errorf("Resume returned a different *State than the one passed in; want the identical pointer back (no-op)")
+	}
+	if !got.Done || got.DoneReason != state.DoneReason || got.FinalOutput != state.FinalOutput {
+		t.Errorf("Resume mutated the terminal state: got Done=%v DoneReason=%q FinalOutput=%q", got.Done, got.DoneReason, got.FinalOutput)
+	}
+	if len(mock.Requests()) != 1 {
+		t.Fatalf("LLM called %d times after Resume, want still 1 (no-op must not start a new LLM turn)", len(mock.Requests()))
+	}
+}
+
 func TestResumeFulfillsDeclaredClientCallAndContinues(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
@@ -41,6 +84,85 @@ func TestResumeFulfillsDeclaredClientCallAndContinues(t *testing.T) {
 	}
 	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "Hello, Ada!" {
 		t.Fatalf("resume did not finish normally: reason=%q out=%q", final.DoneReason, final.FinalOutput)
+	}
+}
+
+// TestResumeUnmatchedAnswerCallIDReturnsError guards Resume's documented
+// contract that "each answer's CallID must match a pending call's ID exactly
+// as surfaced there": before the fix, an answer whose CallID matched nothing
+// pending was silently dropped (the byID lookup for the real pending call
+// simply never found it) instead of surfacing an error, leaving the caller
+// with no diagnostic for their typo/stale ID.
+func TestResumeUnmatchedAnswerCallIDReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"name?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	beforeMessages := len(suspended.Messages)
+	beforePending := len(suspended.PendingToolCalls)
+
+	_, err = tool.Resume(context.Background(), a, tool.NewRegistry(), suspended, []gantry.ToolResult{
+		{CallID: "not-a-real-call-id", Content: "whatever"},
+	})
+	if err == nil {
+		t.Fatal("Resume with an unmatched answer CallID: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "not-a-real-call-id") {
+		t.Errorf("error = %v, want it to name the offending CallID", err)
+	}
+	if len(suspended.Messages) != beforeMessages || len(suspended.PendingToolCalls) != beforePending {
+		t.Errorf("state was mutated despite the up-front validation error: Messages %d->%d PendingToolCalls %d->%d",
+			beforeMessages, len(suspended.Messages), beforePending, len(suspended.PendingToolCalls))
+	}
+}
+
+// TestResumeDuplicateAnswerCallIDReturnsError is
+// TestResumeUnmatchedAnswerCallIDReturnsError's sibling: two answers for the
+// same CallID must not silently let the second overwrite the first (as the
+// old `byID[ans.CallID] = ans` loop did) — it must be a clear error instead.
+func TestResumeDuplicateAnswerCallIDReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: "ask_user", Input: json.RawMessage(`{"q":"name?"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(tool.Client(askDef())); err != nil {
+		t.Fatalf("install client: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	beforeMessages := len(suspended.Messages)
+	beforePending := len(suspended.PendingToolCalls)
+
+	_, err = tool.Resume(context.Background(), a, tool.NewRegistry(), suspended, []gantry.ToolResult{
+		{CallID: "q1", Content: "first"},
+		{CallID: "q1", Content: "second"},
+	})
+	if err == nil {
+		t.Fatal("Resume with a duplicate answer CallID: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "q1") {
+		t.Errorf("error = %v, want it to name the offending CallID", err)
+	}
+	if len(suspended.Messages) != beforeMessages || len(suspended.PendingToolCalls) != beforePending {
+		t.Errorf("state was mutated despite the up-front validation error: Messages %d->%d PendingToolCalls %d->%d",
+			beforeMessages, len(suspended.Messages), beforePending, len(suspended.PendingToolCalls))
 	}
 }
 
@@ -280,6 +402,65 @@ func TestResumeNilRegistryOnNestedPendingCallReturnsErrorNotPanic(t *testing.T) 
 	}
 }
 
+// TestResumeMissingContinuationMetadataReturnsError guards against a
+// regression where a nested pending call with no corresponding entry in
+// state.Meta's pending-entries stash (e.g. state.Meta got out of sync with
+// state.PendingToolCalls via a lossy checkpoint projection, or a
+// hand-constructed state) was silently re-added to remaining with no error —
+// leaving the run "suspended forever" on an unroutable call with no
+// diagnostic. This is inconsistent with the other similar failure modes in
+// the same loop (unknown tool, nil registry, wrong interface), which do
+// return clear errors; this one now must too.
+func TestResumeMissingContinuationMetadataReturnsError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(suspended.PendingToolCalls) != 1 {
+		t.Fatalf("PendingToolCalls = %#v, want 1", suspended.PendingToolCalls)
+	}
+	pendingID := suspended.PendingToolCalls[0].ID
+
+	// Simulate state.Meta getting out of sync with state.PendingToolCalls:
+	// drop the pending-entries stash entirely, so the composite pending call
+	// still surfaced in PendingToolCalls has no continuation metadata to
+	// route it.
+	delete(suspended.Meta, "components/tool:pending_resume")
+
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: pendingID, Content: `{"answer":"ok"}`},
+	})
+	if err == nil {
+		t.Fatal("Resume with corrupted/missing continuation metadata: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "continuation") {
+		t.Errorf("error = %v, want it to identify the missing-continuation-metadata problem", err)
+	}
+	if len(final.PendingToolCalls) != 1 || final.PendingToolCalls[0].ID != pendingID {
+		t.Fatalf("PendingToolCalls after the error = %#v, want the call still pending untouched", final.PendingToolCalls)
+	}
+}
+
 func TestResumeRoutesToResumableToolAndFinishes(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{
@@ -485,6 +666,72 @@ func TestResumeReSuspendWithEmptyPendingResultBecomesToolError(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("second LLM request has no tool_result message for c1; messages: %+v (transcript corruption reaching the LLM)", reqs[1].Messages)
+	}
+}
+
+// TestResumeReSuspendWithTypedNilPendingResultBecomesToolErrorNotPanic
+// guards against the same typed-nil-*gantry.PendingResult footgun as
+// TestRegistryInvokeTypedNilPendingResultBecomesToolErrorNotPanic, but at
+// resume.go's separate errors.As site (the nested re-suspend branch, not
+// reachable through Registry.Invoke): a buggy ResumableTool.Resume doing
+// `var pr *gantry.PendingResult; return out, pr` returns a non-nil error
+// interface wrapping a nil pointer. errors.As still matches and would leave
+// pending nil — treating that as a real suspend would panic on
+// pending.Pending. This must instead fold a normal (non-panicking) tool
+// error for the origin, same as any other error from Resume.
+func TestResumeReSuspendWithTypedNilPendingResultBecomesToolErrorNotPanic(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			var nilPending *gantry.PendingResult
+			return nil, nilPending
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.Done && final.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("re-suspended (DoneReason=%q) on a typed-nil *PendingResult from Resume; want it treated as a plain tool error", final.DoneReason)
+	}
+	if len(final.PendingToolCalls) != 0 {
+		t.Fatalf("PendingToolCalls = %#v, want none left pending", final.PendingToolCalls)
+	}
+
+	var found bool
+	for _, m := range final.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no tool_result message for origin c1 in final.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", final.Messages)
 	}
 }
 

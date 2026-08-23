@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/farazhassan/gantry"
 )
@@ -221,8 +222,46 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 			for _, r := range s.ToolResults {
 				var pending *gantry.PendingResult
 				if errors.As(r.Err, &pending) {
+					toolName := toolNameFor(s.PendingToolCalls, r.CallID)
+
+					// r.CallID already containing pendingIDSep would corrupt
+					// the composite ID (origin + pendingIDSep + leaf) built
+					// below: splitPendingID only ever splits at the FIRST
+					// separator, so the entries map (keyed by the real,
+					// full r.CallID) would become unreachable from the
+					// surfaced composite ID, whose recovered "origin" is
+					// only the prefix up to that first separator — a
+					// genuine mismatch, not a false positive. r.CallID is
+					// always this level's own freshly-dispatched LLM
+					// tool_call ID (never itself composite — composite IDs
+					// are only ever introduced by this very construction),
+					// so this check cannot fire on legitimate nesting.
+					//
+					// A Pending[i].ID containing pendingIDSep, by contrast,
+					// is deliberately NOT checked here: multi-level nesting
+					// (an agent-as-tool delegate whose own child already
+					// suspended) legitimately passes an already-composite
+					// child ID straight through as Pending[i].ID — see
+					// splitPendingID's doc comment ("leaf ... may itself
+					// still be composite, for more than one level of
+					// nesting") and subagent's delegateTool.asResult, which
+					// does exactly that. Each level only ever splits once,
+					// forwarding its own residual leaf opaquely to the next
+					// level down, so an embedded separator there causes no
+					// misparse; rejecting it would break that design.
+					if strings.Contains(r.CallID, pendingIDSep) {
+						err := pendingIDSepContractErr(toolName, r.CallID)
+						kept = append(kept, gantry.ToolResult{
+							CallID:  r.CallID,
+							Content: err.Error(),
+							IsError: true,
+							Err:     err,
+						})
+						continue
+					}
+
 					entries[r.CallID] = pendingEntry{
-						ToolName: toolNameFor(s.PendingToolCalls, r.CallID),
+						ToolName: toolName,
 						Resume:   pending.Resume,
 					}
 					for _, p := range pending.Pending {

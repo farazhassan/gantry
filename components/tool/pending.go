@@ -102,6 +102,33 @@ func pendingResultContractErr(toolName string) error {
 	return fmt.Errorf("tool: %s returned a PendingResult with no Pending calls (nothing to suspend on)", toolName)
 }
 
+// pendingIDSepContractErr returns the error to fold as a plain tool error
+// when the originating call's own CallID already contains pendingIDSep —
+// the separator SuspendClientCalls uses to build the composite ID (origin +
+// pendingIDSep + leaf ID) surfaced in PendingToolCalls. Every ID is
+// documented as opaque (see pendingIDSep's doc comment), but nothing stops a
+// provider-generated tool-call ID from containing it anyway; building the
+// composite ID from it would corrupt the scheme, since splitPendingID only
+// ever recovers the prefix up to the FIRST separator as the origin — the
+// entries map (keyed by the real, full CallID) would then be unreachable
+// from the surfaced composite ID. Folding this as a normal tool error here,
+// at the point the composite ID would be constructed, gives a much clearer
+// diagnostic than the generic "no continuation metadata" error a misparsed
+// ID would eventually produce downstream.
+//
+// Deliberately NOT applied to a PendingResult.Pending[i].ID containing the
+// separator: multi-level nesting (an agent-as-tool delegate whose own child
+// already suspended) legitimately passes an already-composite child ID
+// straight through as Pending[i].ID — see splitPendingID's doc comment
+// ("leaf ... may itself still be composite, for more than one level of
+// nesting") and components/subagent's delegateTool.asResult, which does
+// exactly that. Each level only ever splits once and forwards its own
+// residual leaf opaquely to the level below, so an embedded separator there
+// causes no misparse.
+func pendingIDSepContractErr(toolName, badID string) error {
+	return fmt.Errorf("tool: %s's PendingResult originating call ID %q contains the reserved pending-ID separator %q; tool-call IDs must not contain it", toolName, badID, pendingIDSep)
+}
+
 // toolNameFor looks up the Name of the pending call with the given ID in
 // calls — used by the suspend middleware, before DefaultObserveHandler
 // clears state.PendingToolCalls, to record which tool a pending result came
