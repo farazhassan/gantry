@@ -70,6 +70,13 @@ type pendingEntryWire struct {
 // map[string]interface{}, never coerced to a numeric type, so encoding
 // Resume as base64 text makes it immune to that failure mode regardless of
 // what it contains.
+//
+// This changes pendingEntry's wire shape for a non-nil Resume (embedded raw
+// JSON before, a base64 string now) — an already-persisted checkpoint from
+// before this change would fail to decode. That's fine only because
+// components/tool.ResumableTool/PendingResult have never shipped in a
+// tagged release, so no real checkpoint exists in the old shape; this is
+// not a general precedent for future wire-shape changes here.
 func (e pendingEntry) MarshalJSON() ([]byte, error) {
 	w := pendingEntryWire{ToolName: e.ToolName, Partial: e.Partial}
 	if e.Resume != nil {
