@@ -219,6 +219,15 @@ func (t *delegateTool) Resume(ctx context.Context, resume json.RawMessage, resul
 	if err := json.Unmarshal(resume, &child); err != nil {
 		return nil, fmt.Errorf("%s: decoding suspended child state: %w", t.name, err)
 	}
+	// Reinstall any dynamic client tool defs the child had advertised via
+	// tool.DynamicClient before its suspend: DynamicClient's PhaseStart
+	// middleware consumes and deletes SetPendingClientTools' per-run defs the
+	// moment it reads them, so the just-unmarshaled child has nothing left
+	// in its own Meta for tool.Resume's eventual PhaseStart pass to
+	// reinstall — see CarryDynamicClientTools's doc comment.
+	if err := tool.CarryDynamicClientTools(&child); err != nil {
+		return nil, fmt.Errorf("%s: reinstalling child dynamic client tools: %w", t.name, err)
+	}
 	// child.Usage is the child's cumulative usage as of its last suspend (or,
 	// for the very first Resume after one suspend, exactly what Invoke's own
 	// fold already recorded). Snapshot it now so the fold below can record

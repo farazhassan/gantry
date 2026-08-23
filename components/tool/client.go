@@ -2,7 +2,9 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/farazhassan/gantry"
@@ -28,6 +30,18 @@ const (
 	// RunFromStream/Resume/ResumeStream call), so state.Tools itself cannot
 	// be used to pass defs into a run — only state.Meta survives that reset.
 	pendingClientDefsMetaKey = "components/tool:pending_client_defs"
+
+	// dynamicClientDefsMetaKey durably records the dynamic client tool defs
+	// most recently advertised on a *State by DynamicClient's PhaseStart
+	// middleware. Unlike pendingClientDefsMetaKey (consumed and deleted the
+	// instant PhaseStart reads it — see that key's doc comment), this key is
+	// never deleted, so it survives both a same-process Resume and a JSON
+	// round-trip of state.Meta (e.g. a suspended child *gantry.State
+	// marshaled as subagent's delegateTool continuation payload). It is the
+	// durable record CarryDynamicClientTools reads back to reinstall the
+	// defs for a caller with no other way to resupply them — see that
+	// function's doc comment.
+	dynamicClientDefsMetaKey = "components/tool:dynamic_client_last_defs"
 )
 
 // validateClientDefNames checks defs for the constraints every client-tool
@@ -136,6 +150,59 @@ func SetPendingClientTools(s *gantry.State, defs ...gantry.ToolDef) error {
 	return nil
 }
 
+// CarryDynamicClientTools reinstalls the dynamic client tool defs most
+// recently advertised on s by DynamicClient's PhaseStart middleware, staging
+// them as pending for the very next Run/RunFrom/RunStream/RunFromStream/
+// Resume/ResumeStream call on s — exactly as if the original caller had
+// called SetPendingClientTools again with the same defs.
+//
+// SetPendingClientTools's contract is "the very next call on s, and no
+// further" (see its doc comment): by design nothing reinstates it
+// automatically, so a direct caller driving Run/Resume itself (e.g. an
+// AG-UI handler decoding tool defs from each request) must resupply them on
+// every call, and a stale set must not silently linger — see
+// TestDynamicClientDoesNotReadvertiseOnLaterResumeWithoutResetting.
+// CarryDynamicClientTools exists for a different kind of caller: one that is
+// NOT the original request-decoding caller and has no way to resupply the
+// defs itself — chiefly subagent's delegateTool.Resume, continuing a
+// suspended child *gantry.State it only has as an opaque, marshaled
+// continuation payload, with no independent knowledge of what dynamic defs
+// the child's own construction advertised on its first run. Call this on
+// such a state before driving it further (e.g. before tool.Resume) so a
+// second dynamic client tool call gets recognized and marked client-side
+// exactly as the first one was, instead of falling through as an ordinary,
+// unregistered tool call.
+//
+// A no-op, leaving s unchanged, when DynamicClient never advertised any defs
+// on s — nothing to carry forward.
+func CarryDynamicClientTools(s *gantry.State) error {
+	if s.Meta == nil {
+		return nil
+	}
+	raw, ok := s.Meta[dynamicClientDefsMetaKey]
+	if !ok {
+		return nil
+	}
+	// raw may be the original []gantry.ToolDef (same-process) or a generic
+	// []interface{} of map[string]interface{} (has been through a JSON
+	// round-trip — e.g. delegateTool.asResult/Resume's marshal/unmarshal of
+	// the whole child *gantry.State). Re-marshal then re-unmarshal works
+	// uniformly for either, mirroring pendingEntriesFrom's own handling of
+	// this same round-trip shape (see its doc comment in pending.go).
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("tool: CarryDynamicClientTools: %w", err)
+	}
+	var defs []gantry.ToolDef
+	if err := json.Unmarshal(b, &defs); err != nil {
+		return fmt.Errorf("tool: CarryDynamicClientTools: decoding stored defs: %w", err)
+	}
+	if len(defs) == 0 {
+		return nil
+	}
+	return SetPendingClientTools(s, defs...)
+}
+
 type dynamicClientComponent struct{}
 
 // DynamicClient returns a Component that advertises and suspends on per-run
@@ -173,6 +240,13 @@ func (c *dynamicClientComponent) Install(a *gantry.Agent) error {
 				for _, d := range defs {
 					names[d.Name] = true
 				}
+				// Durably remember this set (see dynamicClientDefsMetaKey's
+				// doc comment) — separately from the pending key just
+				// deleted above, and never cleared here: a run with no fresh
+				// SetPendingClientTools call leaves the last-known set
+				// available for CarryDynamicClientTools to reinstall, without
+				// affecting this run's own (correctly empty) advertisement.
+				s.Meta[dynamicClientDefsMetaKey] = defs
 			}
 			// Unlike Client's fixed name set (safe to merge every call via
 			// markClientNames, since it's the same names every time),
