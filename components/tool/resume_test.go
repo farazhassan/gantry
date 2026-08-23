@@ -735,6 +735,242 @@ func TestResumeReSuspendWithTypedNilPendingResultBecomesToolErrorNotPanic(t *tes
 	}
 }
 
+// TestResumeNestedGroupAnsweredIncrementallyAcrossRounds guards the fix for
+// the finding that a nested group with 2+ leaf calls sharing one
+// ResumableTool origin (e.g. a delegate whose child asked two simultaneous
+// questions in one turn — components/subagent's delegateTool.asResult sets
+// Pending to the child's entire set of simultaneously-pending calls) could
+// not actually be answered incrementally: before the fix, answering only one
+// leaf this round discarded the ENTIRE group (including the just-supplied
+// answer) back into remaining, and a later round answering the other leaf
+// would have no record of the first — the caller had to re-supply every
+// previously-given answer on every subsequent round. Now a partial answer is
+// retained in pendingEntry.Partial across rounds, so a later round needs
+// only the still-missing leaves.
+func TestResumeNestedGroupAnsweredIncrementallyAcrossRounds(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "all set", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+
+	var resumeCalls int
+	var gotResults []gantry.ToolResult
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{
+				{ID: "askA", Name: "ask_user", Input: json.RawMessage(`{"q":"a?"}`)},
+				{ID: "askB", Name: "ask_user", Input: json.RawMessage(`{"q":"b?"}`)},
+			},
+			Resume: json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			resumeCalls++
+			gotResults = results
+			return json.RawMessage(`{"output":"done"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(suspended.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls = %#v, want 2 (one composite group of 2 leaves)", suspended.PendingToolCalls)
+	}
+
+	var idA, idB string
+	for _, pc := range suspended.PendingToolCalls {
+		switch {
+		case strings.Contains(string(pc.Input), `"a?"`):
+			idA = pc.ID
+		case strings.Contains(string(pc.Input), `"b?"`):
+			idB = pc.ID
+		}
+	}
+	if idA == "" || idB == "" {
+		t.Fatalf("could not identify leaf IDs: %#v", suspended.PendingToolCalls)
+	}
+
+	// Round 1: answer only leaf A. The group must stay pending, untouched by
+	// rt.Resume, and A's ID must still be present so a later round can find
+	// it via entry.Partial rather than losing it.
+	round1, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: idA, Content: "answer A"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (round 1): %v", err)
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("specialist.Resume called %d times after round 1, want 0 (group is still incomplete)", resumeCalls)
+	}
+	if !round1.Done || round1.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want still suspended (B unanswered)", round1.Done, round1.DoneReason)
+	}
+	if len(round1.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls after round 1 = %#v, want both leaves still pending (group incomplete)", round1.PendingToolCalls)
+	}
+
+	// Round 2: answer ONLY leaf B — deliberately do not re-supply A's
+	// answer. The group must now complete, and rt.Resume must see BOTH
+	// answers assembled correctly.
+	final, err := tool.Resume(context.Background(), a, reg, round1, []gantry.ToolResult{
+		{CallID: idB, Content: "answer B"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (round 2): %v", err)
+	}
+	if resumeCalls != 1 {
+		t.Fatalf("specialist.Resume called %d times after round 2, want exactly 1", resumeCalls)
+	}
+	if len(gotResults) != 2 {
+		t.Fatalf("rt.Resume got %d results, want 2 (both leaves)", len(gotResults))
+	}
+	byCallID := map[string]gantry.ToolResult{}
+	for _, r := range gotResults {
+		byCallID[r.CallID] = r
+	}
+	if r, ok := byCallID["askA"]; !ok || r.Content != "answer A" {
+		t.Errorf("results for askA = %#v (present=%v), want Content %q", r, ok, "answer A")
+	}
+	if r, ok := byCallID["askB"]; !ok || r.Content != "answer B" {
+		t.Errorf("results for askB = %#v (present=%v), want Content %q", r, ok, "answer B")
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "all set" {
+		t.Fatalf("Done=%q out=%q, want normal finish after the group completes", final.DoneReason, final.FinalOutput)
+	}
+}
+
+// TestResumeNestedGroupPartialAnswerSurvivesCheckpointRoundTrip proves the
+// fix survives a real JSON round-trip (simulating a checkpoint save/load)
+// between the round that supplies a partial answer and the round that
+// completes the group — i.e. that pendingEntry.Partial genuinely persists
+// through state.Meta's JSON encoding, not merely in an in-memory
+// map[string]pendingEntry that a same-process retry could still see.
+func TestResumeNestedGroupPartialAnswerSurvivesCheckpointRoundTrip(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "all set", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+
+	var gotResults []gantry.ToolResult
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{
+				{ID: "askA", Name: "ask_user", Input: json.RawMessage(`{"q":"a?"}`)},
+				{ID: "askB", Name: "ask_user", Input: json.RawMessage(`{"q":"b?"}`)},
+			},
+			Resume: json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			gotResults = results
+			return json.RawMessage(`{"output":"done"}`), nil
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var idA, idB string
+	for _, pc := range suspended.PendingToolCalls {
+		switch {
+		case strings.Contains(string(pc.Input), `"a?"`):
+			idA = pc.ID
+		case strings.Contains(string(pc.Input), `"b?"`):
+			idB = pc.ID
+		}
+	}
+	if idA == "" || idB == "" {
+		t.Fatalf("could not identify leaf IDs: %#v", suspended.PendingToolCalls)
+	}
+
+	// Round 1: answer only A.
+	round1, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: idA, Content: "answer A"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (round 1): %v", err)
+	}
+	if len(round1.PendingToolCalls) != 2 {
+		t.Fatalf("PendingToolCalls after round 1 = %#v, want both leaves still pending", round1.PendingToolCalls)
+	}
+
+	// Checkpoint round-trip: marshal round1 (which now carries A's answer
+	// inside pendingEntry.Partial in state.Meta) to JSON and back, exactly
+	// as a real checkpointer would between suspend and the next resume.
+	data, err := json.Marshal(round1)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var reloaded gantry.State
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Sanity-check that the round-trip actually went through state.Meta's
+	// generic map[string]interface{} representation (proving this test
+	// exercises real JSON persistence, not just the same in-memory
+	// map[string]pendingEntry reused across two calls).
+	raw, ok := reloaded.Meta["components/tool:pending_resume"]
+	if !ok {
+		t.Fatal("reloaded state.Meta missing the pending-resume stash")
+	}
+	if _, isTypedMap := raw.(map[string]interface{}); !isTypedMap {
+		t.Fatalf("reloaded state.Meta pending-resume stash has type %T, want map[string]interface{} (i.e. a genuine JSON round-trip, not the original typed map)", raw)
+	}
+	blob, _ := json.Marshal(raw)
+	if !strings.Contains(string(blob), `"answer A"`) {
+		t.Fatalf("reloaded pending-resume stash JSON = %s, want it to contain A's partial answer", blob)
+	}
+
+	// Round 2: answer ONLY B, against the reloaded state. If Partial did not
+	// survive the round-trip, this would either leave the group incomplete
+	// forever or assemble it with A's answer missing.
+	final, err := tool.Resume(context.Background(), a, reg, &reloaded, []gantry.ToolResult{
+		{CallID: idB, Content: "answer B"},
+	})
+	if err != nil {
+		t.Fatalf("Resume (round 2, post round-trip): %v", err)
+	}
+	if len(gotResults) != 2 {
+		t.Fatalf("rt.Resume got %d results, want 2 (both leaves, A's recovered from the round-tripped Partial)", len(gotResults))
+	}
+	byCallID := map[string]gantry.ToolResult{}
+	for _, r := range gotResults {
+		byCallID[r.CallID] = r
+	}
+	if r, ok := byCallID["askA"]; !ok || r.Content != "answer A" {
+		t.Errorf("results for askA = %#v (present=%v), want Content %q recovered from the round-tripped Partial", r, ok, "answer A")
+	}
+	if r, ok := byCallID["askB"]; !ok || r.Content != "answer B" {
+		t.Errorf("results for askB = %#v (present=%v), want Content %q", r, ok, "answer B")
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "all set" {
+		t.Fatalf("Done=%q out=%q, want normal finish after the group completes", final.DoneReason, final.FinalOutput)
+	}
+}
+
 func TestResumeSurvivesSimulatedCheckpointRoundTrip(t *testing.T) {
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{

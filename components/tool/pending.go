@@ -29,9 +29,19 @@ const (
 // a later tool.Resume can route an answer to the right ResumableTool. JSON
 // tags because it round-trips through State.Meta (map[string]any),
 // including across a checkpoint save/load.
+//
+// Partial accumulates already-answered leaves (keyed by leaf CallID, i.e.
+// the part of the composite ID after the origin) for a nested group that
+// isn't complete yet, so a caller can answer a multi-item group
+// incrementally across several Resume calls without ever needing to
+// re-supply an answer already given. It's omitempty so the common case (no
+// partial answers yet — including every flat, declared-client-tool pending
+// call, which never uses this field at all) keeps the same JSON shape older
+// persisted entries had.
 type pendingEntry struct {
-	ToolName string          `json:"tool_name"`
-	Resume   json.RawMessage `json:"resume"`
+	ToolName string                       `json:"tool_name"`
+	Resume   json.RawMessage              `json:"resume"`
+	Partial  map[string]gantry.ToolResult `json:"partial,omitempty"`
 }
 
 // pendingEntriesFrom reads the pending-call stash from s.Meta, or nil if

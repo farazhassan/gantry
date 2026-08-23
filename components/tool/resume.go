@@ -20,7 +20,14 @@ import (
 // answers need not cover every currently-pending call: whatever is left
 // unanswered simply stays in the returned state.PendingToolCalls, still
 // suspended, ready for a later Resume call — so several pending calls from
-// one suspend can be resolved incrementally across multiple rounds.
+// one suspend can be resolved incrementally across multiple rounds. This
+// holds uniformly for both flat, declared-client-tool calls (each is
+// independent) and a nested group of leaf calls sharing one
+// ResumableTool origin (e.g. a delegate whose child asked several
+// simultaneous questions in one turn): an answer supplied for one leaf of a
+// still-incomplete group is retained internally, so a later Resume call
+// needs only the remaining leaves' answers, never a re-supply of one already
+// given.
 //
 // reg must contain every ResumableTool reachable from state's pending calls
 // (tool.New callers already retain their Registry for this;
@@ -113,9 +120,13 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 	}
 
 	// Nested calls: one group per originating ResumableTool call. A group is
-	// only handed to Resume once every entry in it has an answer this round
-	// — a partial group stays pending untouched, so a multi-item suspend can
-	// be answered incrementally too.
+	// only handed to Resume once every leaf in it has an answer — from
+	// either this round's byID or a prior round's accumulated entry.Partial.
+	// A still-incomplete group stays pending, but this round's newly
+	// supplied answers (if any) are merged into entry.Partial before moving
+	// on, so a multi-item suspend can genuinely be answered incrementally:
+	// a later Resume call needs only the still-missing leaves, never a
+	// re-supply of one already given.
 	for _, origin := range originOrder {
 		calls := nestedByOrigin[origin]
 		entry, ok := entries[origin]
@@ -138,15 +149,40 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 			_, leaf, _ := splitPendingID(call.ID)
 			ans, ok := byID[call.ID]
 			if !ok {
+				ans, ok = entry.Partial[leaf]
+			}
+			if !ok {
 				complete = false
-				break
+				continue
 			}
 			group = append(group, gantry.ToolResult{CallID: leaf, Content: ans.Content, IsError: ans.IsError})
 		}
 		if !complete {
+			// Merge any freshly supplied answers for this still-incomplete
+			// group into entry.Partial before moving on, so they aren't lost
+			// — a later Resume call will find them here even though byID
+			// (this call's local answers map) won't exist anymore by then.
+			for _, call := range calls {
+				_, leaf, _ := splitPendingID(call.ID)
+				ans, ok := byID[call.ID]
+				if !ok {
+					continue
+				}
+				if entry.Partial == nil {
+					entry.Partial = map[string]gantry.ToolResult{}
+				}
+				entry.Partial[leaf] = ans
+			}
+			entries[origin] = entry
 			remaining = append(remaining, calls...)
 			continue
 		}
+		// The group is complete: entry.Partial (if any) has now been fully
+		// folded into group above and is no longer needed. Clear it so it
+		// doesn't leak into whatever fresh pendingEntry this origin gets
+		// reused for below, if rt.Resume re-suspends again with a new
+		// Pending set under the same origin.
+		entry.Partial = nil
 
 		if reg == nil {
 			remaining = append(remaining, calls...)
