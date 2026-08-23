@@ -231,6 +231,33 @@ func pendingIDSepClientCallErr(toolName, badID string) error {
 	return fmt.Errorf("tool: declared client tool %s's call ID %q contains the reserved pending-ID separator %q; tool-call IDs must not contain it", toolName, badID, pendingIDSep)
 }
 
+// duplicatePendingLeafErr returns the error to fold as a plain tool error
+// when a *gantry.PendingResult's own Pending contains more than one entry
+// with the same ID. Resume correlates an answer to a nested leaf entirely by
+// its composite ID (origin + pendingIDSep + leaf ID — see splitPendingID's
+// doc comment); two leaves sharing the same ID would produce identical
+// composite IDs, making them indistinguishable to a later Resume call: one
+// answer applied to both, two answers rejected as a duplicate CallID.
+// Shared by client.go's initial-suspend path and resume.go's re-suspend
+// branch, the two places a *gantry.PendingResult's Pending is turned into
+// composite pending calls.
+func duplicatePendingLeafErr(toolName, dupID string) error {
+	return fmt.Errorf("tool: %s's PendingResult has more than one Pending entry with ID %q; leaf IDs within one PendingResult must be unique", toolName, dupID)
+}
+
+// duplicatePendingLeafID returns the first ID that appears more than once in
+// pending, or "" if every ID is unique.
+func duplicatePendingLeafID(pending []gantry.ToolCall) string {
+	seen := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		if seen[p.ID] {
+			return p.ID
+		}
+		seen[p.ID] = true
+	}
+	return ""
+}
+
 // toolNameFor looks up the Name of the pending call with the given ID in
 // calls — used by the suspend middleware, before DefaultObserveHandler
 // clears state.PendingToolCalls, to record which tool a pending result came

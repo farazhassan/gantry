@@ -1070,3 +1070,66 @@ func TestSuspendClientCallsEmitsToolPendingEventForEachOfMultipleSimultaneousSus
 		t.Fatalf("Done=%q out=%q, want a normal finish", final.DoneReason, final.FinalOutput)
 	}
 }
+
+// TestSuspendClientCallsRejectsDuplicatePendingLeafID is the regression test
+// for PR #80 review comment 3839259043: Resume correlates an answer to a
+// nested leaf entirely by its composite ID (origin + separator + leaf ID —
+// see splitPendingID's doc comment). If a single *gantry.PendingResult's own
+// Pending contains two entries sharing the same ID, their composite IDs
+// collide too, making the two leaves indistinguishable to a later Resume
+// call: one answer gets applied to both, and two answers are rejected as a
+// duplicate CallID. Rather than construct that corrupted pair of composite
+// calls, the origin must instead get a normal folded tool-error message, the
+// same way a separator-containing ID is already rejected.
+func TestSuspendClientCallsRejectsDuplicatePendingLeafID(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{
+				{ID: "dup", Name: "ask_user", Input: json.RawMessage(`{"q":"a?"}`)},
+				{ID: "dup", Name: "ask_user", Input: json.RawMessage(`{"q":"b?"}`)},
+			},
+			Resume: json.RawMessage(`{"step":1}`),
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	final, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if final.Done && final.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("suspended (DoneReason=%q) on a PendingResult with duplicate leaf IDs; want it treated as a plain tool error", final.DoneReason)
+	}
+	if len(final.PendingToolCalls) != 0 {
+		t.Fatalf("PendingToolCalls = %#v, want none surfaced (a corrupted composite pair must never reach the caller)", final.PendingToolCalls)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", final.Done, final.DoneReason, final.FinalOutput)
+	}
+
+	var found bool
+	for _, m := range final.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if !strings.Contains(m.Content, "specialist") || !strings.Contains(m.Content, "dup") {
+				t.Errorf("tool_result content for c1 = %q, want it to identify the tool and the duplicate leaf ID", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no tool_result message for origin c1 in final.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", final.Messages)
+	}
+}

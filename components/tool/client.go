@@ -371,6 +371,22 @@ func (suspendComponent) Install(a *gantry.Agent) error {
 						continue
 					}
 
+					// Two Pending leaves sharing the same ID would produce
+					// identical composite IDs — see duplicatePendingLeafErr's
+					// doc comment. Reject the whole origin the same way a
+					// separator-containing ID is rejected above, rather than
+					// construct a corrupted, indistinguishable pair.
+					if dup := duplicatePendingLeafID(pending.Pending); dup != "" {
+						err := duplicatePendingLeafErr(toolName, dup)
+						kept = append(kept, gantry.ToolResult{
+							CallID:  r.CallID,
+							Content: err.Error(),
+							IsError: true,
+							Err:     err,
+						})
+						continue
+					}
+
 					entries[r.CallID] = pendingEntry{
 						ToolName: toolName,
 						Resume:   pending.Resume,

@@ -230,24 +230,61 @@ func Resume(ctx context.Context, agent *gantry.Agent, reg *Registry, state *gant
 			// below. Fall through to the normal error path instead, same as
 			// any other non-PendingResult error here.
 			if errors.As(err, &pending) && pending != nil {
-				if len(pending.Pending) > 0 {
+				dup := duplicatePendingLeafID(pending.Pending)
+				switch {
+				case len(pending.Pending) > 0 && dup == "":
 					entries[origin] = pendingEntry{ToolName: entry.ToolName, Resume: pending.Resume}
+					newPending := make([]gantry.ToolCall, 0, len(pending.Pending))
 					for _, p := range pending.Pending {
-						remaining = append(remaining, gantry.ToolCall{
+						newPending = append(newPending, gantry.ToolCall{
 							ID:    origin + pendingIDSep + p.ID,
 							Name:  p.Name,
 							Input: p.Input,
 						})
 					}
+					remaining = append(remaining, newPending...)
+					// Commit before emitting (see client.go's matching
+					// comment): a sink error below must not leave state with
+					// PendingToolCalls already promising these leaves but no
+					// continuation metadata stashed for them.
+					commit()
+					// This re-suspend branch builds its own fresh composite
+					// pending calls the same way the initial suspend does in
+					// client.go's SuspendClientCalls, but that middleware
+					// never runs here — so, like it does, this must emit
+					// EventToolPending itself for each newly-surfaced leaf, or
+					// a streaming consumer resuming through this path would
+					// see only the first question and never discover a
+					// follow-up one short of inspecting the returned *State.
+					for i := range newPending {
+						tc := newPending[i]
+						if err := gantry.Emit(ctx, gantry.Event{
+							Type:      gantry.EventToolPending,
+							Iteration: state.Iteration,
+							ToolCall:  &tc,
+						}); err != nil {
+							return state, err
+						}
+					}
 					continue
+				case len(pending.Pending) > 0:
+					// Two Pending leaves share an ID: their composite IDs
+					// would collide too, making them indistinguishable to a
+					// later Resume call — see duplicatePendingLeafErr's doc
+					// comment. Reject the same way the initial suspend does
+					// in client.go, instead of constructing that corrupted
+					// pair (entries already has origin deleted above, so no
+					// stale continuation token is left behind).
+					err = duplicatePendingLeafErr(entry.ToolName, dup)
+				default:
+					// Pending is empty: "suspend with nothing to wait for" is
+					// a contradiction (see gantry.PendingResult's doc
+					// comment) — this origin is not really pending again, so
+					// fold a normal tool-error message instead of leaving it
+					// suspended (and entries already has origin deleted
+					// above, so no stale continuation token is left behind).
+					err = pendingResultContractErr(entry.ToolName)
 				}
-				// Pending is empty: "suspend with nothing to wait for" is a
-				// contradiction (see gantry.PendingResult's doc comment) —
-				// this origin is not really pending again, so fold a
-				// normal tool-error message instead of leaving it
-				// suspended (and entries already has origin deleted above,
-				// so no stale continuation token is left behind).
-				err = pendingResultContractErr(entry.ToolName)
 			}
 			state.Messages = append(state.Messages, gantry.Message{
 				Role:       gantry.RoleTool,

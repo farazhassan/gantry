@@ -669,6 +669,161 @@ func TestResumeReSuspendWithEmptyPendingResultBecomesToolError(t *testing.T) {
 	}
 }
 
+// TestResumeReSuspendDuplicatePendingLeafIDBecomesToolError is
+// TestSuspendClientCallsRejectsDuplicatePendingLeafID's counterpart for the
+// RE-suspend path (PR #80 review comment 3839259043's "apply the same
+// validation when a resume returns another pending result"): a
+// ResumableTool.Resume call that itself returns a *gantry.PendingResult
+// whose own Pending contains two entries sharing the same ID must be
+// rejected the same way the initial-suspend path already is, not turned
+// into a pair of indistinguishable composite pending calls.
+func TestResumeReSuspendDuplicatePendingLeafIDBecomesToolError(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return nil, &gantry.PendingResult{
+				Pending: []gantry.ToolCall{
+					{ID: "dup", Name: "ask_user"},
+					{ID: "dup", Name: "ask_user"},
+				},
+				Resume: json.RawMessage(`{"step":2}`),
+			}
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	final, err := tool.Resume(context.Background(), a, reg, suspended, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if final.Done && final.DoneReason == gantry.DoneClientToolCall {
+		t.Fatalf("re-suspended (DoneReason=%q) on a PendingResult with duplicate leaf IDs; want it treated as a plain tool error", final.DoneReason)
+	}
+	if len(final.PendingToolCalls) != 0 {
+		t.Fatalf("PendingToolCalls = %#v, want none left pending", final.PendingToolCalls)
+	}
+	if final.DoneReason != gantry.DoneNoToolCalls || final.FinalOutput != "done" {
+		t.Fatalf("Done=%v DoneReason=%q FinalOutput=%q, want a normal finish after a second LLM turn", final.Done, final.DoneReason, final.FinalOutput)
+	}
+
+	var found bool
+	for _, m := range final.Messages {
+		if m.Role == gantry.RoleTool && m.ToolCallID == "c1" {
+			found = true
+			if !strings.Contains(m.Content, "specialist") || !strings.Contains(m.Content, "dup") {
+				t.Errorf("tool_result content for c1 = %q, want it to identify the tool and the duplicate leaf ID", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no tool_result message for origin c1 in final.Messages: %+v (transcript corruption: a tool_use with no matching tool_result)", final.Messages)
+	}
+}
+
+// TestResumeReSuspendEmitsToolPendingEvent is
+// TestSuspendClientCallsEmitsToolPendingEventForNestedSuspend's counterpart
+// for the RE-suspend path (PR #80 review comment 3839493738): when
+// ResumableTool.Resume itself returns another *gantry.PendingResult,
+// resume.go's re-suspend branch builds fresh composite pending calls the
+// same way the initial suspend does, but — unlike the initial suspend, which
+// SuspendClientCalls' PhaseObserve middleware emits EventToolPending for —
+// nothing emitted an event for these newly-surfaced leaves. A streaming
+// consumer resuming through this path would see the first question but have
+// no way to discover a follow-up one short of inspecting the returned
+// *State.
+func TestResumeReSuspendEmitsToolPendingEvent(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "specialist", Input: json.RawMessage(`{}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	reg := tool.NewRegistry()
+	specialist := &fakeResumable{
+		def: gantry.ToolDef{Name: "specialist", Description: "d", Schema: json.RawMessage(`{}`)},
+		invokeErr: &gantry.PendingResult{
+			Pending: []gantry.ToolCall{{ID: "ask1", Name: "ask_user"}},
+			Resume:  json.RawMessage(`{"step":1}`),
+		},
+		resumeFn: func(resume json.RawMessage, results []gantry.ToolResult) (json.RawMessage, error) {
+			return nil, &gantry.PendingResult{
+				Pending: []gantry.ToolCall{{ID: "ask2", Name: "ask_user", Input: json.RawMessage(`{"q":"next?"}`)}},
+				Resume:  json.RawMessage(`{"step":2}`),
+			}
+		},
+	}
+	reg.Add(specialist)
+	if err := a.With(tool.New(reg, 1)); err != nil {
+		t.Fatalf("install tools: %v", err)
+	}
+
+	suspended, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	firstID := suspended.PendingToolCalls[0].ID
+
+	var events []gantry.Event
+	ctx := gantry.WithSink(context.Background(), func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	again, err := tool.Resume(ctx, a, reg, suspended, []gantry.ToolResult{
+		{CallID: firstID, Content: "first answer"},
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !again.Done || again.DoneReason != gantry.DoneClientToolCall {
+		t.Fatalf("Done=%v DoneReason=%q, want re-suspended", again.Done, again.DoneReason)
+	}
+
+	var pendingEvents []gantry.Event
+	for _, ev := range events {
+		if ev.Type == gantry.EventToolPending {
+			pendingEvents = append(pendingEvents, ev)
+		}
+	}
+	if len(pendingEvents) != 1 {
+		t.Fatalf("EventToolPending count = %d, want exactly 1; events: %#v", len(pendingEvents), events)
+	}
+	tc := pendingEvents[0].ToolCall
+	if tc == nil {
+		t.Fatalf("EventToolPending has nil ToolCall")
+	}
+	if tc.Name != "ask_user" || string(tc.Input) != `{"q":"next?"}` {
+		t.Errorf("EventToolPending ToolCall = %+v, want the new ask2 leaf's real Name/Input", tc)
+	}
+	if tc.ID != again.PendingToolCalls[0].ID {
+		t.Errorf("EventToolPending ToolCall.ID = %q, want it to match the re-suspended call's composite ID %q", tc.ID, again.PendingToolCalls[0].ID)
+	}
+}
+
 // TestResumeReSuspendWithTypedNilPendingResultBecomesToolErrorNotPanic
 // guards against the same typed-nil-*gantry.PendingResult footgun as
 // TestRegistryInvokeTypedNilPendingResultBecomesToolErrorNotPanic, but at
