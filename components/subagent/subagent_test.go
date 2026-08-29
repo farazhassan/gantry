@@ -218,6 +218,57 @@ func TestInvokeThreadsParentLinkWhenAmbientIdentityPresent(t *testing.T) {
 	}
 }
 
+func TestInvokeThreadsNameAndDescriptionIntoParentLink(t *testing.T) {
+	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))
+	if err != nil {
+		t.Fatalf("NewAgent(child): %v", err)
+	}
+	tl := New("researcher", "Delegates fact-finding to a research specialist", child, WithEventPassthrough())
+
+	parentMock := eval.NewMockLLMClient(
+		gantry.LLMResponse{
+			ToolCalls:  []gantry.ToolCall{{ID: "call-9", Name: "researcher", Input: json.RawMessage(`{"goal":"g"}`)}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+	)
+	parent, err := gantry.NewAgent(
+		gantry.WithLLM(parentMock),
+		gantry.WithName("orchestrator"),
+		gantry.WithComponents(tool.FromTools(1, tl)),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent(parent): %v", err)
+	}
+
+	var events []gantry.Event
+	_, err = parent.RunStream(context.Background(), "go", func(ev gantry.Event) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	var sawChild bool
+	for _, ev := range events {
+		if ev.Agent != "investigation" {
+			continue
+		}
+		sawChild = true
+		if ev.ParentToolName != "researcher" {
+			t.Errorf("child event ParentToolName = %q, want researcher", ev.ParentToolName)
+		}
+		if ev.ParentToolDescription != "Delegates fact-finding to a research specialist" {
+			t.Errorf("child event ParentToolDescription = %q, want %q", ev.ParentToolDescription, "Delegates fact-finding to a research specialist")
+		}
+	}
+	if !sawChild {
+		t.Fatal("passthrough enabled: expected the child's own events on the parent's stream, got none")
+	}
+}
+
 func TestInvokeWithoutPassthroughStillHasNoAmbientEvents(t *testing.T) {
 	childMock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
 	child, err := gantry.NewAgent(gantry.WithLLM(childMock), gantry.WithName("investigation"))

@@ -138,8 +138,10 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 	if parentRunID, _, ok := gantry.CurrentIdentity(ctx); ok {
 		if toolCallID, ok := tool.CallIDFrom(ctx); ok {
 			runCtx = gantry.WithParentLink(runCtx, gantry.ParentLink{
-				RunID:      parentRunID,
-				ToolCallID: toolCallID,
+				RunID:       parentRunID,
+				ToolCallID:  toolCallID,
+				Name:        t.name,
+				Description: t.description,
 			})
 		}
 	}
