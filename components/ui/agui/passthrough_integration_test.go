@@ -16,14 +16,13 @@ import (
 // rawFrame is enough of the AG-UI wire shape to assert on in this test
 // without importing every concrete Event type.
 type rawFrame struct {
-	Type                string `json:"type"`
-	RunID               string `json:"runId"`
-	Agent               string `json:"agent"`
-	ParentToolCallID    string `json:"parentToolCallId"`
-	StepName            string `json:"stepName"`
-	Name                string `json:"name"`
-	SubagentRunID       string `json:"subagentRunId"`
-	ParentSubagentRunID string `json:"parentSubagentRunId"`
+	Type             string `json:"type"`
+	RunID            string `json:"runId"`
+	Agent            string `json:"agent"`
+	ParentToolCallID string `json:"parentToolCallId"`
+	StepName         string `json:"stepName"`
+	Name             string `json:"name"`
+	SubagentRunID    string `json:"subagentRunId"`
 }
 
 func TestPassthroughTwoConcurrentSubagentsEndToEnd(t *testing.T) {
