@@ -85,10 +85,13 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
-// the top-level run finishing, and maps to RUN_FINISHED (ending the whole
-// AG-UI stream); a done event WITH a parent link is a nested sub-agent run
-// finishing, and maps to a CUSTOM "gantry.subagent_done" event instead — the
-// AG-UI stream, and the parent run, may still be going.
+// the top-level run finishing, and maps unconditionally to RUN_FINISHED
+// (ending the whole AG-UI stream); a done event WITH a parent link is a
+// nested sub-agent run finishing — the AG-UI stream, and the parent run,
+// may still be going — and maps to either SUBAGENT_FINISHED or
+// SUBAGENT_ERROR depending on DoneReason (see subagentErrorReasons for the
+// exact classification), with SUBAGENT_FINISHED additionally carrying
+// outcome:{type:"suspended"} when the reason is DoneClientToolCall.
 func (m *Mapper) Map(ev gantry.Event) []Event {
 	out := m.startFrame()
 	id := identity{
