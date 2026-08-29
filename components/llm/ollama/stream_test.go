@@ -186,8 +186,8 @@ func TestGenerateStreamToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStream: %v", err)
 	}
-	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "calc" || resp.ToolCalls[0].ID != "call-0" {
-		t.Fatalf("ToolCalls = %+v, want one call-0/calc", resp.ToolCalls)
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "calc" || !toolCallIDPattern.MatchString(resp.ToolCalls[0].ID) {
+		t.Fatalf("ToolCalls = %+v, want one calc call matching %s", resp.ToolCalls, toolCallIDPattern)
 	}
 	if resp.StopReason != gantry.StopReasonToolUse {
 		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonToolUse)
