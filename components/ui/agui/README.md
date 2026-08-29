@@ -124,7 +124,7 @@ Implemented: `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`, `STEP_STARTED`/
 `STEP_FINISHED`, `TEXT_MESSAGE_START`/`TEXT_MESSAGE_CONTENT`/
 `TEXT_MESSAGE_END`, `TOOL_CALL_START`/`TOOL_CALL_ARGS`/`TOOL_CALL_END`/
 `TOOL_CALL_RESULT`, `SUBAGENT_STARTED`/`SUBAGENT_FINISHED`/`SUBAGENT_ERROR`
-(a nested sub-agent run's lifecycle -- `SUBAGENT_FINISHED` carries
+(a nested sub-agent run's lifecycle — `SUBAGENT_FINISHED` carries
 `outcome:{"type":"suspended"}` when the run paused on a client-tool call
 rather than actually finishing), `CUSTOM` (gantry-specific: `gantry.usage`,
 `gantry.events_dropped`), `REASONING_START`/
@@ -137,8 +137,8 @@ doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
 (`components/planner`'s `update_plan` plan-step progress). The AG-UI spec's
 optional `subagentRunId` attribution field (the RunID of the nested run that
 produced an event) is stamped on every event type above except the three
-top-level lifecycle events (`RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`), empty
-for top-level events.
+top-level lifecycle events (`RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`), which
+leave it empty.
 
 Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
 `MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"
