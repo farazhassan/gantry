@@ -184,24 +184,48 @@ func TestMapperDoneClosesOpenText(t *testing.T) {
 
 // --- New: nested sub-agent identity/scoping coverage ---
 
-func TestMapperNestedDoneEmitsSubagentDoneNotRunFinished(t *testing.T) {
-	m := NewMapper("t1", "r1")
-	m.started = true
-	m.subagentStarted = map[string]bool{"run-child": true}
-	got := m.Map(gantry.Event{
-		Type:             gantry.EventDone,
-		DoneReason:       gantry.DoneNoToolCalls,
-		RunID:            "run-child",
-		Agent:            "investigation",
-		ParentRunID:      "run-parent",
-		ParentToolCallID: "call-1",
-	})
-	want := []Event{newSubagentDone(identity{
-		RunID: "run-child", Agent: "investigation",
-		ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
-	})}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got  %#v\nwant %#v", got, want)
+func TestMapperNestedDoneClassifiesByDoneReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		reason     gantry.DoneReason
+		wantFinish bool // true: SUBAGENT_FINISHED, false: SUBAGENT_ERROR
+		suspended  bool
+	}{
+		{"no_tool_calls", gantry.DoneNoToolCalls, true, false},
+		{"max_iterations", gantry.DoneMaxIterations, true, false},
+		{"budget_exceeded", gantry.DoneBudgetExceeded, true, false},
+		{"client_tool_call_suspends", gantry.DoneClientToolCall, true, true},
+		{"error", gantry.DoneError, false, false},
+		{"guardrail_blocked", gantry.DoneGuardrailBlocked, false, false},
+		{"human_aborted", gantry.DoneHumanAborted, false, false},
+		{"tool_policy_aborted", gantry.DoneToolPolicyAborted, false, false},
+		{"handoff", gantry.DoneHandoff, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMapper("t1", "r1")
+			m.started = true
+			m.subagentStarted = map[string]bool{"run-child": true} // isolate from lazy-start
+			id := identity{
+				RunID: "run-child", Agent: "investigation",
+				ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
+			}
+			got := m.Map(gantry.Event{
+				Type: gantry.EventDone, DoneReason: tc.reason,
+				RunID: "run-child", Agent: "investigation",
+				ParentRunID: "run-parent", ParentToolCallID: "call-1",
+				FinalOutput: "42 facts",
+			})
+			var want []Event
+			if tc.wantFinish {
+				want = []Event{newSubagentFinished("run-child", "42 facts", tc.suspended).withIdentity(id)}
+			} else {
+				want = []Event{newSubagentError("run-child", "sub-agent run terminated: "+string(tc.reason)).withIdentity(id)}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s: got  %#v\nwant %#v", tc.name, got, want)
+			}
+		})
 	}
 }
 
@@ -257,20 +281,20 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 		Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls,
 		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
 	})
-	var sawChildTextEnd, sawSubagentDone bool
+	var sawChildTextEnd, sawSubagentFinished bool
 	for _, ev := range cDone {
 		if end, ok := ev.(TextMessageEnd); ok && end.MessageID == childMsgID {
 			sawChildTextEnd = true
 		}
-		if c, ok := ev.(Custom); ok && c.Name == subagentDoneName {
-			sawSubagentDone = true
+		if _, ok := ev.(SubagentFinished); ok {
+			sawSubagentFinished = true
 		}
 	}
 	if !sawChildTextEnd {
 		t.Errorf("child done: expected TEXT_MESSAGE_END for %q, got %#v", childMsgID, cDone)
 	}
-	if !sawSubagentDone {
-		t.Errorf("child done: expected a gantry.subagent_done CUSTOM event, got %#v", cDone)
+	if !sawSubagentFinished {
+		t.Errorf("child done: expected a SUBAGENT_FINISHED event, got %#v", cDone)
 	}
 
 	// The parent's message is STILL open — closing it independently must

@@ -343,9 +343,9 @@ func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCall
 // --- Custom ---
 
 // Custom is the AG-UI CUSTOM event: a named application-defined payload
-// carried inside an otherwise standard stream. Gantry uses it for the
-// gantry.subagent_done nested-completion signal (see mapper.go); clients
-// that don't recognize the name ignore it.
+// carried inside an otherwise standard stream. Gantry uses it for
+// gantry.usage and gantry.events_dropped (see mapper.go); clients that
+// don't recognize the name ignore it.
 type Custom struct {
 	Type  string `json:"type"`
 	Name  string `json:"name"`
@@ -360,17 +360,6 @@ func (e Custom) withIdentity(id identity) Event {
 }
 func newCustom(name string, value any) Custom {
 	return Custom{Type: typeCustom, Name: name, Value: value}
-}
-
-// subagentDoneName is the CUSTOM event name signaling that a NESTED
-// sub-agent run finished — as opposed to RUN_FINISHED, which signals the
-// single top-level AG-UI run finishing. See Mapper's EventDone handling.
-const subagentDoneName = "gantry.subagent_done"
-
-func newSubagentDone(id identity) Custom {
-	c := newCustom(subagentDoneName, nil)
-	c.identity = id
-	return c
 }
 
 // eventsDroppedName is the CUSTOM event name signaling that a buffering

@@ -52,6 +52,21 @@ func NewMapper(threadID, runID string) *Mapper {
 	}
 }
 
+// subagentErrorReasons are the DoneReasons that classify a nested run's
+// EventDone as SUBAGENT_ERROR rather than SUBAGENT_FINISHED. DoneHandoff is
+// included because errors.go already documents task-driven runs treating a
+// handoff as an explicit failure -- there is no resolver concept a
+// delegate-tool child could act on, so the same treatment applies here.
+// DoneClientToolCall is deliberately excluded: it's a suspend (see
+// SUBAGENT_FINISHED's outcome:"suspended"), not a failure.
+var subagentErrorReasons = map[gantry.DoneReason]bool{
+	gantry.DoneError:             true,
+	gantry.DoneGuardrailBlocked:  true,
+	gantry.DoneHumanAborted:      true,
+	gantry.DoneToolPolicyAborted: true,
+	gantry.DoneHandoff:           true,
+}
+
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
 // RUN_STARTED lazily before the first translated event, attaches Gantry
 // identity (RunID/Agent/ParentToolCallID/...) to every translated event
@@ -160,10 +175,13 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	case gantry.EventDone:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
-		if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+		switch {
+		case ev.ParentRunID == "" && ev.ParentToolCallID == "":
 			out = append(out, newRunFinished(m.threadID, m.runID))
-		} else {
-			out = append(out, newSubagentDone(id))
+		case subagentErrorReasons[ev.DoneReason]:
+			out = append(out, newSubagentError(ev.RunID, "sub-agent run terminated: "+string(ev.DoneReason)).withIdentity(id))
+		default:
+			out = append(out, newSubagentFinished(ev.RunID, ev.FinalOutput, ev.DoneReason == gantry.DoneClientToolCall).withIdentity(id))
 		}
 	}
 
