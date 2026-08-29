@@ -38,10 +38,11 @@ type identity struct {
 
 	// SubagentRunID is the AG-UI spec's flat attribution field: the RunID of
 	// the nested sub-agent run that produced this event, empty for a
-	// top-level event. Populated by Mapper.Map (see mapper.go) alongside the
-	// richer gantry-specific identity fields above, so a generic AG-UI
-	// client that only understands the spec field can still demux
-	// concurrent sub-agent output without any gantry-specific knowledge.
+	// top-level event. A generic AG-UI client that only understands the
+	// spec field (not gantry's richer identity fields above) can use this
+	// alone to demux concurrent sub-agent output. Not yet populated by
+	// Mapper.Map -- that wiring lands in a later task (see
+	// docs/superpowers/plans/2026-08-29-agui-subagent-lifecycle-events.md).
 	SubagentRunID string `json:"subagentRunId,omitempty"`
 }
 
