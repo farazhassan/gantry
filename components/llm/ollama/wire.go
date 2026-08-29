@@ -3,8 +3,8 @@ package ollama
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand/v2"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/farazhassan/gantry"
 )
@@ -154,22 +154,27 @@ func assembleResponse(content string, calls []wireToolCall, doneReason string, p
 	}
 }
 
+// toToolCallTag counts responses that have produced at least one tool call,
+// process-wide — see toToolCalls. A package-level counter, not a Client
+// field: Client itself stays free of per-call state (see its doc comment),
+// and atomic.Uint64 is safe for concurrent use across every Client instance.
+var toToolCallTag atomic.Uint64
+
 // toToolCalls synthesizes an ID per call. Ollama omits per-call IDs, but
 // gantry links a ToolResult back to its ToolCall by ID, and requires that ID
 // be unique within a run — not just within this one response. A plain
 // per-response index ("call-0", "call-1", ...) collides whenever a run
 // contains more than one Ollama response with tool calls (a second
 // top-level turn, or a nested sub-agent's own generation against the same
-// client), since indexing used to restart at 0 every time. The random tag
-// keeps ids readable and stable within a response while making collisions
-// across responses vanishingly unlikely — Client holds no per-call state
-// (see its doc comment), so this can't be a monotonic counter without
-// giving it one.
+// client), since indexing used to restart at 0 every time. Tagging each
+// response with the next value from toToolCallTag keeps ids readable and
+// stable within a response while making them deterministically — not just
+// probabilistically — unique across responses.
 func toToolCalls(calls []wireToolCall) []gantry.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
-	tag := strconv.FormatUint(uint64(rand.Uint32()), 36)
+	tag := strconv.FormatUint(toToolCallTag.Add(1), 36)
 	out := make([]gantry.ToolCall, len(calls))
 	for i, c := range calls {
 		out[i] = gantry.ToolCall{

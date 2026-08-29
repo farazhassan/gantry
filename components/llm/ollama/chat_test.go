@@ -16,8 +16,8 @@ import (
 )
 
 // toolCallIDPattern matches a synthesized ID's shape: "call-" + a per-response
-// random tag + "-" + the call's index within that response. Tests assert
-// against this shape rather than an exact literal like "call-0" now that the
+// tag + "-" + the call's index within that response. Tests assert against
+// this shape rather than an exact literal like "call-0" now that the
 // tag makes every response's IDs unique (see wire.go's toToolCalls).
 var toolCallIDPattern = regexp.MustCompile(`^call-[0-9a-z]+-\d+$`)
 
