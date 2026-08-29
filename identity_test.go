@@ -92,6 +92,46 @@ func TestEventParentFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestEventParentToolFieldsJSONRoundTrip(t *testing.T) {
+	in := Event{
+		Type:                  EventDone,
+		RunID:                 "run-child",
+		ParentToolName:        "researcher",
+		ParentToolDescription: "Delegates fact-finding",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"parent_tool_name":"researcher"`,
+		`"parent_tool_description":"Delegates fact-finding"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("Event JSON %s missing %s", b, want)
+		}
+	}
+	var out Event
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("round-trip mismatch:\n got  %+v\n want %+v", out, in)
+	}
+}
+
+func TestEventParentToolFieldsOmittedWhenEmpty(t *testing.T) {
+	b, err := json.Marshal(Event{Type: EventDone})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, bad := range []string{`"parent_tool_name"`, `"parent_tool_description"`} {
+		if strings.Contains(string(b), bad) {
+			t.Errorf("Event JSON %s leaked empty parent-tool key %s", b, bad)
+		}
+	}
+}
+
 // TestEmitStampsParentLinkFromIdentity is a whitebox test (package gantry,
 // not gantry_test) exercising emit() directly: no WithParentLink helper
 // exists yet (that lands in Task 2), so this constructs an eventIdentity
@@ -120,6 +160,33 @@ func TestEmitStampsParentLinkFromIdentity(t *testing.T) {
 	}
 	if got.RunID != "run-child" {
 		t.Errorf("emit() RunID = %q, want run-child", got.RunID)
+	}
+}
+
+func TestEmitStampsParentToolNameAndDescription(t *testing.T) {
+	id := eventIdentity{
+		runID:                 "run-child",
+		parentRunID:           "p",
+		parentToolCallID:      "c",
+		parentToolName:        "researcher",
+		parentToolDescription: "Delegates fact-finding",
+	}
+	ctx := withIdentity(context.Background(), id)
+
+	var got Event
+	ctx = WithSink(ctx, func(ev Event) error {
+		got = ev
+		return nil
+	})
+
+	if err := emit(ctx, Event{Type: EventDone}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	if got.ParentToolName != "researcher" {
+		t.Errorf("emit() ParentToolName = %q, want researcher", got.ParentToolName)
+	}
+	if got.ParentToolDescription != "Delegates fact-finding" {
+		t.Errorf("emit() ParentToolDescription = %q, want %q", got.ParentToolDescription, "Delegates fact-finding")
 	}
 }
 

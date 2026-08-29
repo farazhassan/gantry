@@ -127,6 +127,38 @@ func TestRunFoldsParentLinkIntoNestedIdentity(t *testing.T) {
 	}
 }
 
+func TestRunFoldsParentLinkNameAndDescriptionIntoNestedEvents(t *testing.T) {
+	a, err := gantry.NewAgent(
+		gantry.WithLLM(eval.NewMockLLMClient(
+			gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},
+		)),
+		gantry.WithName("investigation"),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+
+	ctx := gantry.WithParentLink(context.Background(), gantry.ParentLink{
+		RunID:       "run-parent-123",
+		ToolCallID:  "call-1",
+		Name:        "researcher",
+		Description: "Delegates fact-finding to a research specialist",
+	})
+
+	events := collectEvents(t, func(sink gantry.EventSink) (*gantry.State, error) {
+		return a.RunStream(ctx, "investigate", sink)
+	})
+
+	for i, ev := range events {
+		if ev.ParentToolName != "researcher" {
+			t.Errorf("event %d ParentToolName = %q, want researcher", i, ev.ParentToolName)
+		}
+		if ev.ParentToolDescription != "Delegates fact-finding to a research specialist" {
+			t.Errorf("event %d ParentToolDescription = %q, want %q", i, ev.ParentToolDescription, "Delegates fact-finding to a research specialist")
+		}
+	}
+}
+
 func TestRunWithoutParentLinkLeavesParentFieldsEmpty(t *testing.T) {
 	a, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(
 		gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd},

@@ -299,6 +299,8 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	if link, ok := parentLinkFrom(ctx); ok {
 		ident.parentRunID = link.RunID
 		ident.parentToolCallID = link.ToolCallID
+		ident.parentToolName = link.Name
+		ident.parentToolDescription = link.Description
 		ctx = clearParentLink(ctx)
 	}
 	ctx = withIdentity(ctx, ident)

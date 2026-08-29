@@ -131,6 +131,12 @@ type Event struct {
 	ParentRunID      string `json:"parent_run_id,omitempty"`
 	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
 
+	// ParentToolName/ParentToolDescription are the spawning tool's own
+	// identity (see ParentLink) -- what THIS run is, as a sub-agent. Both
+	// empty for a top-level run, or a nested run started without them set.
+	ParentToolName        string `json:"parent_tool_name,omitempty"`
+	ParentToolDescription string `json:"parent_tool_description,omitempty"`
+
 	// Dropped counts events discarded by a buffering wrapper (see
 	// NewBufferedSink) since the previous delivered event; zero on direct,
 	// unbuffered streams.
@@ -201,6 +207,8 @@ func emit(ctx context.Context, ev Event) error {
 		ev.Agent = id.agent
 		ev.ParentRunID = id.parentRunID
 		ev.ParentToolCallID = id.parentToolCallID
+		ev.ParentToolName = id.parentToolName
+		ev.ParentToolDescription = id.parentToolDescription
 	}
 	return s(ev)
 }
