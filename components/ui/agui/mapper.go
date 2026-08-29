@@ -59,6 +59,18 @@ func NewMapper(threadID, runID string) *Mapper {
 // delegate-tool child could act on, so the same treatment applies here.
 // DoneClientToolCall is deliberately excluded: it's a suspend (see
 // SUBAGENT_FINISHED's outcome:"suspended"), not a failure.
+//
+// If you add a new gantry.DoneReason to errors.go, you MUST also make a
+// conscious classification decision here: either add it to this map (it's a
+// failure, like the reasons above), or leave it out with a comment
+// explaining why it belongs in the SUBAGENT_FINISHED/success bucket instead
+// (like DoneClientToolCall above). TestSubagentErrorReasonsExactSet in
+// mapper_test.go only guards this map's own contents against accidental
+// drift (an entry added or removed by mistake) -- it cannot detect a new
+// DoneReason value that exists in errors.go but was never considered here,
+// since Go has no reflection over a const block. Left unclassified, a new
+// reason silently falls through Map's default case and is reported as
+// SUBAGENT_FINISHED (success) with no compiler or test signal.
 var subagentErrorReasons = map[gantry.DoneReason]bool{
 	gantry.DoneError:             true,
 	gantry.DoneGuardrailBlocked:  true,

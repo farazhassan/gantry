@@ -34,6 +34,11 @@ var (
 )
 
 // DoneReason describes why the agent loop terminated.
+//
+// Adding a new DoneReason? components/ui/agui/mapper.go's
+// subagentErrorReasons must decide whether it's a SUBAGENT_ERROR or
+// SUBAGENT_FINISHED for a nested run -- that map's own test only catches
+// accidental drift in its contents, not an unconsidered new value here.
 type DoneReason string
 
 const (

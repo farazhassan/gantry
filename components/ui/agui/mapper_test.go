@@ -229,6 +229,31 @@ func TestMapperNestedDoneClassifiesByDoneReason(t *testing.T) {
 	}
 }
 
+// TestSubagentErrorReasonsExactSet guards subagentErrorReasons against
+// accidental drift in its own contents: it asserts the map contains exactly
+// the 5 DoneReasons it's meant to classify as SUBAGENT_ERROR today, no more
+// and no fewer. This catches someone accidentally adding or removing an
+// entry (e.g. a bad merge, a copy-paste edit gone wrong).
+//
+// It does NOT catch gantry.errors.go growing a 10th DoneReason: Go has no
+// reflection over a const block, so nothing here can discover a DoneReason
+// value that was never listed anywhere. That half of the guardrail is a
+// cross-reference comment on the DoneReason const block in errors.go
+// pointing back at subagentErrorReasons, so whoever adds a new reason there
+// is prompted to make a conscious classification decision here.
+func TestSubagentErrorReasonsExactSet(t *testing.T) {
+	want := map[gantry.DoneReason]bool{
+		gantry.DoneError:             true,
+		gantry.DoneGuardrailBlocked:  true,
+		gantry.DoneHumanAborted:      true,
+		gantry.DoneToolPolicyAborted: true,
+		gantry.DoneHandoff:           true,
+	}
+	if !reflect.DeepEqual(subagentErrorReasons, want) {
+		t.Fatalf("subagentErrorReasons drifted from its expected exact set\ngot  %#v\nwant %#v", subagentErrorReasons, want)
+	}
+}
+
 func TestMapperTopLevelDoneStillEmitsRunFinished(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
