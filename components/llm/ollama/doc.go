@@ -10,7 +10,8 @@
 //	    Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
 //	})
 //
-// Ollama omits per-tool-call IDs, so the client synthesizes stable index-based
-// IDs ("call-0", "call-1", ...) to satisfy the gantry contract that links a
-// tool result back to its call.
+// Ollama omits per-tool-call IDs, so the client synthesizes IDs ("call-<tag>-0",
+// "call-<tag>-1", ...) to satisfy the gantry contract that links a tool result
+// back to its call — tagged per response so ids stay unique across separate
+// Generate/GenerateStream calls, not just within one of them.
 package ollama

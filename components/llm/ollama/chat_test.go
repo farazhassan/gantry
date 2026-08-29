@@ -7,12 +7,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/ollama"
 )
+
+// toolCallIDPattern matches a synthesized ID's shape: "call-" + a per-response
+// random tag + "-" + the call's index within that response. Tests assert
+// against this shape rather than an exact literal like "call-0" now that the
+// tag makes every response's IDs unique (see wire.go's toToolCalls).
+var toolCallIDPattern = regexp.MustCompile(`^call-[0-9a-z]+-\d+$`)
 
 // newServerClient spins up an httptest server with the given handler and returns
 // a Client pointed at it. The server is closed via t.Cleanup.
@@ -133,8 +140,8 @@ func TestGenerateMapsToolCallsWithSynthesizedIDs(t *testing.T) {
 		t.Fatalf("ToolCalls len = %d, want 1", len(resp.ToolCalls))
 	}
 	tc := resp.ToolCalls[0]
-	if tc.ID != "call-0" {
-		t.Errorf("ToolCall.ID = %q, want call-0", tc.ID)
+	if !toolCallIDPattern.MatchString(tc.ID) {
+		t.Errorf("ToolCall.ID = %q, want to match %s", tc.ID, toolCallIDPattern)
 	}
 	if tc.Name != "get_weather" {
 		t.Errorf("ToolCall.Name = %q, want get_weather", tc.Name)
@@ -144,6 +151,38 @@ func TestGenerateMapsToolCallsWithSynthesizedIDs(t *testing.T) {
 	}
 	if resp.StopReason != gantry.StopReasonToolUse {
 		t.Errorf("StopReason = %q, want %q (tool calls present)", resp.StopReason, gantry.StopReasonToolUse)
+	}
+}
+
+// A run that makes more than one Ollama call each producing a tool call —
+// a second top-level turn, or a nested sub-agent's own generation running
+// against the same client — must not synthesize the same ID twice. AG-UI
+// (and any consumer linking a ToolResult back to its ToolCall) treats
+// toolCallId as unique within a run; a plain per-response index ("call-0",
+// "call-1", ...) collides on every such call, since indexing used to
+// restart at 0 each time.
+func TestGenerateSynthesizedToolCallIDsAreUniqueAcrossCalls(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"message": {"role":"assistant","content":"",
+				"tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"SF"}}}]},
+			"done": true, "done_reason": "stop"
+		}`)
+	})
+
+	req := gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "weather?"}}}
+	resp1, err := c.Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate (1st): %v", err)
+	}
+	resp2, err := c.Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate (2nd): %v", err)
+	}
+
+	id1, id2 := resp1.ToolCalls[0].ID, resp2.ToolCalls[0].ID
+	if id1 == id2 {
+		t.Errorf("two separate Generate calls synthesized the same ToolCall.ID %q — a run with both would look like a duplicate toolCallId to any AG-UI consumer", id1)
 	}
 }
 

@@ -3,6 +3,8 @@ package ollama
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
+	"strconv"
 
 	"github.com/farazhassan/gantry"
 )
@@ -152,17 +154,26 @@ func assembleResponse(content string, calls []wireToolCall, doneReason string, p
 	}
 }
 
-// toToolCalls synthesizes an ID per call. Ollama omits per-call IDs, but the
-// gantry links a ToolResult back to its ToolCall by ID, so a stable
-// index-based id ("call-0", "call-1", ...) is required.
+// toToolCalls synthesizes an ID per call. Ollama omits per-call IDs, but
+// gantry links a ToolResult back to its ToolCall by ID, and requires that ID
+// be unique within a run — not just within this one response. A plain
+// per-response index ("call-0", "call-1", ...) collides whenever a run
+// contains more than one Ollama response with tool calls (a second
+// top-level turn, or a nested sub-agent's own generation against the same
+// client), since indexing used to restart at 0 every time. The random tag
+// keeps ids readable and stable within a response while making collisions
+// across responses vanishingly unlikely — Client holds no per-call state
+// (see its doc comment), so this can't be a monotonic counter without
+// giving it one.
 func toToolCalls(calls []wireToolCall) []gantry.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
+	tag := strconv.FormatUint(uint64(rand.Uint32()), 36)
 	out := make([]gantry.ToolCall, len(calls))
 	for i, c := range calls {
 		out[i] = gantry.ToolCall{
-			ID:    fmt.Sprintf("call-%d", i),
+			ID:    fmt.Sprintf("call-%s-%d", tag, i),
 			Name:  c.Function.Name,
 			Input: c.Function.Arguments,
 		}
