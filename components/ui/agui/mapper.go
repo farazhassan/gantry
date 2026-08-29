@@ -28,6 +28,12 @@ type Mapper struct {
 
 	lastUsage    map[string]gantry.Usage      // gantry RunID -> last usage snapshot emitted as gantry.usage, if any
 	lastActivity map[string]activityStepValue // "runID:stepID" -> last activity snapshot/delta content emitted for that step
+
+	// subagentStarted tracks, per gantry RunID, whether SUBAGENT_STARTED has
+	// already been emitted for that (nested) run -- mirrors started's
+	// lazy-once pattern for RUN_STARTED, but keyed per-RunID since a Mapper
+	// sees many nested runs over its lifetime.
+	subagentStarted map[string]bool
 }
 
 // NewMapper returns a Mapper for a single AG-UI thread identified by
@@ -35,14 +41,42 @@ type Mapper struct {
 // Gantry-level Event.RunID).
 func NewMapper(threadID, runID string) *Mapper {
 	return &Mapper{
-		threadID:      threadID,
-		runID:         runID,
-		openMsg:       map[string]string{},
-		msgSeq:        map[string]int{},
-		openReasoning: map[string]string{},
-		lastUsage:     map[string]gantry.Usage{},
-		lastActivity:  map[string]activityStepValue{},
+		threadID:        threadID,
+		runID:           runID,
+		openMsg:         map[string]string{},
+		msgSeq:          map[string]int{},
+		openReasoning:   map[string]string{},
+		lastUsage:       map[string]gantry.Usage{},
+		lastActivity:    map[string]activityStepValue{},
+		subagentStarted: map[string]bool{},
 	}
+}
+
+// subagentErrorReasons are the DoneReasons that classify a nested run's
+// EventDone as SUBAGENT_ERROR rather than SUBAGENT_FINISHED. DoneHandoff is
+// included because errors.go already documents task-driven runs treating a
+// handoff as an explicit failure -- there is no resolver concept a
+// delegate-tool child could act on, so the same treatment applies here.
+// DoneClientToolCall is deliberately excluded: it's a suspend (see
+// SUBAGENT_FINISHED's outcome:"suspended"), not a failure.
+//
+// If you add a new gantry.DoneReason to errors.go, you MUST also make a
+// conscious classification decision here: either add it to this map (it's a
+// failure, like the reasons above), or leave it out with a comment
+// explaining why it belongs in the SUBAGENT_FINISHED/success bucket instead
+// (like DoneClientToolCall above). TestSubagentErrorReasonsExactSet in
+// mapper_test.go only guards this map's own contents against accidental
+// drift (an entry added or removed by mistake) -- it cannot detect a new
+// DoneReason value that exists in errors.go but was never considered here,
+// since Go has no reflection over a const block. Left unclassified, a new
+// reason silently falls through Map's default case and is reported as
+// SUBAGENT_FINISHED (success) with no compiler or test signal.
+var subagentErrorReasons = map[gantry.DoneReason]bool{
+	gantry.DoneError:             true,
+	gantry.DoneGuardrailBlocked:  true,
+	gantry.DoneHumanAborted:      true,
+	gantry.DoneToolPolicyAborted: true,
+	gantry.DoneHandoff:           true,
 }
 
 // Map translates one Gantry event into zero-or-more AG-UI events. It emits
@@ -63,10 +97,13 @@ func NewMapper(threadID, runID string) *Mapper {
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
-// the top-level run finishing, and maps to RUN_FINISHED (ending the whole
-// AG-UI stream); a done event WITH a parent link is a nested sub-agent run
-// finishing, and maps to a CUSTOM "gantry.subagent_done" event instead — the
-// AG-UI stream, and the parent run, may still be going.
+// the top-level run finishing, and maps unconditionally to RUN_FINISHED
+// (ending the whole AG-UI stream); a done event WITH a parent link is a
+// nested sub-agent run finishing — the AG-UI stream, and the parent run,
+// may still be going — and maps to either SUBAGENT_FINISHED or
+// SUBAGENT_ERROR depending on DoneReason (see subagentErrorReasons for the
+// exact classification), with SUBAGENT_FINISHED additionally carrying
+// outcome:{type:"suspended"} when the reason is DoneClientToolCall.
 func (m *Mapper) Map(ev gantry.Event) []Event {
 	out := m.startFrame()
 	id := identity{
@@ -77,6 +114,10 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		ParentRunID:      ev.ParentRunID,
 		ParentToolCallID: ev.ParentToolCallID,
 	}
+	if ev.ParentRunID != "" || ev.ParentToolCallID != "" {
+		id.SubagentRunID = ev.RunID
+	}
+	out = append(out, m.subagentStartFrame(ev, id)...)
 
 	if ev.Dropped > 0 {
 		out = append(out, newEventsDropped(ev.Dropped, id))
@@ -149,10 +190,13 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	case gantry.EventDone:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
-		if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+		switch {
+		case ev.ParentRunID == "" && ev.ParentToolCallID == "":
 			out = append(out, newRunFinished(m.threadID, m.runID))
-		} else {
-			out = append(out, newSubagentDone(id))
+		case subagentErrorReasons[ev.DoneReason]:
+			out = append(out, newSubagentError(ev.RunID, "sub-agent run terminated: "+string(ev.DoneReason)).withIdentity(id))
+		default:
+			out = append(out, newSubagentFinished(ev.RunID, ev.FinalOutput, ev.DoneReason == gantry.DoneClientToolCall).withIdentity(id))
 		}
 	}
 
@@ -186,6 +230,33 @@ func (m *Mapper) startFrame() []Event {
 	}
 	m.started = true
 	return []Event{newRunStarted(m.threadID, m.runID)}
+}
+
+// subagentStartFrame returns a SUBAGENT_STARTED event the first time Map
+// sees ev's RunID as a nested (sub-agent) run, marking it started so later
+// events for the same RunID return nil -- mirrors startFrame's lazy-once
+// pattern for RUN_STARTED. Returns nil for a top-level event (no
+// ParentRunID/ParentToolCallID set).
+//
+// parentSubagentRunID's m.subagentStarted[ev.ParentRunID] check relies on
+// the parent run's own first event always being processed before any event
+// from a run it spawns -- true by causality (a run must itself have
+// started before it can invoke a tool that spawns a child), not something
+// Sink's mutex itself orders (that mutex only serializes concurrent Map
+// calls, it doesn't order them across goroutines).
+func (m *Mapper) subagentStartFrame(ev gantry.Event, id identity) []Event {
+	if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+		return nil
+	}
+	if m.subagentStarted[ev.RunID] {
+		return nil
+	}
+	m.subagentStarted[ev.RunID] = true
+	var parentSubagentRunID string
+	if m.subagentStarted[ev.ParentRunID] {
+		parentSubagentRunID = ev.ParentRunID
+	}
+	return []Event{newSubagentStarted(ev.RunID, ev.ParentToolName, ev.ParentToolDescription, parentSubagentRunID).withIdentity(id)}
 }
 
 // stepName returns the AG-UI STEP_STARTED/STEP_FINISHED stepName for ev.

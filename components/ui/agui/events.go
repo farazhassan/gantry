@@ -35,6 +35,14 @@ type identity struct {
 	Agent            string `json:"agent,omitempty"`
 	ParentRunID      string `json:"parentRunId,omitempty"`
 	ParentToolCallID string `json:"parentToolCallId,omitempty"`
+
+	// SubagentRunID is the AG-UI spec's flat attribution field: the RunID of
+	// the nested sub-agent run that produced this event, empty for a
+	// top-level event. A generic AG-UI client that only understands the
+	// spec field (not gantry's richer identity fields above) can use this
+	// alone to demux concurrent sub-agent output. Populated by Mapper.Map
+	// (see mapper.go).
+	SubagentRunID string `json:"subagentRunId,omitempty"`
 }
 
 // AG-UI event type discriminators.
@@ -63,6 +71,10 @@ const (
 
 	typeActivitySnapshot = "ACTIVITY_SNAPSHOT"
 	typeActivityDelta    = "ACTIVITY_DELTA"
+
+	typeSubagentStarted  = "SUBAGENT_STARTED"
+	typeSubagentFinished = "SUBAGENT_FINISHED"
+	typeSubagentError    = "SUBAGENT_ERROR"
 )
 
 // --- Lifecycle ---
@@ -331,9 +343,9 @@ func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCall
 // --- Custom ---
 
 // Custom is the AG-UI CUSTOM event: a named application-defined payload
-// carried inside an otherwise standard stream. Gantry uses it for the
-// gantry.subagent_done nested-completion signal (see mapper.go); clients
-// that don't recognize the name ignore it.
+// carried inside an otherwise standard stream. Gantry uses it for
+// gantry.usage and gantry.events_dropped (see mapper.go); clients that
+// don't recognize the name ignore it.
 type Custom struct {
 	Type  string `json:"type"`
 	Name  string `json:"name"`
@@ -348,17 +360,6 @@ func (e Custom) withIdentity(id identity) Event {
 }
 func newCustom(name string, value any) Custom {
 	return Custom{Type: typeCustom, Name: name, Value: value}
-}
-
-// subagentDoneName is the CUSTOM event name signaling that a NESTED
-// sub-agent run finished — as opposed to RUN_FINISHED, which signals the
-// single top-level AG-UI run finishing. See Mapper's EventDone handling.
-const subagentDoneName = "gantry.subagent_done"
-
-func newSubagentDone(id identity) Custom {
-	c := newCustom(subagentDoneName, nil)
-	c.identity = id
-	return c
 }
 
 // eventsDroppedName is the CUSTOM event name signaling that a buffering
@@ -485,6 +486,105 @@ func (e ActivityDelta) withIdentity(id identity) Event {
 }
 func newActivityDelta(msgID string, patch []jsonPatchOp) ActivityDelta {
 	return ActivityDelta{Type: typeActivityDelta, MessageID: msgID, ActivityType: activityStepType, Patch: patch}
+}
+
+// --- Subagent lifecycle ---
+
+// SubagentStarted is the AG-UI SUBAGENT_STARTED event: a nested sub-agent
+// run has begun. Name/Description are the sub-agent's own identity (e.g.
+// components/subagent.New's name/description) -- what this run IS, not
+// anything about its parent. ParentToolCallID (the tool call that spawned
+// it) is carried by the embedded identity, which already has the right
+// field/tag for it; ParentSubagentRunID is set only when the parent run is
+// ITSELF a known sub-agent (a grandchild case), distinct from identity's
+// unconditional ParentRunID.
+//
+// SubagentRunID collides on the wire with identity's own (omitempty)
+// SubagentRunID field -- see TestSubagentEventsExplicitSubagentRunIDWinsOverEmbeddedIdentity
+// for why that's safe: Go's JSON encoder promotes this shallower, explicit
+// field and silently drops the deeper embedded one.
+type SubagentStarted struct {
+	Type                string `json:"type"`
+	SubagentRunID       string `json:"subagentRunId"`
+	Name                string `json:"name"`
+	Description         string `json:"description,omitempty"`
+	ParentSubagentRunID string `json:"parentSubagentRunId,omitempty"`
+	identity
+}
+
+func (e SubagentStarted) eventType() string { return e.Type }
+func (e SubagentStarted) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newSubagentStarted(subagentRunID, name, description, parentSubagentRunID string) SubagentStarted {
+	return SubagentStarted{
+		Type:                typeSubagentStarted,
+		SubagentRunID:       subagentRunID,
+		Name:                name,
+		Description:         description,
+		ParentSubagentRunID: parentSubagentRunID,
+	}
+}
+
+// subagentOutcome is SUBAGENT_FINISHED's discriminated outcome payload.
+// Only "success" (indistinguishable from Outcome == nil, the legacy
+// reading) and "suspended" are used -- interruptIds is deliberately not
+// modeled (see the design spec's "out of scope").
+type subagentOutcome struct {
+	Type string `json:"type"`
+}
+
+// SubagentFinished is the AG-UI SUBAGENT_FINISHED event: a nested sub-agent
+// run reached a terminal state. Result mirrors RUN_FINISHED.result (here,
+// gantry.Event.FinalOutput). Outcome is nil for a normal finish (legacy
+// success reading) or {"type":"suspended"} when the run is paused awaiting
+// an answer (gantry.DoneClientToolCall) rather than actually done.
+//
+// SubagentRunID collides on the wire with identity's own SubagentRunID
+// field -- see SubagentStarted's doc comment for why that's safe.
+type SubagentFinished struct {
+	Type          string           `json:"type"`
+	SubagentRunID string           `json:"subagentRunId"`
+	Result        string           `json:"result,omitempty"`
+	Outcome       *subagentOutcome `json:"outcome,omitempty"`
+	identity
+}
+
+func (e SubagentFinished) eventType() string { return e.Type }
+func (e SubagentFinished) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newSubagentFinished(subagentRunID, result string, suspended bool) SubagentFinished {
+	f := SubagentFinished{Type: typeSubagentFinished, SubagentRunID: subagentRunID, Result: result}
+	if suspended {
+		f.Outcome = &subagentOutcome{Type: "suspended"}
+	}
+	return f
+}
+
+// SubagentError is the AG-UI SUBAGENT_ERROR event: a nested sub-agent run
+// terminated abnormally. Message is synthesized from gantry.DoneReason (no
+// real error text is available at this layer yet -- see the design spec's
+// "out of scope").
+//
+// SubagentRunID collides on the wire with identity's own SubagentRunID
+// field -- see SubagentStarted's doc comment for why that's safe.
+type SubagentError struct {
+	Type          string `json:"type"`
+	SubagentRunID string `json:"subagentRunId"`
+	Message       string `json:"message"`
+	identity
+}
+
+func (e SubagentError) eventType() string { return e.Type }
+func (e SubagentError) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func newSubagentError(subagentRunID, message string) SubagentError {
+	return SubagentError{Type: typeSubagentError, SubagentRunID: subagentRunID, Message: message}
 }
 
 // WriteSSE marshals ev and writes it as one Server-Sent Events frame:

@@ -26,6 +26,9 @@ type eventIdentity struct {
 
 	parentRunID      string
 	parentToolCallID string
+
+	parentToolName        string
+	parentToolDescription string
 }
 
 // identityCtxKey is the context key under which the run's identity is stored.
@@ -59,9 +62,15 @@ func newRunID() string {
 // Agent.Run (or RunStream) for the child; the child's own a.run folds it
 // into the nested run's minted eventIdentity, so every event that run
 // emits carries ParentRunID/ParentToolCallID back to the spawning call.
+// Name/Description are the spawning tool's own identity (e.g.
+// components/subagent.New's name/description) — what THIS run is, as a
+// sub-agent, not anything about the parent itself.
 type ParentLink struct {
 	RunID      string
 	ToolCallID string
+
+	Name        string
+	Description string
 }
 
 // parentLinkKey is the context key carrying an optional ParentLink.

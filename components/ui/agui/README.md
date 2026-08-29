@@ -123,22 +123,33 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
 Implemented: `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`, `STEP_STARTED`/
 `STEP_FINISHED`, `TEXT_MESSAGE_START`/`TEXT_MESSAGE_CONTENT`/
 `TEXT_MESSAGE_END`, `TOOL_CALL_START`/`TOOL_CALL_ARGS`/`TOOL_CALL_END`/
-`TOOL_CALL_RESULT`, `CUSTOM` (gantry-specific: `gantry.usage`,
-`gantry.events_dropped`, `gantry.subagent_done`), `REASONING_START`/
+`TOOL_CALL_RESULT`, `SUBAGENT_STARTED`/`SUBAGENT_FINISHED`/`SUBAGENT_ERROR`
+(a nested sub-agent run's lifecycle — `SUBAGENT_FINISHED` carries
+`outcome:{"type":"suspended"}` when the run paused on a client-tool call
+rather than actually finishing), `CUSTOM` (gantry-specific: `gantry.usage`,
+`gantry.events_dropped`), `REASONING_START`/
 `REASONING_MESSAGE_START`/`REASONING_MESSAGE_CONTENT`/
 `REASONING_MESSAGE_END`/`REASONING_END` (translated generically from any
 adapter's `StreamChunk.ReasoningDelta` — see `anthropic.WithExtendedThinking`,
 `openai.WithReasoningEffort`, `ollama.WithThinking`, and
 `openrouter.WithReasoningEffort`), `RAW` (provider frames this package
 doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
-(`components/planner`'s `update_plan` plan-step progress).
+(`components/planner`'s `update_plan` plan-step progress). The AG-UI spec's
+optional `subagentRunId` attribution field (the RunID of the nested run that
+produced an event) is stamped on every event type above except the three
+top-level lifecycle events (`RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`), which
+leave it empty.
 
 Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
 `MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"
 above), the `*_CHUNK` convenience events (redundant with the explicit
-Start/Content/End sequence this package always emits), and
+Start/Content/End sequence this package always emits),
 `REASONING_ENCRYPTED_VALUE` (no adapter round-trips thinking
-signatures/encrypted blocks back to the provider yet).
+signatures/encrypted blocks back to the provider yet), `SUBAGENT_STARTED`'s
+`parentMessageId` (no gantry concept of "the message holding a tool call"),
+`interruptIds` on a suspended outcome (no `Interrupt` id concept in gantry
+yet), and preserving the same `subagentRunId` across a suspend/resume round
+trip (gantry mints a fresh RunID on every `Agent.Resume` call today).
 
 ### Error behavior
 

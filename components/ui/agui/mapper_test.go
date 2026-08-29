@@ -184,23 +184,73 @@ func TestMapperDoneClosesOpenText(t *testing.T) {
 
 // --- New: nested sub-agent identity/scoping coverage ---
 
-func TestMapperNestedDoneEmitsSubagentDoneNotRunFinished(t *testing.T) {
-	m := NewMapper("t1", "r1")
-	m.started = true
-	got := m.Map(gantry.Event{
-		Type:             gantry.EventDone,
-		DoneReason:       gantry.DoneNoToolCalls,
-		RunID:            "run-child",
-		Agent:            "investigation",
-		ParentRunID:      "run-parent",
-		ParentToolCallID: "call-1",
-	})
-	want := []Event{newSubagentDone(identity{
-		RunID: "run-child", Agent: "investigation",
-		ParentRunID: "run-parent", ParentToolCallID: "call-1",
-	})}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got  %#v\nwant %#v", got, want)
+func TestMapperNestedDoneClassifiesByDoneReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		reason     gantry.DoneReason
+		wantFinish bool // true: SUBAGENT_FINISHED, false: SUBAGENT_ERROR
+		suspended  bool
+	}{
+		{"no_tool_calls", gantry.DoneNoToolCalls, true, false},
+		{"max_iterations", gantry.DoneMaxIterations, true, false},
+		{"budget_exceeded", gantry.DoneBudgetExceeded, true, false},
+		{"client_tool_call_suspends", gantry.DoneClientToolCall, true, true},
+		{"error", gantry.DoneError, false, false},
+		{"guardrail_blocked", gantry.DoneGuardrailBlocked, false, false},
+		{"human_aborted", gantry.DoneHumanAborted, false, false},
+		{"tool_policy_aborted", gantry.DoneToolPolicyAborted, false, false},
+		{"handoff", gantry.DoneHandoff, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMapper("t1", "r1")
+			m.started = true
+			m.subagentStarted = map[string]bool{"run-child": true} // isolate from lazy-start
+			id := identity{
+				RunID: "run-child", Agent: "investigation",
+				ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
+			}
+			got := m.Map(gantry.Event{
+				Type: gantry.EventDone, DoneReason: tc.reason,
+				RunID: "run-child", Agent: "investigation",
+				ParentRunID: "run-parent", ParentToolCallID: "call-1",
+				FinalOutput: "42 facts",
+			})
+			var want []Event
+			if tc.wantFinish {
+				want = []Event{newSubagentFinished("run-child", "42 facts", tc.suspended).withIdentity(id)}
+			} else {
+				want = []Event{newSubagentError("run-child", "sub-agent run terminated: "+string(tc.reason)).withIdentity(id)}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s: got  %#v\nwant %#v", tc.name, got, want)
+			}
+		})
+	}
+}
+
+// TestSubagentErrorReasonsExactSet guards subagentErrorReasons against
+// accidental drift in its own contents: it asserts the map contains exactly
+// the 5 DoneReasons it's meant to classify as SUBAGENT_ERROR today, no more
+// and no fewer. This catches someone accidentally adding or removing an
+// entry (e.g. a bad merge, a copy-paste edit gone wrong).
+//
+// It does NOT catch gantry.errors.go growing a 10th DoneReason: Go has no
+// reflection over a const block, so nothing here can discover a DoneReason
+// value that was never listed anywhere. That half of the guardrail is a
+// cross-reference comment on the DoneReason const block in errors.go
+// pointing back at subagentErrorReasons, so whoever adds a new reason there
+// is prompted to make a conscious classification decision here.
+func TestSubagentErrorReasonsExactSet(t *testing.T) {
+	want := map[gantry.DoneReason]bool{
+		gantry.DoneError:             true,
+		gantry.DoneGuardrailBlocked:  true,
+		gantry.DoneHumanAborted:      true,
+		gantry.DoneToolPolicyAborted: true,
+		gantry.DoneHandoff:           true,
+	}
+	if !reflect.DeepEqual(subagentErrorReasons, want) {
+		t.Fatalf("subagentErrorReasons drifted from its expected exact set\ngot  %#v\nwant %#v", subagentErrorReasons, want)
 	}
 }
 
@@ -220,6 +270,7 @@ func TestMapperTopLevelDoneStillEmitsRunFinished(t *testing.T) {
 func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent opens a text message...
 	pStart := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "parent-1", RunID: "run-parent", Agent: "orchestrator"})
@@ -255,20 +306,20 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 		Type: gantry.EventDone, DoneReason: gantry.DoneNoToolCalls,
 		RunID: "run-child", Agent: "investigation", ParentRunID: "run-parent", ParentToolCallID: "call-1",
 	})
-	var sawChildTextEnd, sawSubagentDone bool
+	var sawChildTextEnd, sawSubagentFinished bool
 	for _, ev := range cDone {
 		if end, ok := ev.(TextMessageEnd); ok && end.MessageID == childMsgID {
 			sawChildTextEnd = true
 		}
-		if c, ok := ev.(Custom); ok && c.Name == subagentDoneName {
-			sawSubagentDone = true
+		if _, ok := ev.(SubagentFinished); ok {
+			sawSubagentFinished = true
 		}
 	}
 	if !sawChildTextEnd {
 		t.Errorf("child done: expected TEXT_MESSAGE_END for %q, got %#v", childMsgID, cDone)
 	}
-	if !sawSubagentDone {
-		t.Errorf("child done: expected a gantry.subagent_done CUSTOM event, got %#v", cDone)
+	if !sawSubagentFinished {
+		t.Errorf("child done: expected a SUBAGENT_FINISHED event, got %#v", cDone)
 	}
 
 	// The parent's message is STILL open — closing it independently must
@@ -289,6 +340,7 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 func TestMapperInterleavedRunsBracketReasoningIndependently(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent opens a reasoning message...
 	pStart := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "parent-thinking", RunID: "run-parent", Agent: "orchestrator"})
@@ -442,6 +494,7 @@ func TestMapperDoneClosesOpenReasoning(t *testing.T) {
 func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent's own phase, unsuffixed -- exactly as before this fix.
 	pGot := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseToolExec, RunID: "run-parent", Agent: "orchestrator"})
@@ -495,6 +548,138 @@ func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 	}
 	if pFinStep.StepName != "tool_exec" {
 		t.Errorf("parent StepFinished.StepName = %q, want bare %q", pFinStep.StepName, "tool_exec")
+	}
+}
+
+func TestMapperLazySubagentStarted(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
+	}
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+		ParentToolName: "researcher", ParentToolDescription: "Delegates fact-finding",
+	})
+	want := []Event{
+		newSubagentStarted("run-child", "researcher", "Delegates fact-finding", "").withIdentity(id),
+		newStepStarted("start::run-child").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+
+	// A later event from the SAME RunID must not fire SUBAGENT_STARTED again.
+	got2 := m.Map(gantry.Event{
+		Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	want2 := []Event{newStepFinished("start::run-child").withIdentity(id)}
+	if !reflect.DeepEqual(got2, want2) {
+		t.Fatalf("second event: got  %#v\nwant %#v", got2, want2)
+	}
+}
+
+func TestMapperLazySubagentStartedOmitsParentSubagentRunIDWhenParentIsTopLevel(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	started, ok := got[0].(SubagentStarted)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted", got[0])
+	}
+	if started.ParentSubagentRunID != "" {
+		t.Errorf("ParentSubagentRunID = %q, want empty (parent is top-level, never itself a subagent)", started.ParentSubagentRunID)
+	}
+}
+
+func TestMapperLazySubagentStartedSetsParentSubagentRunIDWhenParentIsSubagent(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	// The parent ("run-child") is itself a nested sub-agent of "run-root".
+	_ = m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-root", ParentToolCallID: "call-1",
+	})
+
+	// A grandchild nested under "run-child" must report run-child as its
+	// parentSubagentRunId, since run-child is itself a subagent.
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-grandchild", Agent: "verification",
+		ParentRunID: "run-child", ParentToolCallID: "call-2",
+	})
+	started, ok := got[0].(SubagentStarted)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted", got[0])
+	}
+	if started.ParentSubagentRunID != "run-child" {
+		t.Errorf("ParentSubagentRunID = %q, want run-child (its parent is itself a subagent)", started.ParentSubagentRunID)
+	}
+}
+
+func TestMapperOrdinaryNestedEventsCarrySubagentRunID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true} // isolate from the lazy-start behavior itself
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventTextDelta, TextDelta: "hi",
+		RunID: "run-child", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	start, ok := got[0].(TextMessageStart)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want TextMessageStart", got[0])
+	}
+	if start.SubagentRunID != "run-child" {
+		t.Errorf("SubagentRunID = %q, want run-child", start.SubagentRunID)
+	}
+}
+
+func TestMapperTopLevelEventsOmitSubagentRunID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"})
+	start, ok := got[0].(TextMessageStart)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want TextMessageStart", got[0])
+	}
+	if start.SubagentRunID != "" {
+		t.Errorf("SubagentRunID = %q, want empty for a top-level run", start.SubagentRunID)
+	}
+}
+
+// TestMapperLazySubagentStartedNotPhaseStartSpecific confirms the lazy
+// SUBAGENT_STARTED emission fires off ANY first event for a not-yet-seen
+// nested RunID -- not just EventPhaseStart, which is what every other lazy-
+// start test above happens to use as its first event.
+func TestMapperLazySubagentStartedNotPhaseStartSpecific(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventTextDelta, TextDelta: "hi",
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	if len(got) == 0 {
+		t.Fatalf("got no events, want at least a SUBAGENT_STARTED")
+	}
+	if _, ok := got[0].(SubagentStarted); !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted (lazy start must not be PhaseStart-specific)", got[0])
 	}
 }
 
