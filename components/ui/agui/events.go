@@ -552,6 +552,9 @@ type subagentOutcome struct {
 // gantry.Event.FinalOutput). Outcome is nil for a normal finish (legacy
 // success reading) or {"type":"suspended"} when the run is paused awaiting
 // an answer (gantry.DoneClientToolCall) rather than actually done.
+//
+// SubagentRunID collides on the wire with identity's own SubagentRunID
+// field -- see SubagentStarted's doc comment for why that's safe.
 type SubagentFinished struct {
 	Type          string           `json:"type"`
 	SubagentRunID string           `json:"subagentRunId"`
@@ -577,6 +580,9 @@ func newSubagentFinished(subagentRunID, result string, suspended bool) SubagentF
 // terminated abnormally. Message is synthesized from gantry.DoneReason (no
 // real error text is available at this layer yet -- see the design spec's
 // "out of scope").
+//
+// SubagentRunID collides on the wire with identity's own SubagentRunID
+// field -- see SubagentStarted's doc comment for why that's safe.
 type SubagentError struct {
 	Type          string `json:"type"`
 	SubagentRunID string `json:"subagentRunId"`
