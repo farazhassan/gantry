@@ -18,6 +18,11 @@ func TestEventJSONShape(t *testing.T) {
 		{"step_started", newStepStarted("llm_call"), `{"type":"STEP_STARTED","stepName":"llm_call"}`},
 		{"step_finished", newStepFinished("llm_call"), `{"type":"STEP_FINISHED","stepName":"llm_call"}`},
 		{"text_start", newTextMessageStart("m1"), `{"type":"TEXT_MESSAGE_START","messageId":"m1","role":"assistant"}`},
+		{
+			"text_start_with_subagent_attribution",
+			newTextMessageStart("m1").withIdentity(identity{RunID: "run-child", SubagentRunID: "run-child"}),
+			`{"type":"TEXT_MESSAGE_START","messageId":"m1","role":"assistant","runId":"run-child","subagentRunId":"run-child"}`,
+		},
 		{"text_content", newTextMessageContent("m1", "hi"), `{"type":"TEXT_MESSAGE_CONTENT","messageId":"m1","delta":"hi"}`},
 		{"text_end", newTextMessageEnd("m1"), `{"type":"TEXT_MESSAGE_END","messageId":"m1"}`},
 		{"reasoning_start", newReasoningStart("r1"), `{"type":"REASONING_START","messageId":"r1"}`},

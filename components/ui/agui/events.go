@@ -35,6 +35,14 @@ type identity struct {
 	Agent            string `json:"agent,omitempty"`
 	ParentRunID      string `json:"parentRunId,omitempty"`
 	ParentToolCallID string `json:"parentToolCallId,omitempty"`
+
+	// SubagentRunID is the AG-UI spec's flat attribution field: the RunID of
+	// the nested sub-agent run that produced this event, empty for a
+	// top-level event. Populated by Mapper.Map (see mapper.go) alongside the
+	// richer gantry-specific identity fields above, so a generic AG-UI
+	// client that only understands the spec field can still demux
+	// concurrent sub-agent output without any gantry-specific knowledge.
+	SubagentRunID string `json:"subagentRunId,omitempty"`
 }
 
 // AG-UI event type discriminators.
