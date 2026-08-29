@@ -204,6 +204,13 @@ func (m *Mapper) startFrame() []Event {
 // events for the same RunID return nil -- mirrors startFrame's lazy-once
 // pattern for RUN_STARTED. Returns nil for a top-level event (no
 // ParentRunID/ParentToolCallID set).
+//
+// parentSubagentRunID's m.subagentStarted[ev.ParentRunID] check relies on
+// the parent run's own first event always being processed before any event
+// from a run it spawns -- true by causality (a run must itself have
+// started before it can invoke a tool that spawns a child), not something
+// Sink's mutex itself orders (that mutex only serializes concurrent Map
+// calls, it doesn't order them across goroutines).
 func (m *Mapper) subagentStartFrame(ev gantry.Event, id identity) []Event {
 	if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
 		return nil

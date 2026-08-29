@@ -613,6 +613,27 @@ func TestMapperTopLevelEventsOmitSubagentRunID(t *testing.T) {
 	}
 }
 
+// TestMapperLazySubagentStartedNotPhaseStartSpecific confirms the lazy
+// SUBAGENT_STARTED emission fires off ANY first event for a not-yet-seen
+// nested RunID -- not just EventPhaseStart, which is what every other lazy-
+// start test above happens to use as its first event.
+func TestMapperLazySubagentStartedNotPhaseStartSpecific(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventTextDelta, TextDelta: "hi",
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	if len(got) == 0 {
+		t.Fatalf("got no events, want at least a SUBAGENT_STARTED")
+	}
+	if _, ok := got[0].(SubagentStarted); !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted (lazy start must not be PhaseStart-specific)", got[0])
+	}
+}
+
 func TestMapperTranslatesRawEvent(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true

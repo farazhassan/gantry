@@ -40,9 +40,8 @@ type identity struct {
 	// the nested sub-agent run that produced this event, empty for a
 	// top-level event. A generic AG-UI client that only understands the
 	// spec field (not gantry's richer identity fields above) can use this
-	// alone to demux concurrent sub-agent output. Not yet populated by
-	// Mapper.Map -- that wiring lands in a later task (see
-	// docs/superpowers/plans/2026-08-29-agui-subagent-lifecycle-events.md).
+	// alone to demux concurrent sub-agent output. Populated by Mapper.Map
+	// (see mapper.go).
 	SubagentRunID string `json:"subagentRunId,omitempty"`
 }
 
