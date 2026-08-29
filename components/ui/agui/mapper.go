@@ -28,6 +28,12 @@ type Mapper struct {
 
 	lastUsage    map[string]gantry.Usage      // gantry RunID -> last usage snapshot emitted as gantry.usage, if any
 	lastActivity map[string]activityStepValue // "runID:stepID" -> last activity snapshot/delta content emitted for that step
+
+	// subagentStarted tracks, per gantry RunID, whether SUBAGENT_STARTED has
+	// already been emitted for that (nested) run -- mirrors started's
+	// lazy-once pattern for RUN_STARTED, but keyed per-RunID since a Mapper
+	// sees many nested runs over its lifetime.
+	subagentStarted map[string]bool
 }
 
 // NewMapper returns a Mapper for a single AG-UI thread identified by
@@ -35,13 +41,14 @@ type Mapper struct {
 // Gantry-level Event.RunID).
 func NewMapper(threadID, runID string) *Mapper {
 	return &Mapper{
-		threadID:      threadID,
-		runID:         runID,
-		openMsg:       map[string]string{},
-		msgSeq:        map[string]int{},
-		openReasoning: map[string]string{},
-		lastUsage:     map[string]gantry.Usage{},
-		lastActivity:  map[string]activityStepValue{},
+		threadID:        threadID,
+		runID:           runID,
+		openMsg:         map[string]string{},
+		msgSeq:          map[string]int{},
+		openReasoning:   map[string]string{},
+		lastUsage:       map[string]gantry.Usage{},
+		lastActivity:    map[string]activityStepValue{},
+		subagentStarted: map[string]bool{},
 	}
 }
 
@@ -77,6 +84,10 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		ParentRunID:      ev.ParentRunID,
 		ParentToolCallID: ev.ParentToolCallID,
 	}
+	if ev.ParentRunID != "" || ev.ParentToolCallID != "" {
+		id.SubagentRunID = ev.RunID
+	}
+	out = append(out, m.subagentStartFrame(ev, id)...)
 
 	if ev.Dropped > 0 {
 		out = append(out, newEventsDropped(ev.Dropped, id))
@@ -186,6 +197,26 @@ func (m *Mapper) startFrame() []Event {
 	}
 	m.started = true
 	return []Event{newRunStarted(m.threadID, m.runID)}
+}
+
+// subagentStartFrame returns a SUBAGENT_STARTED event the first time Map
+// sees ev's RunID as a nested (sub-agent) run, marking it started so later
+// events for the same RunID return nil -- mirrors startFrame's lazy-once
+// pattern for RUN_STARTED. Returns nil for a top-level event (no
+// ParentRunID/ParentToolCallID set).
+func (m *Mapper) subagentStartFrame(ev gantry.Event, id identity) []Event {
+	if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+		return nil
+	}
+	if m.subagentStarted[ev.RunID] {
+		return nil
+	}
+	m.subagentStarted[ev.RunID] = true
+	var parentSubagentRunID string
+	if m.subagentStarted[ev.ParentRunID] {
+		parentSubagentRunID = ev.ParentRunID
+	}
+	return []Event{newSubagentStarted(ev.RunID, ev.ParentToolName, ev.ParentToolDescription, parentSubagentRunID).withIdentity(id)}
 }
 
 // stepName returns the AG-UI STEP_STARTED/STEP_FINISHED stepName for ev.

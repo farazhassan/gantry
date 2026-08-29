@@ -187,6 +187,7 @@ func TestMapperDoneClosesOpenText(t *testing.T) {
 func TestMapperNestedDoneEmitsSubagentDoneNotRunFinished(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 	got := m.Map(gantry.Event{
 		Type:             gantry.EventDone,
 		DoneReason:       gantry.DoneNoToolCalls,
@@ -197,7 +198,7 @@ func TestMapperNestedDoneEmitsSubagentDoneNotRunFinished(t *testing.T) {
 	})
 	want := []Event{newSubagentDone(identity{
 		RunID: "run-child", Agent: "investigation",
-		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
 	})}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
@@ -220,6 +221,7 @@ func TestMapperTopLevelDoneStillEmitsRunFinished(t *testing.T) {
 func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent opens a text message...
 	pStart := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "parent-1", RunID: "run-parent", Agent: "orchestrator"})
@@ -289,6 +291,7 @@ func TestMapperInterleavedRunsBracketTextIndependently(t *testing.T) {
 func TestMapperInterleavedRunsBracketReasoningIndependently(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent opens a reasoning message...
 	pStart := m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "parent-thinking", RunID: "run-parent", Agent: "orchestrator"})
@@ -442,6 +445,7 @@ func TestMapperDoneClosesOpenReasoning(t *testing.T) {
 func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true}
 
 	// Parent's own phase, unsuffixed -- exactly as before this fix.
 	pGot := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseToolExec, RunID: "run-parent", Agent: "orchestrator"})
@@ -495,6 +499,117 @@ func TestMapperNestedStepNameIsNamespacedByRunID(t *testing.T) {
 	}
 	if pFinStep.StepName != "tool_exec" {
 		t.Errorf("parent StepFinished.StepName = %q, want bare %q", pFinStep.StepName, "tool_exec")
+	}
+}
+
+func TestMapperLazySubagentStarted(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1", SubagentRunID: "run-child",
+	}
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+		ParentToolName: "researcher", ParentToolDescription: "Delegates fact-finding",
+	})
+	want := []Event{
+		newSubagentStarted("run-child", "researcher", "Delegates fact-finding", "").withIdentity(id),
+		newStepStarted("start::run-child").withIdentity(id),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+
+	// A later event from the SAME RunID must not fire SUBAGENT_STARTED again.
+	got2 := m.Map(gantry.Event{
+		Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	want2 := []Event{newStepFinished("start::run-child").withIdentity(id)}
+	if !reflect.DeepEqual(got2, want2) {
+		t.Fatalf("second event: got  %#v\nwant %#v", got2, want2)
+	}
+}
+
+func TestMapperLazySubagentStartedOmitsParentSubagentRunIDWhenParentIsTopLevel(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	started, ok := got[0].(SubagentStarted)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted", got[0])
+	}
+	if started.ParentSubagentRunID != "" {
+		t.Errorf("ParentSubagentRunID = %q, want empty (parent is top-level, never itself a subagent)", started.ParentSubagentRunID)
+	}
+}
+
+func TestMapperLazySubagentStartedSetsParentSubagentRunIDWhenParentIsSubagent(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	// The parent ("run-child") is itself a nested sub-agent of "run-root".
+	_ = m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-child", Agent: "investigation",
+		ParentRunID: "run-root", ParentToolCallID: "call-1",
+	})
+
+	// A grandchild nested under "run-child" must report run-child as its
+	// parentSubagentRunId, since run-child is itself a subagent.
+	got := m.Map(gantry.Event{
+		Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart,
+		RunID: "run-grandchild", Agent: "verification",
+		ParentRunID: "run-child", ParentToolCallID: "call-2",
+	})
+	started, ok := got[0].(SubagentStarted)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want SubagentStarted", got[0])
+	}
+	if started.ParentSubagentRunID != "run-child" {
+		t.Errorf("ParentSubagentRunID = %q, want run-child (its parent is itself a subagent)", started.ParentSubagentRunID)
+	}
+}
+
+func TestMapperOrdinaryNestedEventsCarrySubagentRunID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	m.subagentStarted = map[string]bool{"run-child": true} // isolate from the lazy-start behavior itself
+
+	got := m.Map(gantry.Event{
+		Type: gantry.EventTextDelta, TextDelta: "hi",
+		RunID: "run-child", ParentRunID: "run-parent", ParentToolCallID: "call-1",
+	})
+	start, ok := got[0].(TextMessageStart)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want TextMessageStart", got[0])
+	}
+	if start.SubagentRunID != "run-child" {
+		t.Errorf("SubagentRunID = %q, want run-child", start.SubagentRunID)
+	}
+}
+
+func TestMapperTopLevelEventsOmitSubagentRunID(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	got := m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"})
+	start, ok := got[0].(TextMessageStart)
+	if !ok {
+		t.Fatalf("event 0 = %#v, want TextMessageStart", got[0])
+	}
+	if start.SubagentRunID != "" {
+		t.Errorf("SubagentRunID = %q, want empty for a top-level run", start.SubagentRunID)
 	}
 }
 
