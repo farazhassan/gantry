@@ -3,6 +3,7 @@ package agui
 import (
 	"io"
 	"sync"
+	"time"
 
 	"github.com/farazhassan/gantry"
 )
@@ -82,7 +83,9 @@ func (s *Sink) Heartbeat() error {
 // RUN_STARTED is emitted first if it hasn't been already (the run can fail
 // before any Gantry event arrives, e.g. a cancelled context), and any open text
 // message is closed, so clients always see a well-formed RUN_STARTED → … →
-// RUN_ERROR stream.
+// RUN_ERROR stream. Every frame's AG-UI "timestamp" is stamped with the
+// current time: unlike Mapper.Map's stamping pass, there is no source
+// gantry.Event to derive a production timestamp from here.
 func (s *Sink) EmitError(err error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,6 +93,7 @@ func (s *Sink) EmitError(err error) error {
 	frames = append(frames, s.mapper.closeAllText()...)
 	frames = append(frames, s.mapper.closeAllReasoning()...)
 	frames = append(frames, newRunError(err.Error()))
+	frames = stampTimestamps(frames, time.Now())
 	for _, ae := range frames {
 		if werr := WriteSSE(s.w, ae); werr != nil {
 			return werr

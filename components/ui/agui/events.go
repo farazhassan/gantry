@@ -17,6 +17,13 @@ type Event interface {
 	// themselves unchanged — they describe the single top-level AG-UI run,
 	// not a Gantry-level run/agent.
 	withIdentity(id identity) Event
+	// withTimestamp returns a copy of the event with its AG-UI BaseEvent
+	// "timestamp" (milliseconds since epoch) set to ms. Unlike withIdentity,
+	// EVERY event type applies this, including the three lifecycle events —
+	// AG-UI's timestamp describes when the event was produced, not
+	// Gantry-level attribution, so it isn't skipped for them. See
+	// Mapper.Map's stamping pass in mapper.go, which is the only caller.
+	withTimestamp(ms int64) Event
 }
 
 // identity is embedded (anonymously, so its fields flatten into the
@@ -80,43 +87,59 @@ const (
 // --- Lifecycle ---
 
 type RunStarted struct {
-	Type     string `json:"type"`
-	ThreadID string `json:"threadId"`
-	RunID    string `json:"runId"`
+	Type      string `json:"type"`
+	ThreadID  string `json:"threadId"`
+	RunID     string `json:"runId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 }
 
 func (e RunStarted) eventType() string           { return e.Type }
 func (e RunStarted) withIdentity(identity) Event { return e }
+func (e RunStarted) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
+	return e
+}
 func newRunStarted(threadID, runID string) RunStarted {
 	return RunStarted{Type: typeRunStarted, ThreadID: threadID, RunID: runID}
 }
 
 type RunFinished struct {
-	Type     string `json:"type"`
-	ThreadID string `json:"threadId"`
-	RunID    string `json:"runId"`
+	Type      string `json:"type"`
+	ThreadID  string `json:"threadId"`
+	RunID     string `json:"runId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 }
 
 func (e RunFinished) eventType() string           { return e.Type }
 func (e RunFinished) withIdentity(identity) Event { return e }
+func (e RunFinished) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
+	return e
+}
 func newRunFinished(threadID, runID string) RunFinished {
 	return RunFinished{Type: typeRunFinished, ThreadID: threadID, RunID: runID}
 }
 
 type RunError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
+	Type      string `json:"type"`
+	Message   string `json:"message"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 }
 
 func (e RunError) eventType() string           { return e.Type }
 func (e RunError) withIdentity(identity) Event { return e }
+func (e RunError) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
+	return e
+}
 func newRunError(msg string) RunError {
 	return RunError{Type: typeRunError, Message: msg}
 }
 
 type StepStarted struct {
-	Type     string `json:"type"`
-	StepName string `json:"stepName"`
+	Type      string `json:"type"`
+	StepName  string `json:"stepName"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
@@ -125,19 +148,28 @@ func (e StepStarted) withIdentity(id identity) Event {
 	e.identity = id
 	return e
 }
+func (e StepStarted) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
+	return e
+}
 func newStepStarted(name string) StepStarted {
 	return StepStarted{Type: typeStepStarted, StepName: name}
 }
 
 type StepFinished struct {
-	Type     string `json:"type"`
-	StepName string `json:"stepName"`
+	Type      string `json:"type"`
+	StepName  string `json:"stepName"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e StepFinished) eventType() string { return e.Type }
 func (e StepFinished) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e StepFinished) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newStepFinished(name string) StepFinished {
@@ -150,12 +182,17 @@ type TextMessageStart struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Role      string `json:"role"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e TextMessageStart) eventType() string { return e.Type }
 func (e TextMessageStart) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e TextMessageStart) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newTextMessageStart(msgID string) TextMessageStart {
@@ -166,12 +203,17 @@ type TextMessageContent struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Delta     string `json:"delta"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e TextMessageContent) eventType() string { return e.Type }
 func (e TextMessageContent) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e TextMessageContent) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newTextMessageContent(msgID, delta string) TextMessageContent {
@@ -181,12 +223,17 @@ func newTextMessageContent(msgID, delta string) TextMessageContent {
 type TextMessageEnd struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e TextMessageEnd) eventType() string { return e.Type }
 func (e TextMessageEnd) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e TextMessageEnd) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newTextMessageEnd(msgID string) TextMessageEnd {
@@ -198,12 +245,17 @@ func newTextMessageEnd(msgID string) TextMessageEnd {
 type ReasoningStart struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ReasoningStart) eventType() string { return e.Type }
 func (e ReasoningStart) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ReasoningStart) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newReasoningStart(msgID string) ReasoningStart {
@@ -214,12 +266,17 @@ type ReasoningMessageStart struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Role      string `json:"role"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ReasoningMessageStart) eventType() string { return e.Type }
 func (e ReasoningMessageStart) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ReasoningMessageStart) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newReasoningMessageStart(msgID string) ReasoningMessageStart {
@@ -230,12 +287,17 @@ type ReasoningMessageContent struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
 	Delta     string `json:"delta"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ReasoningMessageContent) eventType() string { return e.Type }
 func (e ReasoningMessageContent) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ReasoningMessageContent) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newReasoningMessageContent(msgID, delta string) ReasoningMessageContent {
@@ -245,12 +307,17 @@ func newReasoningMessageContent(msgID, delta string) ReasoningMessageContent {
 type ReasoningMessageEnd struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ReasoningMessageEnd) eventType() string { return e.Type }
 func (e ReasoningMessageEnd) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ReasoningMessageEnd) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newReasoningMessageEnd(msgID string) ReasoningMessageEnd {
@@ -260,12 +327,17 @@ func newReasoningMessageEnd(msgID string) ReasoningMessageEnd {
 type ReasoningEnd struct {
 	Type      string `json:"type"`
 	MessageID string `json:"messageId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ReasoningEnd) eventType() string { return e.Type }
 func (e ReasoningEnd) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ReasoningEnd) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newReasoningEnd(msgID string) ReasoningEnd {
@@ -278,12 +350,17 @@ type ToolCallStart struct {
 	Type         string `json:"type"`
 	ToolCallID   string `json:"toolCallId"`
 	ToolCallName string `json:"toolCallName"`
+	Timestamp    int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ToolCallStart) eventType() string { return e.Type }
 func (e ToolCallStart) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ToolCallStart) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newToolCallStart(id, name string) ToolCallStart {
@@ -294,12 +371,17 @@ type ToolCallArgs struct {
 	Type       string `json:"type"`
 	ToolCallID string `json:"toolCallId"`
 	Delta      string `json:"delta"`
+	Timestamp  int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ToolCallArgs) eventType() string { return e.Type }
 func (e ToolCallArgs) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ToolCallArgs) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newToolCallArgs(id, delta string) ToolCallArgs {
@@ -309,12 +391,17 @@ func newToolCallArgs(id, delta string) ToolCallArgs {
 type ToolCallEnd struct {
 	Type       string `json:"type"`
 	ToolCallID string `json:"toolCallId"`
+	Timestamp  int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ToolCallEnd) eventType() string { return e.Type }
 func (e ToolCallEnd) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ToolCallEnd) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newToolCallEnd(id string) ToolCallEnd {
@@ -328,12 +415,17 @@ type ToolCallResult struct {
 	Content    string `json:"content"`
 	Role       string `json:"role"`
 	IsError    bool   `json:"isError,omitempty"`
+	Timestamp  int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ToolCallResult) eventType() string { return e.Type }
 func (e ToolCallResult) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ToolCallResult) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCallResult {
@@ -347,15 +439,20 @@ func newToolCallResult(msgID, toolCallID, content string, isError bool) ToolCall
 // gantry.usage and gantry.events_dropped (see mapper.go); clients that
 // don't recognize the name ignore it.
 type Custom struct {
-	Type  string `json:"type"`
-	Name  string `json:"name"`
-	Value any    `json:"value"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Value     any    `json:"value"`
+	Timestamp int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e Custom) eventType() string { return e.Type }
 func (e Custom) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e Custom) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newCustom(name string, value any) Custom {
@@ -410,15 +507,20 @@ func newUsage(inputTokens, outputTokens int, costUSD float64, id identity) Custo
 // not otherwise model (see the Anthropic adapter's default case in
 // GenerateStream). Event carries the frame verbatim, undecoded.
 type Raw struct {
-	Type   string          `json:"type"`
-	Event  json.RawMessage `json:"event"`
-	Source string          `json:"source,omitempty"`
+	Type      string          `json:"type"`
+	Event     json.RawMessage `json:"event"`
+	Source    string          `json:"source,omitempty"`
+	Timestamp int64           `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e Raw) eventType() string { return e.Type }
 func (e Raw) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e Raw) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newRaw(event json.RawMessage, source string) Raw {
@@ -459,12 +561,17 @@ type ActivitySnapshot struct {
 	MessageID    string `json:"messageId"`
 	ActivityType string `json:"activityType"`
 	Content      any    `json:"content"`
+	Timestamp    int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ActivitySnapshot) eventType() string { return e.Type }
 func (e ActivitySnapshot) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ActivitySnapshot) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newActivitySnapshot(msgID string, content activityStepValue) ActivitySnapshot {
@@ -476,12 +583,17 @@ type ActivityDelta struct {
 	MessageID    string        `json:"messageId"`
 	ActivityType string        `json:"activityType"`
 	Patch        []jsonPatchOp `json:"patch"`
+	Timestamp    int64         `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e ActivityDelta) eventType() string { return e.Type }
 func (e ActivityDelta) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e ActivityDelta) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newActivityDelta(msgID string, patch []jsonPatchOp) ActivityDelta {
@@ -509,12 +621,17 @@ type SubagentStarted struct {
 	Name                string `json:"name"`
 	Description         string `json:"description,omitempty"`
 	ParentSubagentRunID string `json:"parentSubagentRunId,omitempty"`
+	Timestamp           int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e SubagentStarted) eventType() string { return e.Type }
 func (e SubagentStarted) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e SubagentStarted) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newSubagentStarted(subagentRunID, name, description, parentSubagentRunID string) SubagentStarted {
@@ -548,12 +665,17 @@ type SubagentFinished struct {
 	SubagentRunID string           `json:"subagentRunId"`
 	Result        string           `json:"result,omitempty"`
 	Outcome       *subagentOutcome `json:"outcome,omitempty"`
+	Timestamp     int64            `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e SubagentFinished) eventType() string { return e.Type }
 func (e SubagentFinished) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e SubagentFinished) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newSubagentFinished(subagentRunID, result string, suspended bool) SubagentFinished {
@@ -575,12 +697,17 @@ type SubagentError struct {
 	Type          string `json:"type"`
 	SubagentRunID string `json:"subagentRunId"`
 	Message       string `json:"message"`
+	Timestamp     int64  `json:"timestamp,omitempty"`
 	identity
 }
 
 func (e SubagentError) eventType() string { return e.Type }
 func (e SubagentError) withIdentity(id identity) Event {
 	e.identity = id
+	return e
+}
+func (e SubagentError) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
 	return e
 }
 func newSubagentError(subagentRunID, message string) SubagentError {
