@@ -29,6 +29,14 @@ type Mapper struct {
 	lastUsage    map[string]gantry.Usage      // gantry RunID -> last usage snapshot emitted as gantry.usage, if any
 	lastActivity map[string]activityStepValue // "runID:stepID" -> last activity snapshot/delta content emitted for that step
 
+	// liveResultSeen tracks "runID:callID" for every call already reported
+	// via EventToolResultLive, so the later batched EventToolResult for the
+	// same call (see run_stream.go's emitPhaseEffects, which reports the
+	// whole PhaseToolExec batch regardless of whether any of its calls were
+	// already live-reported) is suppressed instead of delivering a second,
+	// redundant TOOL_CALL_RESULT for the same toolCallId.
+	liveResultSeen map[string]bool
+
 	// subagentStarted tracks, per gantry RunID, whether SUBAGENT_STARTED has
 	// already been emitted for that (nested) run -- mirrors started's
 	// lazy-once pattern for RUN_STARTED, but keyed per-RunID since a Mapper
@@ -49,6 +57,7 @@ func NewMapper(threadID, runID string) *Mapper {
 		lastUsage:       map[string]gantry.Usage{},
 		lastActivity:    map[string]activityStepValue{},
 		subagentStarted: map[string]bool{},
+		liveResultSeen:  map[string]bool{},
 	}
 }
 
@@ -91,9 +100,14 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // kind's still-open message (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
 // REASONING_END) before opening their own — text and reasoning are mutually
 // exclusive per run, so a client never sees interleaved content within a
-// single message — and EventToolCall/EventToolResult/EventPhaseStart/
-// EventPhaseEnd/EventDone close both, since those events represent gantry
-// moving past whatever the model was saying/thinking.
+// single message — and EventToolCall/EventToolResult/EventToolResultLive/
+// EventPhaseStart/EventPhaseEnd/EventDone close both, since those events
+// represent gantry moving past whatever the model was saying/thinking.
+// EventToolResultLive additionally suppresses the later EventToolResult for
+// the same call (see toolResultMsgID and the liveResultSeen field) so a
+// client never sees the same tool call's result delivered twice — once in
+// real time as the call resolves, and again when its whole PhaseToolExec
+// batch finishes.
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
@@ -169,12 +183,24 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 			)
 		}
 
+	case gantry.EventToolResultLive:
+		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
+		if tr := ev.ToolResult; tr != nil {
+			m.liveResultSeen[ev.RunID+":"+tr.CallID] = true
+			out = append(out, newToolCallResult(toolResultMsgID(ev.RunID, tr.CallID), tr.CallID, tr.Content, tr.IsError).withIdentity(id))
+		}
+
 	case gantry.EventToolResult:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if tr := ev.ToolResult; tr != nil {
-			msgID := fmt.Sprintf("%s:toolmsg:%s", ev.RunID, tr.CallID)
-			out = append(out, newToolCallResult(msgID, tr.CallID, tr.Content, tr.IsError).withIdentity(id))
+			key := ev.RunID + ":" + tr.CallID
+			if m.liveResultSeen[key] {
+				delete(m.liveResultSeen, key)
+			} else {
+				out = append(out, newToolCallResult(toolResultMsgID(ev.RunID, tr.CallID), tr.CallID, tr.Content, tr.IsError).withIdentity(id))
+			}
 		}
 
 	case gantry.EventPhaseStart:
@@ -257,6 +283,14 @@ func (m *Mapper) subagentStartFrame(ev gantry.Event, id identity) []Event {
 		parentSubagentRunID = ev.ParentRunID
 	}
 	return []Event{newSubagentStarted(ev.RunID, ev.ParentToolName, ev.ParentToolDescription, parentSubagentRunID).withIdentity(id)}
+}
+
+// toolResultMsgID returns the AG-UI messageId for a TOOL_CALL_RESULT, shared
+// by the EventToolResultLive and EventToolResult cases so a live result and
+// the (suppressed) batched one it stands in for would have produced the
+// identical id.
+func toolResultMsgID(runID, callID string) string {
+	return fmt.Sprintf("%s:toolmsg:%s", runID, callID)
 }
 
 // stepName returns the AG-UI STEP_STARTED/STEP_FINISHED stepName for ev.
