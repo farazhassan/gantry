@@ -100,6 +100,73 @@ func TestMapperToolResultError(t *testing.T) {
 	}
 }
 
+func TestMapperToolResultLiveEmitsResult(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: tr, RunID: "run-1"})
+	want := []Event{newToolCallResult("run-1:toolmsg:c1", "c1", "ok", false).withIdentity(id)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperToolResultLiveSuppressesLaterBatchedResult proves a call that
+// already got a real-time result via EventToolResultLive does not also
+// surface a second, redundant TOOL_CALL_RESULT when the core run loop's
+// later batched EventToolResult (see run_stream.go's emitPhaseEffects)
+// reports the same call — a client tracking messages by toolCallId would
+// otherwise see the same tool result delivered twice.
+func TestMapperToolResultLiveSuppressesLaterBatchedResult(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	live := m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: tr, RunID: "run-1"})
+	if len(live) != 1 {
+		t.Fatalf("live got %#v, want exactly one event", live)
+	}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr, RunID: "run-1"})
+	if got != nil {
+		t.Fatalf("batched result after live got %#v, want nil (already delivered)", got)
+	}
+}
+
+// TestMapperToolResultWithoutLiveStillEmits is the non-regression
+// counterpart to the suppression test above: a call that never got an
+// EventToolResultLive (e.g. a caller driving the core run loop directly,
+// without components/tool's dispatch middleware) still gets its result from
+// the batched EventToolResult exactly as before this feature existed.
+func TestMapperToolResultWithoutLiveStillEmits(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-1"}
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr, RunID: "run-1"})
+	want := []Event{newToolCallResult("run-1:toolmsg:c1", "c1", "ok", false).withIdentity(id)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperToolResultLiveSuppressionIsPerRun proves the dedup key includes
+// RunID, not just CallID: a live result for one run must not suppress the
+// batched result for a different run's same CallID -- tool call IDs are
+// only unique within a single Gantry run (a nested sub-agent run mints its
+// own, independent from its parent's).
+func TestMapperToolResultLiveSuppressionIsPerRun(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	id := identity{RunID: "run-2"}
+	_ = m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: &gantry.ToolResult{CallID: "c1", Content: "run-1 result"}, RunID: "run-1"})
+	tr2 := &gantry.ToolResult{CallID: "c1", Content: "run-2 result"}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr2, RunID: "run-2"})
+	want := []Event{newToolCallResult("run-2:toolmsg:c1", "c1", "run-2 result", false).withIdentity(id)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperUsageEmittedOnlyWhenChanged(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true
