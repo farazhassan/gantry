@@ -89,6 +89,62 @@ func TestMapperToolResult(t *testing.T) {
 	}
 }
 
+func TestMapperToolResultLiveEmitsResult(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: tr})
+	want := []Chunk{newToolOutputAvailable("c1", "ok")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperToolResultLiveErrorEmitsErrorOutput(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "boom", IsError: true}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: tr})
+	want := []Chunk{newToolOutputError("c1", "boom")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperToolResultLiveSuppressesLaterBatchedResult proves a call that
+// already got a real-time result via EventToolResultLive does not also
+// surface a second, redundant tool-output chunk when the core run loop's
+// later batched EventToolResult (see run_stream.go's emitPhaseEffects)
+// reports the same call.
+func TestMapperToolResultLiveSuppressesLaterBatchedResult(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	live := m.Map(gantry.Event{Type: gantry.EventToolResultLive, ToolResult: tr})
+	if len(live) != 1 {
+		t.Fatalf("live got %#v, want exactly one chunk", live)
+	}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr})
+	if got != nil {
+		t.Fatalf("batched result after live got %#v, want nil (already delivered)", got)
+	}
+}
+
+// TestMapperToolResultWithoutLiveStillEmits is the non-regression
+// counterpart above: a call that never got an EventToolResultLive still
+// gets its result from the batched EventToolResult exactly as before this
+// feature existed.
+func TestMapperToolResultWithoutLiveStillEmits(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	tr := &gantry.ToolResult{CallID: "c1", Content: "ok"}
+	got := m.Map(gantry.Event{Type: gantry.EventToolResult, ToolResult: tr})
+	want := []Chunk{newToolOutputAvailable("c1", "ok")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestMapperStepBoundary(t *testing.T) {
 	m := NewMapper("m1")
 	m.started = true

@@ -29,6 +29,17 @@ type Mapper struct {
 	haveUsage bool
 
 	lastActivity map[string]planStepValue // stepID -> last content emitted for that step
+
+	// liveResultSeen tracks the CallID of every tool call already reported
+	// via EventToolResultLive, so the later batched EventToolResult for the
+	// same call (see run_stream.go's emitPhaseEffects, which reports the
+	// whole PhaseToolExec batch regardless of whether any of its calls were
+	// already live-reported) is suppressed instead of emitting a second,
+	// redundant tool-output chunk for the same toolCallId. Keyed by CallID
+	// alone -- unlike agui's Mapper, this Mapper is scoped to one top-level
+	// run (see Map's ParentRunID/ParentToolCallID early return), so CallID
+	// is already unique here.
+	liveResultSeen map[string]bool
 }
 
 // NewMapper returns a Mapper that builds a single assistant message
@@ -36,8 +47,9 @@ type Mapper struct {
 // "start" chunk's messageId).
 func NewMapper(messageID string) *Mapper {
 	return &Mapper{
-		messageID:    messageID,
-		lastActivity: map[string]planStepValue{},
+		messageID:      messageID,
+		lastActivity:   map[string]planStepValue{},
+		liveResultSeen: map[string]bool{},
 	}
 }
 
@@ -94,14 +106,22 @@ func (m *Mapper) Map(ev gantry.Event) []Chunk {
 			)
 		}
 
+	case gantry.EventToolResultLive:
+		out = append(out, m.closeText()...)
+		out = append(out, m.closeReasoning()...)
+		if tr := ev.ToolResult; tr != nil {
+			m.liveResultSeen[tr.CallID] = true
+			out = append(out, toolResultChunk(tr))
+		}
+
 	case gantry.EventToolResult:
 		out = append(out, m.closeText()...)
 		out = append(out, m.closeReasoning()...)
 		if tr := ev.ToolResult; tr != nil {
-			if tr.IsError {
-				out = append(out, newToolOutputError(tr.CallID, tr.Content))
+			if m.liveResultSeen[tr.CallID] {
+				delete(m.liveResultSeen, tr.CallID)
 			} else {
-				out = append(out, newToolOutputAvailable(tr.CallID, tr.Content))
+				out = append(out, toolResultChunk(tr))
 			}
 		}
 
@@ -113,6 +133,17 @@ func (m *Mapper) Map(ev gantry.Event) []Chunk {
 	}
 
 	return out
+}
+
+// toolResultChunk returns the tool-output-available/tool-output-error chunk
+// for tr, shared by the EventToolResultLive and EventToolResult cases so a
+// live result and the (suppressed) batched one it stands in for would have
+// produced the identical chunk.
+func toolResultChunk(tr *gantry.ToolResult) Chunk {
+	if tr.IsError {
+		return newToolOutputError(tr.CallID, tr.Content)
+	}
+	return newToolOutputAvailable(tr.CallID, tr.Content)
 }
 
 // startFrame returns a "start" chunk the first time it is called, marking
