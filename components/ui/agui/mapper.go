@@ -2,6 +2,7 @@ package agui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/farazhassan/gantry"
 )
@@ -226,7 +227,24 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		}
 	}
 
-	return out
+	return stampTimestamps(out, ev.Timestamp)
+}
+
+// stampTimestamps returns events with every event's AG-UI "timestamp" set to
+// t's milliseconds-since-epoch value, or events unchanged if t is the zero
+// time (an Event constructed directly without going through gantry's emit()
+// chokepoint, e.g. in tests) — leaving Timestamp at its zero value so
+// encoding/json's omitempty drops the field, matching AG-UI's optional
+// timestamp semantics instead of emitting a bogus pre-1970 value.
+func stampTimestamps(events []Event, t time.Time) []Event {
+	if t.IsZero() {
+		return events
+	}
+	ms := t.UnixMilli()
+	for i, e := range events {
+		events[i] = e.withTimestamp(ms)
+	}
+	return events
 }
 
 // usageDelta returns a gantry.usage CUSTOM event for ev.RunID if ev carries a

@@ -72,6 +72,37 @@ func TestEventJSONShape(t *testing.T) {
 	}
 }
 
+// TestWithTimestampAppliesToLifecycleEvents documents the one place
+// withTimestamp and withIdentity deliberately diverge: withIdentity is a
+// no-op on the three lifecycle events (RunStarted/RunFinished/RunError)
+// because they have no Gantry-level attribution to carry, but AG-UI's
+// "timestamp" is not attribution -- it's when the event was produced -- so
+// withTimestamp must still set it on all three.
+func TestWithTimestampAppliesToLifecycleEvents(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   Event
+		want string
+	}{
+		{"run_started", newRunStarted("t1", "r1"), `{"type":"RUN_STARTED","threadId":"t1","runId":"r1","timestamp":1000}`},
+		{"run_finished", newRunFinished("t1", "r1"), `{"type":"RUN_FINISHED","threadId":"t1","runId":"r1","timestamp":1000}`},
+		{"run_error", newRunError("boom"), `{"type":"RUN_ERROR","message":"boom","timestamp":1000}`},
+		{"step_started", newStepStarted("llm_call"), `{"type":"STEP_STARTED","stepName":"llm_call","timestamp":1000}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stamped := tc.ev.withTimestamp(1000)
+			b, err := json.Marshal(stamped)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(b) != tc.want {
+				t.Fatalf("got  %s\nwant %s", b, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteSSE(t *testing.T) {
 	var buf bytes.Buffer
 	if err := WriteSSE(&buf, newRunFinished("t1", "r1")); err != nil {

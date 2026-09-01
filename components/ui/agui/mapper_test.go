@@ -1,9 +1,11 @@
 package agui
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 )
@@ -823,6 +825,44 @@ func TestMapperActivitySnapshotThenDelta(t *testing.T) {
 	got3 := m.Map(gantry.Event{Type: gantry.EventPlanStepChanged, RunID: "run-1", PlanStep: &step})
 	if len(got3) != 0 {
 		t.Fatalf("unchanged: got %#v, want no events", got3)
+	}
+}
+
+// TestMapperStampsTimestampFromEvent proves Map stamps every AG-UI event it
+// produces from one gantry.Event with that event's own Timestamp (converted
+// to AG-UI's milliseconds-since-epoch wire format) -- including RUN_STARTED,
+// which Map emits lazily from within the same call and which withIdentity
+// otherwise treats specially.
+func TestMapperStampsTimestampFromEvent(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	ts := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart, RunID: "run-1", Timestamp: ts})
+	id := identity{RunID: "run-1"}
+	want := []Event{
+		newRunStarted("t1", "r1").withTimestamp(ts.UnixMilli()),
+		newStepStarted("start").withIdentity(id).withTimestamp(ts.UnixMilli()),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestMapperLeavesTimestampZeroWhenEventTimestampIsZero proves a gantry.Event
+// constructed without going through emit() (Timestamp left at its zero
+// value, as every other test in this file does) produces AG-UI events with
+// no "timestamp" field at all, rather than a bogus pre-1970 value derived
+// from time.Time's zero value.
+func TestMapperLeavesTimestampZeroWhenEventTimestampIsZero(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart, RunID: "run-1"})
+	for _, ev := range got {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if bytes.Contains(b, []byte(`"timestamp"`)) {
+			t.Fatalf("expected no timestamp field for a zero-Timestamp event, got %s", b)
+		}
 	}
 }
 

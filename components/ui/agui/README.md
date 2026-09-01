@@ -138,7 +138,12 @@ doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
 optional `subagentRunId` attribution field (the RunID of the nested run that
 produced an event) is stamped on every event type above except the three
 top-level lifecycle events (`RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`), which
-leave it empty.
+leave it empty. The AG-UI spec's optional `timestamp` field (milliseconds
+since epoch) is stamped on every event type, including those three — it's
+derived from Gantry's own `Event.Timestamp` and reflects when Gantry produced
+the event, not when the AG-UI frame was written to the wire. It's left empty
+for an event whose `gantry.Event.Timestamp` is unset (only possible if that
+event bypassed Gantry's `emit()`, e.g. one constructed directly in a test).
 
 Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
 `MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"

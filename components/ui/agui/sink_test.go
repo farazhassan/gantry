@@ -3,12 +3,18 @@ package agui
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/farazhassan/gantry"
 )
+
+// tsPattern matches a JSON `"timestamp":<digits>` field — EmitError stamps
+// every frame with time.Now(), so tests that assert its output can't hard-code
+// an exact timestamp value the way they can every other (deterministic) field.
+const tsPattern = `"timestamp":[0-9]+`
 
 func TestSinkWritesSSEFrames(t *testing.T) {
 	var buf bytes.Buffer
@@ -58,9 +64,9 @@ func TestSinkEmitError(t *testing.T) {
 	if err := s.EmitError(errors.New("boom")); err != nil {
 		t.Fatalf("EmitError: %v", err)
 	}
-	want := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
-	if buf.String() != want {
-		t.Fatalf("got  %q\nwant %q", buf.String(), want)
+	want := regexp.MustCompile(`^data: \{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}\n\n$`)
+	if !want.MatchString(buf.String()) {
+		t.Fatalf("got  %q\nwant match for %s", buf.String(), want)
 	}
 }
 
@@ -72,12 +78,14 @@ func TestSinkEmitErrorEmitsRunStartedFirst(t *testing.T) {
 		t.Fatalf("EmitError: %v", err)
 	}
 	out := buf.String()
-	started := `data: {"type":"RUN_STARTED","threadId":"t1","runId":"r1"}` + "\n\n"
-	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
-	if !strings.Contains(out, started) {
+	started := regexp.MustCompile(`\{"type":"RUN_STARTED","threadId":"t1","runId":"r1",` + tsPattern + `\}`)
+	runErr := regexp.MustCompile(`\{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}`)
+	startedLoc := started.FindStringIndex(out)
+	runErrLoc := runErr.FindStringIndex(out)
+	if startedLoc == nil {
 		t.Fatalf("expected RUN_STARTED before RUN_ERROR\nfull output:\n%s", out)
 	}
-	if strings.Index(out, started) > strings.Index(out, runErr) {
+	if runErrLoc == nil || startedLoc[0] > runErrLoc[0] {
 		t.Fatalf("RUN_STARTED must precede RUN_ERROR\nfull output:\n%s", out)
 	}
 }
@@ -94,12 +102,14 @@ func TestSinkEmitErrorClosesOpenTextMessage(t *testing.T) {
 		t.Fatalf("EmitError: %v", err)
 	}
 	out := buf.String()
-	end := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1","runId":"r1"}` + "\n\n"
-	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
-	if !strings.Contains(out, end) {
+	end := regexp.MustCompile(`\{"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1",` + tsPattern + `,"runId":"r1"\}`)
+	runErr := regexp.MustCompile(`\{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}`)
+	endLoc := end.FindStringIndex(out)
+	runErrLoc := runErr.FindStringIndex(out)
+	if endLoc == nil {
 		t.Fatalf("expected open text message to be closed before error\nfull output:\n%s", out)
 	}
-	if strings.Index(out, end) > strings.Index(out, runErr) {
+	if runErrLoc == nil || endLoc[0] > runErrLoc[0] {
 		t.Fatalf("TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
 	}
 }
@@ -116,16 +126,19 @@ func TestSinkEmitErrorClosesOpenReasoningMessage(t *testing.T) {
 		t.Fatalf("EmitError: %v", err)
 	}
 	out := buf.String()
-	msgEnd := `data: {"type":"REASONING_MESSAGE_END","messageId":"r1:reasoning:1","runId":"r1"}` + "\n\n"
-	end := `data: {"type":"REASONING_END","messageId":"r1:reasoning:1","runId":"r1"}` + "\n\n"
-	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
-	if !strings.Contains(out, msgEnd) {
+	msgEnd := regexp.MustCompile(`\{"type":"REASONING_MESSAGE_END","messageId":"r1:reasoning:1",` + tsPattern + `,"runId":"r1"\}`)
+	end := regexp.MustCompile(`\{"type":"REASONING_END","messageId":"r1:reasoning:1",` + tsPattern + `,"runId":"r1"\}`)
+	runErr := regexp.MustCompile(`\{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}`)
+	msgEndLoc := msgEnd.FindStringIndex(out)
+	endLoc := end.FindStringIndex(out)
+	runErrLoc := runErr.FindStringIndex(out)
+	if msgEndLoc == nil {
 		t.Fatalf("expected open reasoning message to be closed before error\nfull output:\n%s", out)
 	}
-	if !strings.Contains(out, end) {
+	if endLoc == nil {
 		t.Fatalf("expected REASONING_END before error\nfull output:\n%s", out)
 	}
-	if strings.Index(out, msgEnd) > strings.Index(out, runErr) || strings.Index(out, end) > strings.Index(out, runErr) {
+	if runErrLoc == nil || msgEndLoc[0] > runErrLoc[0] || endLoc[0] > runErrLoc[0] {
 		t.Fatalf("REASONING_MESSAGE_END/REASONING_END must precede RUN_ERROR\nfull output:\n%s", out)
 	}
 }
@@ -153,21 +166,27 @@ func TestSinkEmitErrorClosesOpenTextMessagesAcrossMultipleRuns(t *testing.T) {
 	// closeAllText only retains each run's RunID (not its Agent/parent link),
 	// so the resulting END frames carry just "runId" — see closeAllText's
 	// doc comment in mapper.go.
-	endR1 := `data: {"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1","runId":"r1"}` + "\n\n"
-	endR2 := `data: {"type":"TEXT_MESSAGE_END","messageId":"r2:msg:1","runId":"r2"}` + "\n\n"
-	runErr := `data: {"type":"RUN_ERROR","message":"boom"}` + "\n\n"
-	if !strings.Contains(out, endR1) {
+	endR1 := regexp.MustCompile(`\{"type":"TEXT_MESSAGE_END","messageId":"r1:msg:1",` + tsPattern + `,"runId":"r1"\}`)
+	endR2 := regexp.MustCompile(`\{"type":"TEXT_MESSAGE_END","messageId":"r2:msg:1",` + tsPattern + `,"runId":"r2"\}`)
+	runErr := regexp.MustCompile(`\{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}`)
+	endR1Loc := endR1.FindStringIndex(out)
+	endR2Loc := endR2.FindStringIndex(out)
+	runErrLoc := runErr.FindStringIndex(out)
+	if endR1Loc == nil {
 		t.Fatalf("expected r1's open text message to be closed\nfull output:\n%s", out)
 	}
-	if !strings.Contains(out, endR2) {
+	if endR2Loc == nil {
 		t.Fatalf("expected r2's open text message to be closed\nfull output:\n%s", out)
+	}
+	if runErrLoc == nil {
+		t.Fatalf("expected RUN_ERROR frame\nfull output:\n%s", out)
 	}
 	// Map iteration order is unspecified, so don't assert an order between
 	// endR1 and endR2 — only that both precede RUN_ERROR.
-	if strings.Index(out, endR1) > strings.Index(out, runErr) {
+	if endR1Loc[0] > runErrLoc[0] {
 		t.Fatalf("r1's TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
 	}
-	if strings.Index(out, endR2) > strings.Index(out, runErr) {
+	if endR2Loc[0] > runErrLoc[0] {
 		t.Fatalf("r2's TEXT_MESSAGE_END must precede RUN_ERROR\nfull output:\n%s", out)
 	}
 }
