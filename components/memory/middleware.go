@@ -65,11 +65,11 @@ func WithMinScore(s float64) Option {
 // Done and clears FinalOutput) is correctly skipped. If memory is installed
 // before critic, persist would run on the pre-critic draft instead.
 //
-// persist only stores clean completions: state.Done with a non-empty
-// state.FinalOutput. Runs that end via max-iterations exhaustion
-// (DoneMaxIterations), a handoff (DoneHandoff), a guardrail or human-abort
-// termination (DoneGuardrailBlocked, DoneHumanAborted), or a critic rejection
-// are intentionally not remembered.
+// persist only stores completions with a non-empty state.FinalOutput. A run
+// that hits the iteration cap (DoneMaxIterations) is remembered when its
+// tool-less wrap-up turn produced an answer; runs that end via a handoff
+// (DoneHandoff), a guardrail or human-abort termination (DoneGuardrailBlocked,
+// DoneHumanAborted), or a critic rejection are intentionally not remembered.
 //
 // persist does not deduplicate: re-running the same input stores a new turn
 // pair each time, so repeated identical runs accumulate duplicate memories.
