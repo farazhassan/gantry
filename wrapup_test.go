@@ -326,8 +326,15 @@ func TestWrapUpStrayToolCallsWithEmptyContent(t *testing.T) {
 	if len(state.PendingToolCalls) != 0 {
 		t.Errorf("PendingToolCalls = %+v, want none", state.PendingToolCalls)
 	}
-	if last := state.Messages[len(state.Messages)-1]; len(last.ToolCalls) != 0 {
-		t.Errorf("last message still has tool calls: %+v", last)
+	for _, m := range state.Messages {
+		if m.Role == gantry.RoleAssistant && m.Content == "" && len(m.ToolCalls) == 0 {
+			t.Errorf("empty assistant message left in transcript: %+v", m)
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "stray" {
+				t.Errorf("stray tool call left in transcript")
+			}
+		}
 	}
 }
 
@@ -346,7 +353,9 @@ func TestWrapUpCriticRejectionLeavesEmptyOutput(t *testing.T) {
 		gantry.LLMResponse{Content: "draft", StopReason: gantry.StopReasonEnd},
 	)
 	a := newCappedAgent(t, mock, 1)
-	a.With(critic.New(wrapUpRejectingCritic{}))
+	if err := a.With(critic.New(wrapUpRejectingCritic{})); err != nil {
+		t.Fatal(err)
+	}
 
 	state, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -356,4 +365,40 @@ func TestWrapUpCriticRejectionLeavesEmptyOutput(t *testing.T) {
 		t.Errorf("DoneReason/FinalOutput = %q/%q, want max_iterations/empty", state.DoneReason, state.FinalOutput)
 	}
 	assertNoWrapUpPrompt(t, state)
+}
+
+func TestWrapUpResumedCheckpointDoesNotDuplicatePrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "first wrap", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "resumed wrap", StopReason: gantry.StopReasonEnd},
+	)
+	a := newCappedAgent(t, mock, 1)
+	ctx := context.Background()
+
+	st, err := a.Run(ctx, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Simulate a checkpoint taken mid-wrap-up: prompt present, not done.
+	st.Done = false
+	st.DoneReason = ""
+	st.Messages = append(st.Messages, gantry.Message{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt})
+
+	final, err := a.Resume(ctx, st)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	reqs := mock.Requests()
+	last := reqs[len(reqs)-1]
+	count := 0
+	for _, m := range last.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("wrap-up request has %d prompt messages, want 1", count)
+	}
+	assertNoWrapUpPrompt(t, final)
 }

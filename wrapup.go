@@ -28,6 +28,9 @@ const MaxIterationsWrapUpPrompt = "You have reached the iteration limit and cann
 // answer its verdict stands: the run ends DoneMaxIterations with an empty
 // FinalOutput. A phase error is returned unchanged.
 func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
+	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
+	// resumed pass doesn't send it twice.
+	removeWrapUpPrompt(state)
 	state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt})
 	defer removeWrapUpPrompt(state)
 	ctx = withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone})
@@ -75,7 +78,13 @@ func dropWrapUpToolCalls(state *State) {
 	}
 	state.PendingToolCalls = nil
 	if n := len(state.Messages); n > 0 && state.Messages[n-1].Role == RoleAssistant {
-		state.Messages[n-1].ToolCalls = nil
+		if state.Messages[n-1].Content == "" {
+			// Nothing left: an empty assistant message would be sent as
+			// null content on the next turn.
+			state.Messages = state.Messages[:n-1]
+		} else {
+			state.Messages[n-1].ToolCalls = nil
+		}
 	}
 	if state.LastResponse != nil {
 		state.FinalOutput = state.LastResponse.Content
