@@ -833,3 +833,69 @@ func TestAdvanceMultiPendingBroadcastsLegacy(t *testing.T) {
 		t.Errorf("broadcast answers = %v, want both calls to receive the input", res)
 	}
 }
+
+func TestAdvanceContinuationDropsWrapUpAnswer(t *testing.T) {
+	var secondRun []gantry.Message
+	runner := &scriptedRunner{steps: []func(*gantry.State) *gantry.State{
+		func(in *gantry.State) *gantry.State {
+			// A capped run: tool round trip, then the core wrap-up answer.
+			in.Messages = append(in.Messages,
+				gantry.Message{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "search"}}},
+				gantry.Message{Role: gantry.RoleTool, ToolCallID: "c1", Content: "found"},
+				gantry.Message{Role: gantry.RoleAssistant, Content: "partial"},
+			)
+			return done(gantry.DoneMaxIterations, twoStepPlan())(in)
+		},
+		func(in *gantry.State) *gantry.State {
+			secondRun = append([]gantry.Message(nil), in.Messages...)
+			return done(gantry.DoneNoToolCalls, nil)(in)
+		},
+	}}
+	d := NewDriver(runner, NewInMemory())
+	tk := &Task{ID: "tk-1", Status: TaskPending}
+
+	if _, err := d.Advance(context.Background(), tk, "do it"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if runner.calls != 2 {
+		t.Fatalf("runner called %d times, want 2", runner.calls)
+	}
+	var sawToolResult bool
+	for _, m := range secondRun {
+		if m.Role == gantry.RoleAssistant && m.Content == "partial" {
+			t.Errorf("continuation transcript still carries the wrap-up answer: %+v", m)
+		}
+		if m.Role == gantry.RoleTool && m.Content == "found" {
+			sawToolResult = true
+		}
+	}
+	if !sawToolResult {
+		t.Error("continuation transcript lost the pre-wrap-up tool result")
+	}
+}
+
+func TestDropWrapUpAnswer(t *testing.T) {
+	toolRes := gantry.Message{Role: gantry.RoleTool, ToolCallID: "c1", Content: "found"}
+	answer := gantry.Message{Role: gantry.RoleAssistant, Content: "partial"}
+	call := gantry.Message{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{{ID: "c1"}}}
+	cases := []struct {
+		name   string
+		reason gantry.DoneReason
+		in     []gantry.Message
+		want   int
+	}{
+		{"capped, ends on wrap-up answer", gantry.DoneMaxIterations, []gantry.Message{call, toolRes, answer}, 2},
+		{"capped, ends on tool result (no wrap-up)", gantry.DoneMaxIterations, []gantry.Message{call, toolRes}, 2},
+		{"capped, ends on assistant tool call", gantry.DoneMaxIterations, []gantry.Message{toolRes, call}, 2},
+		{"normal finish keeps the answer", gantry.DoneNoToolCalls, []gantry.Message{call, toolRes, answer}, 3},
+		{"empty transcript", gantry.DoneMaxIterations, nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dropWrapUpAnswer(&gantry.State{DoneReason: tc.reason, Messages: tc.in})
+			if len(got) != tc.want {
+				t.Errorf("len = %d, want %d (%+v)", len(got), tc.want, got)
+			}
+		})
+	}
+}
