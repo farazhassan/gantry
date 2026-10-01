@@ -50,7 +50,7 @@ func TestTerminationConvention(t *testing.T) {
 		mock := eval.NewMockLLMClient(gantry.LLMResponse{
 			ToolCalls:  []gantry.ToolCall{{ID: "c1", Name: "noop"}},
 			StopReason: gantry.StopReasonToolUse,
-		})
+		}, gantry.LLMResponse{Content: "wrap-up", StopReason: gantry.StopReasonEnd}) // +1: max-iterations wrap-up turn
 		a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
 		if err := a.With(tool.FromTools(1, noopTool{})); err != nil {
 			t.Fatalf("install tool: %v", err)
