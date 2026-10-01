@@ -139,3 +139,34 @@ func TestDefaultLLMCallHandler_NoContextTemperatureDefaultsToZero(t *testing.T) 
 		t.Errorf("req.Temperature = %v, want 0", gotReq.Temperature)
 	}
 }
+
+func TestDefaultLLMCallHandler_PassesToolChoiceFromContext(t *testing.T) {
+	var got LLMRequest
+	h := DefaultLLMCallHandler(recordingLLM{resp: LLMResponse{Content: "ok"}, capture: &got})
+	ctx := withToolChoice(context.Background(), &ToolChoice{Mode: ToolChoiceNone})
+	state := &State{Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(ctx, state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if got.ToolChoice == nil || got.ToolChoice.Mode != ToolChoiceNone {
+		t.Fatalf("ToolChoice = %+v, want Mode none", got.ToolChoice)
+	}
+}
+
+func TestDefaultLLMCallHandler_NilToolChoiceByDefault(t *testing.T) {
+	var got LLMRequest
+	h := DefaultLLMCallHandler(recordingLLM{resp: LLMResponse{Content: "ok"}, capture: &got})
+	state := &State{Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(context.Background(), state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if got.ToolChoice != nil {
+		t.Fatalf("ToolChoice = %+v, want nil", got.ToolChoice)
+	}
+}
+
+func TestToolChoiceFrom_BareContextIsNil(t *testing.T) {
+	if tc := ToolChoiceFrom(context.Background()); tc != nil {
+		t.Fatalf("ToolChoiceFrom(bare) = %+v, want nil", tc)
+	}
+}

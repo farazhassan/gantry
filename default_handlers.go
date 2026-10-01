@@ -30,6 +30,7 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			System:      state.System,
 			Messages:    state.Messages,
 			Tools:       state.Tools,
+			ToolChoice:  ToolChoiceFrom(ctx),
 			Temperature: temperatureFrom(ctx),
 		}
 		genCtx, gen := startGeneration(ctx, req)

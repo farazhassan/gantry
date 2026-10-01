@@ -39,6 +39,25 @@ type ToolChoice struct {
 	Name string // set only when Mode == ToolChoiceTool
 }
 
+// toolChoiceKey carries a per-call ToolChoice on the request context so the
+// agent loop can constrain one LLM call (the max-iterations wrap-up turn) without
+// threading it through handler signatures — the same mechanism temperature
+// uses (withTemperature/temperatureFrom).
+type toolChoiceKey struct{}
+
+func withToolChoice(ctx context.Context, tc *ToolChoice) context.Context {
+	return context.WithValue(ctx, toolChoiceKey{}, tc)
+}
+
+// ToolChoiceFrom returns the ToolChoice the agent loop set for the current LLM
+// call, or nil when none was set (provider default). DefaultLLMCallHandler
+// copies it into LLMRequest.ToolChoice; custom inner PhaseLLMCall handlers
+// should do the same so the max-iterations wrap-up turn stays tool-less.
+func ToolChoiceFrom(ctx context.Context) *ToolChoice {
+	tc, _ := ctx.Value(toolChoiceKey{}).(*ToolChoice)
+	return tc
+}
+
 // LLMResponse carries the LLM's reply.
 //
 // Construct it with keyed fields (LLMResponse{Content: ...}); the field set
