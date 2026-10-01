@@ -42,7 +42,11 @@ var (
 type DoneReason string
 
 const (
-	DoneNoToolCalls      DoneReason = "no_tool_calls"
+	DoneNoToolCalls DoneReason = "no_tool_calls"
+	// DoneMaxIterations means the iteration cap was reached before the model
+	// finished. The agent was then given one tool-less wrap-up turn
+	// (MaxIterationsWrapUpPrompt, ToolChoiceNone); its text — possibly empty —
+	// is FinalOutput.
 	DoneMaxIterations    DoneReason = "max_iterations"
 	DoneBudgetExceeded   DoneReason = "budget_exceeded"
 	DoneGuardrailBlocked DoneReason = "guardrail_blocked"
