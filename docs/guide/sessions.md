@@ -7,7 +7,7 @@ makes state shared across every message in a session.
 
 For the component overview see the [reference](../resources/reference.md); for the API see the
 [`session` package docs](https://pkg.go.dev/github.com/farazhassan/gantry/session). For how sessions relate to the
-planned **Task** layer for long-running autonomous work, see
+**Task** layer for long-running autonomous work, see
 [Sessions & Task Management](task-management.md).
 
 ## How it works
