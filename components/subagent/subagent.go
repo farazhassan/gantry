@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/farazhassan/gantry"
@@ -104,6 +105,8 @@ func (t *delegateTool) Definition() gantry.ToolDef {
 // The child sees ONLY the goal and optional context — a fresh run, no parent
 // transcript. Child run errors return as tool errors: dispatch surfaces them
 // to the parent's model as an error tool result and the parent run continues.
+// A child that finishes with an empty (whitespace-only) FinalOutput is also a
+// tool error, naming its DoneReason, rather than a silent {"output": ""}.
 //
 // Run (not Resume) is the child entry point: Run mints a fresh gantry.State
 // via NewState (Trace and Meta initialized) and DefaultStartHandler seeds the
@@ -166,6 +169,9 @@ func (t *delegateTool) Invoke(ctx context.Context, input json.RawMessage) (json.
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: child run failed: %w", t.name, err)
+	}
+	if strings.TrimSpace(st.FinalOutput) == "" {
+		return nil, fmt.Errorf("%s: child run produced no output (done_reason=%s)", t.name, st.DoneReason)
 	}
 	out, mErr := json.Marshal(map[string]string{"output": st.FinalOutput})
 	if mErr != nil {
