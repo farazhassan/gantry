@@ -26,7 +26,9 @@ PhaseStart  →  ┌─ PhaseAssembleContext ──┐
 ```
 
 `PhaseStart` runs once, the inner phases repeat until the run is done, and
-`PhaseEnd` runs once at the end.
+`PhaseEnd` runs once when the run finishes cleanly. If a phase returns an error
+or the context is canceled, the run stops there and `PhaseEnd` is skipped — so
+use it to commit results, not to clean up.
 
 ## Handlers and middleware
 
