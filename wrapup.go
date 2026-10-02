@@ -45,8 +45,11 @@ const wrapUpNoAnswer = "No answer: reached the iteration limit without producing
 func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
 	// resumed pass doesn't send it twice.
-	removeWrapUpPrompt(state)
-	defer removeWrapUpPrompt(state)
+	removeTrailingWrapUpPrompt(state)
+	// promptIdx is where this pass injected the prompt, or -1 while there is
+	// nothing (left) to remove.
+	promptIdx := -1
+	defer func() { removeInjectedWrapUpPrompt(state, &promptIdx) }()
 	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
 
 	prompted := false
@@ -62,16 +65,24 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		}
 		if ph == PhaseLLMCall && !prompted {
 			prompted = true
+			promptIdx = len(state.Messages)
 			state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt})
 		}
+		prev := state.LastResponse
 		if err := a.runPhase(ctx, tracer, ph, state); err != nil {
 			return err
 		}
 		if ph == PhaseLLMCall {
 			// The model has consumed the prompt; drop it now so PostLLM
 			// middleware (e.g. a checkpointer) never sees or saves it.
-			removeWrapUpPrompt(state)
-			stripWrapUpToolCalls(state)
+			removeInjectedWrapUpPrompt(state, &promptIdx)
+			// Only a response produced by this pass is stripped: if
+			// middleware ended the pass without calling the LLM,
+			// LastResponse is still the capped turn's, whose tool calls
+			// the transcript holds.
+			if state.LastResponse != prev {
+				stripWrapUpToolCalls(state)
+			}
 		}
 		if err := a.emitPhaseEffects(ctx, ph, state); err != nil {
 			return err
@@ -118,11 +129,34 @@ func stripWrapUpToolCalls(state *State) {
 	state.LastResponse = &stripped
 }
 
-// removeWrapUpPrompt deletes the last user message whose content is exactly
-// MaxIterationsWrapUpPrompt. It searches by content, not by index, because
-// PhaseLLMCall middleware may append or rewrite messages during the pass.
-func removeWrapUpPrompt(state *State) {
-	for i := len(state.Messages) - 1; i >= 0; i-- {
+// removeTrailingWrapUpPrompt drops MaxIterationsWrapUpPrompt if it is the
+// last message: that is where a state checkpointed mid-wrap-up (e.g. at
+// PhaseLLMCall) carries it. Only the last message is considered, so a real
+// user message with identical content is never touched — a user's input
+// cannot be last when the cap is reached, since that takes at least one
+// assistant turn after it.
+func removeTrailingWrapUpPrompt(state *State) {
+	if n := len(state.Messages); n > 0 {
+		if m := state.Messages[n-1]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
+			state.Messages = state.Messages[:n-1]
+		}
+	}
+}
+
+// removeInjectedWrapUpPrompt removes the prompt this pass injected at index
+// *idx: it searches backward from the end for a RoleUser
+// MaxIterationsWrapUpPrompt message but never below *idx, so earlier messages
+// with identical content are never touched, and middleware that appended
+// after the prompt doesn't defeat it. If the slice was shortened below *idx
+// it does nothing. It then sets *idx to -1, so a later call (the deferred
+// cleanup) is a no-op.
+func removeInjectedWrapUpPrompt(state *State, idx *int) {
+	start := *idx
+	if start < 0 {
+		return
+	}
+	*idx = -1
+	for i := len(state.Messages) - 1; i >= start; i-- {
 		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
 			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
 			return

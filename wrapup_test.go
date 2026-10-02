@@ -202,6 +202,47 @@ func TestWrapUpMiddlewareStopKeepsItsReason(t *testing.T) {
 	if n := len(mock.Requests()); n != 1 {
 		t.Errorf("LLM calls = %d, want 1 (wrap-up skipped)", n)
 	}
+	// No wrap-up response was produced, so the capped turn's response (and
+	// its tool call, which the transcript holds) must be left untouched.
+	if state.LastResponse == nil || len(state.LastResponse.ToolCalls) != 1 || state.LastResponse.ToolCalls[0].ID != "a" {
+		t.Errorf("LastResponse = %+v, want the capped turn's response with tool call 'a'", state.LastResponse)
+	}
+}
+
+func TestWrapUpKeepsUserMessageMatchingPrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "wrapped", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), gantry.MaxIterationsWrapUpPrompt)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if m := state.Messages[0]; m.Role != gantry.RoleUser || m.Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("stored messages[0] = %+v, want the user's input (identical to the prompt)", m)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("LLM calls = %d, want 2", len(reqs))
+	}
+	wrap := reqs[1].Messages
+	if m := wrap[0]; m.Role != gantry.RoleUser || m.Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("wrap-up request messages[0] = %+v, want the user's input", m)
+	}
+	if n := len(wrap); n != 4 {
+		t.Errorf("wrap-up request has %d messages, want 4 (input, tool call, tool result, prompt)", n)
+	}
+	if m := state.Messages[len(state.Messages)-1]; m.Role != gantry.RoleAssistant || m.Content != "wrapped" {
+		t.Errorf("last message = %+v, want assistant 'wrapped'", m)
+	}
 }
 
 func TestWrapUpSkippedWhenContextCancelled(t *testing.T) {
