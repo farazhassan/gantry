@@ -12,10 +12,20 @@ exclude_docs: |
 
 nav:
   - Home: index.md
-  - Reference: reference.md
-  - Sessions: sessions.md
-  - Sessions & Task Management: task-management.md
-  - Roadmap: roadmap.md
+  - Getting started:
+      - getting-started/installing.md
+      - getting-started/hello-agent.md
+      - getting-started/basic-middleware.md
+      - getting-started/adding-a-tool.md
+      - getting-started/examples.md
+      - getting-started/faq.md
+  - Guide:
+      - Sessions: guide/sessions.md
+      - Tasks: guide/task-management.md
+  - API reference: https://pkg.go.dev/github.com/farazhassan/gantry
+  - Resources:
+      - Reference: resources/reference.md
+      - Roadmap: resources/roadmap.md
 
 theme:
   name: material
