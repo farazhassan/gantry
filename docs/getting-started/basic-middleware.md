@@ -17,7 +17,7 @@ Every call to `agent.Run` walks the same fixed sequence of phases. These are
 the "routes" of a Gantry agent:
 
 ```text
-PhaseStart  →  ┌─ PhaseAssembleContext ─┐
+PhaseStart  →  ┌─ PhaseAssembleContext ──┐
                │  PhaseLLMCall           │
                │  PhasePostLLM           │ ← repeat until state.Done
                │  PhaseToolExec          │   (or MaxIterations reached)

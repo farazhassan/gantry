@@ -6,7 +6,7 @@ Graph and workflow frameworks describe an agent as nodes and edges in their own
 abstraction. Gantry runs a fixed, readable sequence of
 [phases](basic-middleware.md#the-phases) every turn, and you add behavior as
 ordinary Go middleware. There's no graph to debug: each unit is a plain function
-you can unit-test in a line, and you can read the whole loop top to bottom.
+you can unit-test, and you can read the whole loop top to bottom.
 
 ## Which LLM providers are supported?
 
@@ -30,20 +30,25 @@ llm := eval.NewMockLLMClient(gantry.LLMResponse{
 })
 ```
 
-Every program in [`examples/`](examples.md) is tested this way. For scoring
+Most programs in [`examples/`](examples.md) are tested this way. For scoring
 agents across many cases, see the
 [eval harness](../resources/reference.md#eval).
 
 ## How does a run stop, and what does `DoneReason` mean?
 
 `Run` always returns a non-nil `*State`, so you can check
-`state.DoneReason`. Stops fall into two groups:
+`state.DoneReason`. The common stops are:
 
 - **Normal and resource stops** — `no_tool_calls`, `max_iterations`,
   `budget_exceeded` — return a **nil** error.
 - **Blocks and aborts** — `guardrail_blocked`, `human_aborted` — return a
   sentinel error. Branch on them with `errors.Is(err, gantry.ErrGuardrailBlocked)`
   or `errors.Is(err, gantry.ErrHumanAborted)`.
+- **Tool-policy aborts** — `tool_policy_aborted` — return
+  `gantry.ErrToolPolicyAborted`.
+
+See the [`DoneReason` docs](https://pkg.go.dev/github.com/farazhassan/gantry#DoneReason)
+for the full list.
 
 Cap the number of loop iterations with `gantry.WithMaxIterations(n)`.
 

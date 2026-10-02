@@ -35,7 +35,12 @@ and shipping LLM agents in Go.
 
 ## A taste
 
+```sh
+go get github.com/farazhassan/gantry
+```
+
 ```go
+// excerpt — see Getting started for the full program
 llm := openrouter.New("deepseek/deepseek-v4-flash")
 
 agent, _ := gantry.NewAgent(gantry.WithLLM(llm))

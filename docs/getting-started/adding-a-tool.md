@@ -89,8 +89,8 @@ done: no_tool_calls
 This time the agent loop went around **twice**:
 
 1. **First pass.** The model saw the `calc` tool and, instead of answering,
-   asked to call it with `{"a": 2, "b": 3}` — that's the assistant message with
-   no text. `PhaseToolExec` ran `calcTool.Invoke`, and `PhaseObserve` added the
+   asked to call it with `{"a": 2, "b": 3}` — that's the assistant message,
+   usually with no text. `PhaseToolExec` ran `calcTool.Invoke`, and `PhaseObserve` added the
    result (`5`) to the conversation as a `tool` message.
 2. **Second pass.** The model saw the tool result and answered in plain text.
    With no more tool calls to make, the run stopped with `no_tool_calls`.
@@ -99,7 +99,7 @@ This time the agent loop went around **twice**:
 
 `tool.FromTools(1, calcTool{})` returns a **component** — a packaged bundle of
 middleware. `agent.With` installs it on the right phases for you: it advertises
-the tools while the context is assembled and dispatches calls in
+the tools once when the run starts (`PhaseStart`) and dispatches calls in
 `PhaseToolExec`. The `1` is the parallelism: how many tool calls may run at
 once.
 

@@ -16,8 +16,8 @@ go mod init myagent
 go get github.com/farazhassan/gantry
 ```
 
-Gantry's core depends only on the Go standard library. The built-in LLM
-adapters and components live in the same module, so that one `go get` is all
+Gantry's core depends only on the Go standard library. The LLM adapters
+and core components used in these guides live in the same module, so that one `go get` is all
 you need to follow these guides.
 
 ## Choose an LLM provider
