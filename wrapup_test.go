@@ -13,6 +13,7 @@ import (
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/components/tool"
+	"github.com/farazhassan/gantry/components/transcript"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -324,6 +325,28 @@ func TestWrapUpStrayToolCallsWithEmptyContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	assertTextlessWrapUp(t, state)
+}
+
+func TestWrapUpEmptyTextAnswer(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "", StopReason: gantry.StopReasonEnd},
+	)
+	a := newCappedAgent(t, mock, 1)
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertTextlessWrapUp(t, state)
+}
+
+// assertTextlessWrapUp checks a run whose wrap-up turn produced no text: the
+// run is unanswered (empty FinalOutput, max_iterations), and the transcript
+// ends with the placeholder assistant message instead of an empty one.
+func assertTextlessWrapUp(t *testing.T, state *gantry.State) {
+	t.Helper()
 	if state.FinalOutput != "" || state.DoneReason != gantry.DoneMaxIterations {
 		t.Errorf("FinalOutput/DoneReason = %q/%q, want empty/max_iterations", state.FinalOutput, state.DoneReason)
 	}
@@ -339,6 +362,61 @@ func TestWrapUpStrayToolCallsWithEmptyContent(t *testing.T) {
 				t.Errorf("stray tool call left in transcript")
 			}
 		}
+	}
+	last := state.Messages[len(state.Messages)-1]
+	if last.Role != gantry.RoleAssistant || last.Content != gantry.WrapUpNoAnswer || len(last.ToolCalls) != 0 {
+		t.Errorf("last message = %+v, want assistant placeholder %q with no tool calls", last, gantry.WrapUpNoAnswer)
+	}
+}
+
+func TestWrapUpTextlessAnswerPersistsPlaceholder(t *testing.T) {
+	cases := map[string]gantry.LLMResponse{
+		"stray_calls": {ToolCalls: []gantry.ToolCall{{ID: "stray", Name: "noop"}}, StopReason: gantry.StopReasonToolUse},
+		"plain_empty": {Content: "", StopReason: gantry.StopReasonEnd},
+	}
+	for name, wrap := range cases {
+		t.Run(name, func(t *testing.T) {
+			mock := eval.NewMockLLMClient(toolTurn("a"), wrap)
+			a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
+			if err != nil {
+				t.Fatalf("NewAgent: %v", err)
+			}
+			if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+				t.Fatalf("install tool: %v", err)
+			}
+			store := transcript.NewInMemoryStore()
+			if err := a.With(transcript.New(store)); err != nil {
+				t.Fatalf("install transcript: %v", err)
+			}
+
+			if _, err := a.Run(context.Background(), "go"); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			hist, err := store.Read(context.Background())
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			toolUse := map[string]int{}
+			for _, m := range hist {
+				if m.Role != gantry.RoleAssistant {
+					continue
+				}
+				if m.Content == "" && len(m.ToolCalls) == 0 {
+					t.Errorf("stored an empty assistant message: %+v", m)
+				}
+				for _, tc := range m.ToolCalls {
+					toolUse[tc.ID]++
+				}
+			}
+			for id, n := range toolUse {
+				if n != 1 {
+					t.Errorf("tool_use %q stored %d times, want 1 (history %+v)", id, n, hist)
+				}
+			}
+			if last := hist[len(hist)-1]; last.Role != gantry.RoleAssistant || last.Content != gantry.WrapUpNoAnswer {
+				t.Errorf("last stored message = %+v, want the placeholder", last)
+			}
+		})
 	}
 }
 

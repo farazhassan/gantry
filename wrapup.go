@@ -4,13 +4,21 @@ import "context"
 
 // MaxIterationsWrapUpPrompt is the user message shown to the model on the
 // one tool-less wrap-up turn (ToolChoiceNone) a run gets when it exhausts its
-// iteration cap without finishing, so a capped run ends with a real
-// FinalOutput instead of an empty one. It is shown for that pass only and is
+// iteration cap without finishing, giving the model a chance to answer from
+// what it gathered (FinalOutput can still be empty). It is shown for that pass only and is
 // removed from the stored transcript afterwards, so later turns built on the
 // transcript never see it. It is exported for documentation and tests.
 const MaxIterationsWrapUpPrompt = "You have reached the iteration limit and cannot call any more tools. " +
 	"Give your best final answer now, using only what you have already gathered, " +
 	"and state clearly anything you were unable to determine."
+
+// wrapUpNoAnswer is the assistant message content recorded for a wrap-up turn
+// that produced no text (or only tool calls, which are stripped). Every
+// PostLLM step — including components/transcript's persist — sees a valid,
+// non-empty assistant message (provider APIs reject an assistant message with
+// no content), while FinalOutput stays empty so the run still reads as
+// unanswered.
+const wrapUpNoAnswer = "No answer: reached the iteration limit without producing a final response."
 
 // wrapUp runs once, after the main loop exits on the iteration cap with
 // state.Done still false. It re-runs the agent's phases (skipping
@@ -22,16 +30,18 @@ const MaxIterationsWrapUpPrompt = "You have reached the iteration limit and cann
 // exit path), so PostLLM middleware and the stored transcript read "... tool
 // results -> wrap-up answer". Tool calls the model returns anyway are stripped
 // before PhasePostLLM, so DefaultPostLLMHandler and PostLLM middleware see a
-// plain text answer, already marked DoneMaxIterations. Wrap-up phase events
-// carry Iteration == maxIterations.
+// plain text answer, already marked DoneMaxIterations; a text-less answer is
+// recorded as the wrapUpNoAnswer placeholder message with an empty FinalOutput.
+// Wrap-up phase events carry Iteration == maxIterations.
 //
 // Termination: a reason a middleware set during the pass (e.g. the limiter's
 // DoneBudgetExceeded, a guardrail block) stands; otherwise the run is reported
 // as DoneMaxIterations — DefaultPostLLMHandler records it directly on the
 // wrap-up turn, and wrapUp maps a remaining "" or DoneNoToolCalls (e.g. from a
-// custom inner PostLLM handler) to it after the pass. If components/critic rejects the wrap-up
-// answer its verdict stands: the run ends DoneMaxIterations with an empty
-// FinalOutput. A phase error is returned unchanged.
+// custom inner PostLLM handler) to it after the pass. If components/critic
+// rejects the wrap-up answer its verdict stands: the run ends
+// DoneMaxIterations with an empty FinalOutput. A phase error is returned
+// unchanged.
 func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
 	// resumed pass doesn't send it twice.
@@ -39,7 +49,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	defer removeWrapUpPrompt(state)
 	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
 
-	prompted, strippedEmpty := false, false
+	prompted := false
 	for _, ph := range a.phases {
 		if ph == PhaseStart || ph == PhaseEnd {
 			continue
@@ -61,10 +71,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 			// The model has consumed the prompt; drop it now so PostLLM
 			// middleware (e.g. a checkpointer) never sees or saves it.
 			removeWrapUpPrompt(state)
-			strippedEmpty = stripWrapUpToolCalls(state)
-		}
-		if ph == PhasePostLLM && strippedEmpty {
-			dropTrailingEmptyAssistant(state)
+			stripWrapUpToolCalls(state)
 		}
 		if err := a.emitPhaseEffects(ctx, ph, state); err != nil {
 			return err
@@ -99,28 +106,16 @@ func isWrapUp(ctx context.Context) bool {
 // turn despite ToolChoiceNone, before PhasePostLLM: they are never executed,
 // and DefaultPostLLMHandler and PostLLM middleware see a plain text answer
 // (Done, FinalOutput = the response text), so the transcript never ends with
-// a tool call that has no result. It reports whether calls were stripped from
-// a response with no text, whose assistant message must then be dropped.
-func stripWrapUpToolCalls(state *State) bool {
+// a tool call that has no result. LastResponse is replaced by a copy, never
+// mutated in place.
+func stripWrapUpToolCalls(state *State) {
 	resp := state.LastResponse
 	if resp == nil || len(resp.ToolCalls) == 0 {
-		return false
+		return
 	}
 	stripped := *resp
 	stripped.ToolCalls = nil
 	state.LastResponse = &stripped
-	return stripped.Content == ""
-}
-
-// dropTrailingEmptyAssistant removes the empty assistant message
-// DefaultPostLLMHandler appends for a stripped, text-less wrap-up response:
-// it would be sent as null content on the next turn.
-func dropTrailingEmptyAssistant(state *State) {
-	if n := len(state.Messages); n > 0 {
-		if m := state.Messages[n-1]; m.Role == RoleAssistant && m.Content == "" && len(m.ToolCalls) == 0 {
-			state.Messages = state.Messages[:n-1]
-		}
-	}
 }
 
 // removeWrapUpPrompt deletes the last user message whose content is exactly
