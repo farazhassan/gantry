@@ -13,13 +13,16 @@ const MaxIterationsWrapUpPrompt = "You have reached the iteration limit and cann
 	"and state clearly anything you were unable to determine."
 
 // wrapUp runs once, after the main loop exits on the iteration cap with
-// state.Done still false. It appends MaxIterationsWrapUpPrompt and re-runs the
-// agent's phases (skipping PhaseStart/PhaseEnd) up to and including
-// PhasePostLLM with ToolChoiceNone on the context, so middleware, tracing,
-// streaming, and usage accounting apply exactly as on any other turn. The
-// prompt is removed from state.Messages on every exit path, so the stored
-// transcript reads "... tool results -> wrap-up answer". Wrap-up phase events
-// carry Iteration == maxIterations.
+// state.Done still false. It re-runs the agent's phases (skipping
+// PhaseStart/PhaseEnd) up to and including PhasePostLLM with ToolChoiceNone on
+// the context, so middleware, tracing, streaming, and usage accounting apply
+// exactly as on any other turn. MaxIterationsWrapUpPrompt is appended just
+// before PhaseLLMCall runs, so context assembly (e.g. compaction) sees the same
+// transcript as a normal turn, and it is removed from state.Messages on every
+// exit path, so the stored transcript reads "... tool results -> wrap-up
+// answer". Tool calls the model returns anyway are stripped before
+// PhasePostLLM, so DefaultPostLLMHandler and PostLLM middleware see a plain
+// text answer. Wrap-up phase events carry Iteration == maxIterations.
 //
 // Termination: a reason a middleware set during the pass (e.g. the limiter's
 // DoneBudgetExceeded, a guardrail block) stands; otherwise — no reason, or the
@@ -31,10 +34,10 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
 	// resumed pass doesn't send it twice.
 	removeWrapUpPrompt(state)
-	state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt})
 	defer removeWrapUpPrompt(state)
 	ctx = withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone})
 
+	prompted, strippedEmpty := false, false
 	for _, ph := range a.phases {
 		if ph == PhaseStart || ph == PhaseEnd {
 			continue
@@ -45,13 +48,18 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if ph == PhaseLLMCall && !prompted {
+			prompted = true
+			state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt})
+		}
 		if err := a.runPhase(ctx, tracer, ph, state); err != nil {
 			return err
 		}
-		if ph == PhasePostLLM {
-			// Before emitPhaseEffects, so a stray call never surfaces as a
-			// tool_call event.
-			dropWrapUpToolCalls(state)
+		if ph == PhaseLLMCall {
+			strippedEmpty = stripWrapUpToolCalls(state)
+		}
+		if ph == PhasePostLLM && strippedEmpty {
+			dropTrailingEmptyAssistant(state)
 		}
 		if err := a.emitPhaseEffects(ctx, ph, state); err != nil {
 			return err
@@ -68,33 +76,38 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	return nil
 }
 
-// dropWrapUpToolCalls discards tool calls a model returned on the wrap-up turn
-// despite ToolChoiceNone: they are never executed, and they are stripped from
-// the assistant message so the transcript never ends with a tool call that has
-// no result. The response text is kept as FinalOutput.
-func dropWrapUpToolCalls(state *State) {
-	if len(state.PendingToolCalls) == 0 {
-		return
+// stripWrapUpToolCalls discards tool calls a model returned on the wrap-up
+// turn despite ToolChoiceNone, before PhasePostLLM: they are never executed,
+// and DefaultPostLLMHandler and PostLLM middleware see a plain text answer
+// (Done, FinalOutput = the response text), so the transcript never ends with
+// a tool call that has no result. It reports whether calls were stripped from
+// a response with no text, whose assistant message must then be dropped.
+func stripWrapUpToolCalls(state *State) bool {
+	resp := state.LastResponse
+	if resp == nil || len(resp.ToolCalls) == 0 {
+		return false
 	}
-	state.PendingToolCalls = nil
-	if n := len(state.Messages); n > 0 && state.Messages[n-1].Role == RoleAssistant {
-		if state.Messages[n-1].Content == "" {
-			// Nothing left: an empty assistant message would be sent as
-			// null content on the next turn.
+	stripped := *resp
+	stripped.ToolCalls = nil
+	state.LastResponse = &stripped
+	return stripped.Content == ""
+}
+
+// dropTrailingEmptyAssistant removes the empty assistant message
+// DefaultPostLLMHandler appends for a stripped, text-less wrap-up response:
+// it would be sent as null content on the next turn.
+func dropTrailingEmptyAssistant(state *State) {
+	if n := len(state.Messages); n > 0 {
+		if m := state.Messages[n-1]; m.Role == RoleAssistant && m.Content == "" && len(m.ToolCalls) == 0 {
 			state.Messages = state.Messages[:n-1]
-		} else {
-			state.Messages[n-1].ToolCalls = nil
 		}
-	}
-	if state.LastResponse != nil {
-		state.FinalOutput = state.LastResponse.Content
 	}
 }
 
 // removeWrapUpPrompt deletes the last user message whose content is exactly
 // MaxIterationsWrapUpPrompt. It searches by content, not by index, because
-// assemble_context middleware (e.g. a compactor) may rewrite earlier messages
-// during the pass.
+// PhaseLLMCall/PhasePostLLM middleware may append or rewrite messages after
+// the prompt during the pass.
 func removeWrapUpPrompt(state *State) {
 	for i := len(state.Messages) - 1; i >= 0; i-- {
 		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {

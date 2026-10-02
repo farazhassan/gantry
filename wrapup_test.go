@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
+	"github.com/farazhassan/gantry/components/tool"
 	"github.com/farazhassan/gantry/eval"
 )
 
@@ -401,4 +403,114 @@ func TestWrapUpResumedCheckpointDoesNotDuplicatePrompt(t *testing.T) {
 		t.Errorf("wrap-up request has %d prompt messages, want 1", count)
 	}
 	assertNoWrapUpPrompt(t, final)
+}
+
+// wrapUpNoopTool lets the capped turn's tool call dispatch, so its result lands
+// in the transcript ahead of the wrap-up turn.
+type wrapUpNoopTool struct{}
+
+func (wrapUpNoopTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "noop", Description: "noop", Schema: json.RawMessage(`{}`)}
+}
+
+func (wrapUpNoopTool) Invoke(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`"ok"`), nil
+}
+
+func TestWrapUpPromptAppendedAfterContextAssembly(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "wrapped", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(2), compactor.Budget{})); err != nil {
+		t.Fatalf("install compactor: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("LLM calls = %d, want 2", len(reqs))
+	}
+	msgs := reqs[1].Messages
+	if len(msgs) != 3 {
+		t.Fatalf("wrap-up request messages = %+v, want [assistant tool call, tool result, prompt]", msgs)
+	}
+	if m := msgs[0]; m.Role != gantry.RoleAssistant || len(m.ToolCalls) != 1 || m.ToolCalls[0].ID != "a" {
+		t.Errorf("wrap-up msgs[0] = %+v, want the assistant tool call", m)
+	}
+	if m := msgs[1]; m.Role != gantry.RoleTool || m.ToolCallID != "a" {
+		t.Errorf("wrap-up msgs[1] = %+v, want the tool result for 'a'", m)
+	}
+	if m := msgs[2]; m.Role != gantry.RoleUser || m.Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("wrap-up msgs[2] = %+v, want the wrap-up prompt", m)
+	}
+
+	assertNoWrapUpPrompt(t, state)
+	n := len(state.Messages)
+	if n < 3 {
+		t.Fatalf("stored messages = %+v, want at least 3", state.Messages)
+	}
+	if m := state.Messages[n-3]; m.Role != gantry.RoleAssistant || len(m.ToolCalls) != 1 || m.ToolCalls[0].ID != "a" {
+		t.Errorf("stored msgs[n-3] = %+v, want the assistant tool call", m)
+	}
+	if m := state.Messages[n-2]; m.Role != gantry.RoleTool || m.ToolCallID != "a" {
+		t.Errorf("stored msgs[n-2] = %+v, want the tool result for 'a'", m)
+	}
+	if m := state.Messages[n-1]; m.Role != gantry.RoleAssistant || m.Content != "wrapped" {
+		t.Errorf("stored last message = %+v, want assistant 'wrapped'", m)
+	}
+}
+
+func TestWrapUpPostLLMMiddlewareSeesStrippedAnswer(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{
+			Content:    "best guess",
+			ToolCalls:  []gantry.ToolCall{{ID: "stray", Name: "noop"}},
+			StopReason: gantry.StopReasonToolUse,
+		},
+	)
+	a := newCappedAgent(t, mock, 1)
+	type seen struct {
+		calls, pending int
+		done           bool
+		output         string
+	}
+	var got *seen
+	a.Use(gantry.PhasePostLLM, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			if err := next(ctx, s); err != nil {
+				return err
+			}
+			if gantry.ToolChoiceFrom(ctx) != nil {
+				got = &seen{
+					calls:   len(s.LastResponse.ToolCalls),
+					pending: len(s.PendingToolCalls),
+					done:    s.Done,
+					output:  s.FinalOutput,
+				}
+			}
+			return nil
+		}
+	})
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got == nil {
+		t.Fatal("post_llm middleware never ran on the wrap-up turn")
+	}
+	if got.calls != 0 || got.pending != 0 || !got.done || got.output != "best guess" {
+		t.Errorf("post_llm saw %+v, want 0 calls, 0 pending, done, output 'best guess'", *got)
+	}
 }
