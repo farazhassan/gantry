@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/components/checkpointer"
+	ckmem "github.com/farazhassan/gantry/components/checkpointer/mem"
 	"github.com/farazhassan/gantry/components/compactor"
 	"github.com/farazhassan/gantry/components/critic"
 	"github.com/farazhassan/gantry/components/tool"
@@ -485,6 +487,8 @@ func TestWrapUpPostLLMMiddlewareSeesStrippedAnswer(t *testing.T) {
 		calls, pending int
 		done           bool
 		output         string
+		reason         gantry.DoneReason
+		prompt         bool
 	}
 	var got *seen
 	a.Use(gantry.PhasePostLLM, func(next gantry.Handler) gantry.Handler {
@@ -498,6 +502,8 @@ func TestWrapUpPostLLMMiddlewareSeesStrippedAnswer(t *testing.T) {
 					pending: len(s.PendingToolCalls),
 					done:    s.Done,
 					output:  s.FinalOutput,
+					reason:  s.DoneReason,
+					prompt:  hasWrapUpPrompt(s),
 				}
 			}
 			return nil
@@ -512,5 +518,57 @@ func TestWrapUpPostLLMMiddlewareSeesStrippedAnswer(t *testing.T) {
 	}
 	if got.calls != 0 || got.pending != 0 || !got.done || got.output != "best guess" {
 		t.Errorf("post_llm saw %+v, want 0 calls, 0 pending, done, output 'best guess'", *got)
+	}
+	if got.reason != gantry.DoneMaxIterations || got.prompt {
+		t.Errorf("post_llm saw reason %q / prompt %v, want %q / no prompt", got.reason, got.prompt, gantry.DoneMaxIterations)
+	}
+}
+
+func hasWrapUpPrompt(s *gantry.State) bool {
+	for _, m := range s.Messages {
+		if m.Role == gantry.RoleUser && m.Content == gantry.MaxIterationsWrapUpPrompt {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWrapUpPostLLMCheckpointIsTerminalAndClean(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "wrapped", StopReason: gantry.StopReasonEnd},
+	)
+	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	// Simulate a crash before PhaseEnd's save: registered before the
+	// checkpointer, so it is inner to its PhaseEnd hook, which then skips
+	// saving. The stored checkpoint is the wrap-up turn's PhasePostLLM save.
+	crash := errors.New("crash before end")
+	a.Use(gantry.PhaseEnd, func(gantry.Handler) gantry.Handler {
+		return func(context.Context, *gantry.State) error { return crash }
+	})
+	cp := ckmem.New()
+	if err := a.With(checkpointer.New(cp, "wrap", gantry.PhasePostLLM)); err != nil {
+		t.Fatalf("install checkpointer: %v", err)
+	}
+
+	if _, err := a.Run(context.Background(), "go"); !errors.Is(err, crash) {
+		t.Fatalf("Run err = %v, want the simulated crash", err)
+	}
+	loaded, err := cp.Load(context.Background(), "wrap")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.Done || loaded.DoneReason != gantry.DoneMaxIterations || loaded.FinalOutput != "wrapped" {
+		t.Errorf("checkpoint Done/DoneReason/FinalOutput = %v/%q/%q, want true/%q/wrapped",
+			loaded.Done, loaded.DoneReason, loaded.FinalOutput, gantry.DoneMaxIterations)
+	}
+	if hasWrapUpPrompt(loaded) {
+		t.Errorf("checkpoint saved at post_llm still holds the wrap-up prompt")
 	}
 }

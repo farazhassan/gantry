@@ -18,16 +18,18 @@ const MaxIterationsWrapUpPrompt = "You have reached the iteration limit and cann
 // the context, so middleware, tracing, streaming, and usage accounting apply
 // exactly as on any other turn. MaxIterationsWrapUpPrompt is appended just
 // before PhaseLLMCall runs, so context assembly (e.g. compaction) sees the same
-// transcript as a normal turn, and it is removed from state.Messages on every
-// exit path, so the stored transcript reads "... tool results -> wrap-up
-// answer". Tool calls the model returns anyway are stripped before
-// PhasePostLLM, so DefaultPostLLMHandler and PostLLM middleware see a plain
-// text answer. Wrap-up phase events carry Iteration == maxIterations.
+// transcript as a normal turn, and removed right after it (and on every other
+// exit path), so PostLLM middleware and the stored transcript read "... tool
+// results -> wrap-up answer". Tool calls the model returns anyway are stripped
+// before PhasePostLLM, so DefaultPostLLMHandler and PostLLM middleware see a
+// plain text answer, already marked DoneMaxIterations. Wrap-up phase events
+// carry Iteration == maxIterations.
 //
 // Termination: a reason a middleware set during the pass (e.g. the limiter's
-// DoneBudgetExceeded, a guardrail block) stands; otherwise — no reason, or the
-// DoneNoToolCalls DefaultPostLLMHandler sets on a plain answer — the run is
-// reported as DoneMaxIterations. If components/critic rejects the wrap-up
+// DoneBudgetExceeded, a guardrail block) stands; otherwise the run is reported
+// as DoneMaxIterations — DefaultPostLLMHandler records it directly on the
+// wrap-up turn, and wrapUp maps a remaining "" or DoneNoToolCalls (e.g. from a
+// custom inner PostLLM handler) to it after the pass. If components/critic rejects the wrap-up
 // answer its verdict stands: the run ends DoneMaxIterations with an empty
 // FinalOutput. A phase error is returned unchanged.
 func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
@@ -35,7 +37,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// resumed pass doesn't send it twice.
 	removeWrapUpPrompt(state)
 	defer removeWrapUpPrompt(state)
-	ctx = withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone})
+	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
 
 	prompted, strippedEmpty := false, false
 	for _, ph := range a.phases {
@@ -56,6 +58,9 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 			return err
 		}
 		if ph == PhaseLLMCall {
+			// The model has consumed the prompt; drop it now so PostLLM
+			// middleware (e.g. a checkpointer) never sees or saves it.
+			removeWrapUpPrompt(state)
 			strippedEmpty = stripWrapUpToolCalls(state)
 		}
 		if ph == PhasePostLLM && strippedEmpty {
@@ -74,6 +79,20 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		state.DoneReason = DoneMaxIterations
 	}
 	return nil
+}
+
+// wrapUpKey marks the context of the max-iterations wrap-up pass, so
+// DefaultPostLLMHandler can record DoneMaxIterations rather than
+// DoneNoToolCalls for the wrap-up answer.
+type wrapUpKey struct{}
+
+func withWrapUp(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wrapUpKey{}, true)
+}
+
+func isWrapUp(ctx context.Context) bool {
+	v, _ := ctx.Value(wrapUpKey{}).(bool)
+	return v
 }
 
 // stripWrapUpToolCalls discards tool calls a model returned on the wrap-up
@@ -106,8 +125,7 @@ func dropTrailingEmptyAssistant(state *State) {
 
 // removeWrapUpPrompt deletes the last user message whose content is exactly
 // MaxIterationsWrapUpPrompt. It searches by content, not by index, because
-// PhaseLLMCall/PhasePostLLM middleware may append or rewrite messages after
-// the prompt during the pass.
+// PhaseLLMCall middleware may append or rewrite messages during the pass.
 func removeWrapUpPrompt(state *State) {
 	for i := len(state.Messages) - 1; i >= 0; i-- {
 		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {

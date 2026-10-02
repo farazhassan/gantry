@@ -97,8 +97,9 @@ func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMReque
 
 // DefaultPostLLMHandler examines state.LastResponse. If the response has
 // pending tool calls, they are copied into state.PendingToolCalls. If it has
-// no tool calls, the loop is marked Done with DoneNoToolCalls and the LLM
-// content becomes the FinalOutput.
+// no tool calls, the loop is marked Done with DoneNoToolCalls (DoneMaxIterations
+// on the max-iterations wrap-up turn, so PostLLM middleware and checkpoints see
+// the true terminal reason) and the LLM content becomes the FinalOutput.
 //
 // The assistant message itself is appended to state.Messages so the next
 // LLM call (if any) sees the prior turn.
@@ -119,6 +120,9 @@ func DefaultPostLLMHandler(ctx context.Context, state *State) error {
 	if len(resp.ToolCalls) == 0 {
 		state.Done = true
 		state.DoneReason = DoneNoToolCalls
+		if isWrapUp(ctx) {
+			state.DoneReason = DoneMaxIterations
+		}
 		state.FinalOutput = resp.Content
 		return nil
 	}
