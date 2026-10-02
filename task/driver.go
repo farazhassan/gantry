@@ -306,7 +306,7 @@ func (d *Driver) run(ctx context.Context, t *Task) (res *Task, err error) {
 		if t.Status == TaskPending && t.Plan != nil && len(t.Plan.Steps) > 0 {
 			t.Status = TaskActive // "no active without a plan" invariant
 		}
-		t.Working = state.Messages
+		t.Working = dropWrapUpAnswer(state)
 		t.Budget.recordRun(state.Usage)
 
 		// ---- decide ----
@@ -441,3 +441,23 @@ var _ Runner = (*gantry.Agent)(nil)
 // ResumeStream method, so WithEventSink streams out of the box with the
 // default agent runner.
 var _ StreamingRunner = (*gantry.Agent)(nil)
+
+// dropWrapUpAnswer returns state's transcript without the max-iterations
+// wrap-up answer. When a run hits its iteration cap, core gives the model one
+// tool-less wrap-up turn (see gantry.MaxIterationsWrapUpPrompt), so a capped
+// transcript ends on that answer. The driver continues a capped run from
+// Working, and starting on a trailing assistant message would make the next run
+// continue the answer (Anthropic treats it as a prefill) instead of resuming the
+// work. A DoneMaxIterations run ending on a tool-less assistant message can only
+// be the wrap-up answer: a run that ended on such a message without hitting the
+// cap is DoneNoToolCalls.
+func dropWrapUpAnswer(state *gantry.State) []gantry.Message {
+	msgs := state.Messages
+	if state.DoneReason != gantry.DoneMaxIterations || len(msgs) == 0 {
+		return msgs
+	}
+	if last := msgs[len(msgs)-1]; last.Role == gantry.RoleAssistant && len(last.ToolCalls) == 0 {
+		return msgs[:len(msgs)-1]
+	}
+	return msgs
+}

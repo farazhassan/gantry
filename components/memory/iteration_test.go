@@ -81,7 +81,11 @@ func TestPersistRequiresDoneAlongsideFinalOutput(t *testing.T) {
 	_ = store.Add(ctx, vectorstore.Item{Text: "seeded memory", Vector: []float32{1, 0}})
 	emb := &stubEmbedder{}
 
-	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd})
+	mock := eval.NewMockLLMClient(
+		gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd},
+		// +1: max-iterations wrap-up turn (the probe clears Done every turn, so the run hits the cap)
+		gantry.LLMResponse{Content: "wrap-up", StopReason: gantry.StopReasonEnd},
+	)
 	a, err := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(1))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)

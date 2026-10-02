@@ -1,6 +1,9 @@
 package gantry
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // DefaultStartHandler seeds state.Messages with state.Input as a user message
 // if state.Messages is empty and state.Input is non-empty. Memory middleware
@@ -30,6 +33,7 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			System:      state.System,
 			Messages:    state.Messages,
 			Tools:       state.Tools,
+			ToolChoice:  ToolChoiceFrom(ctx),
 			Temperature: temperatureFrom(ctx),
 		}
 		genCtx, gen := startGeneration(ctx, req)
@@ -101,10 +105,29 @@ func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMReque
 //
 // The assistant message itself is appended to state.Messages so the next
 // LLM call (if any) sees the prior turn.
+//
+// On the max-iterations wrap-up turn the reason is DoneMaxIterations instead,
+// so PostLLM middleware and checkpoints see the true terminal reason; and if
+// the wrap-up answer has no text (empty or whitespace-only), the appended
+// assistant message carries the wrapUpNoAnswer placeholder rather than empty
+// content (which provider APIs reject on a later turn), while FinalOutput
+// stays empty.
 func DefaultPostLLMHandler(ctx context.Context, state *State) error {
 	resp := state.LastResponse
 	if resp == nil {
 		// No LLM call happened (e.g. middleware short-circuited). Nothing to do.
+		return nil
+	}
+
+	if len(resp.ToolCalls) == 0 && isWrapUp(ctx) {
+		content, output := resp.Content, resp.Content
+		if strings.TrimSpace(content) == "" {
+			content, output = wrapUpNoAnswer, ""
+		}
+		state.Messages = append(state.Messages, Message{Role: RoleAssistant, Content: content})
+		state.Done = true
+		state.DoneReason = DoneMaxIterations
+		state.FinalOutput = output
 		return nil
 	}
 

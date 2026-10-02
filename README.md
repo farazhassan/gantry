@@ -163,6 +163,13 @@ inspect `state.DoneReason` and the trace.
 - **Active blocks / aborts** (`guardrail_blocked`, `human_aborted`) set
   `state.Done` **and** return a sentinel error — use `errors.Is` with
   `gantry.ErrGuardrailBlocked` / `gantry.ErrHumanAborted` to branch.
+- **Hitting `MaxIterations`** is followed by one tool-less wrap-up LLM turn
+  (`ToolChoiceNone`, prompt `gantry.MaxIterationsWrapUpPrompt`) that gives the
+  model a chance to answer from what it gathered. The run still ends
+  `max_iterations`; `FinalOutput` holds the wrap-up answer, which can be empty
+  (e.g. the model returned no text, or a critic rejected it). Custom
+  `PhaseLLMCall` inner handlers should copy `gantry.ToolChoiceFrom(ctx)` into
+  their request.
 
 ## Components
 

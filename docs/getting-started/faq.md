@@ -50,7 +50,12 @@ agents across many cases, see the
 See the [`DoneReason` docs](https://pkg.go.dev/github.com/farazhassan/gantry#DoneReason)
 for the full list.
 
-Cap the number of loop iterations with `gantry.WithMaxIterations(n)`.
+Cap the number of loop iterations with `gantry.WithMaxIterations(n)`. When a
+run hits the cap, Gantry gives the model one last turn without tools
+(prompt: `gantry.MaxIterationsWrapUpPrompt`) so it can answer from what it
+gathered. The run still ends with `max_iterations`, and `FinalOutput` holds
+that answer — which can be empty. If you replace the built-in `PhaseLLMCall`
+handler, copy `gantry.ToolChoiceFrom(ctx)` into your request.
 
 ## Where does conversation history live between calls?
 

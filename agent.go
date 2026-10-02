@@ -263,6 +263,11 @@ func (a *Agent) MiddlewareNames(phase Phase) []string {
 //     (ErrGuardrailBlocked, ErrHumanAborted) so callers can branch via
 //     errors.Is.
 //
+// Reaching MaxIterations without finishing is followed by one tool-less
+// wrap-up LLM turn (see MaxIterationsWrapUpPrompt), so a capped run makes at
+// most MaxIterations+1 LLM calls and its FinalOutput is the wrap-up answer
+// (possibly empty) rather than always empty.
+//
 // Inspect state.DoneReason for the terminal reason in all cases; use errors.Is
 // for the blocking sentinels.
 func (a *Agent) Run(ctx context.Context, input string) (*State, error) {
@@ -377,6 +382,11 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 		state.Iteration++
 	}
 
+	if !state.Done && ctx.Err() == nil {
+		if err := a.wrapUp(ctx, tracer, state); err != nil {
+			return state, wrap(err)
+		}
+	}
 	if !state.Done {
 		state.Done = true
 		state.DoneReason = DoneMaxIterations

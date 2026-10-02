@@ -84,6 +84,10 @@ Two budgets at two layers:
 - **`maxIterations`** caps a single **run**.
 - **`TaskBudget`** caps the **task** across runs.
 
+When a run hits `maxIterations`, core gives the model one tool-less wrap-up
+turn; the driver drops that answer from `Working` before continuing, so the
+next run resumes from the pre-cap transcript.
+
 `ask_user` never raises `maxIterations` — "needs input" is a clean suspension, not
 a budget extension.
 

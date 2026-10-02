@@ -307,3 +307,52 @@ func TestInvokeWithoutPassthroughStillHasNoAmbientEvents(t *testing.T) {
 		t.Error("passthrough disabled: saw a child event on the parent's stream, want none")
 	}
 }
+
+func TestInvokeEmptyChildOutputIsError(t *testing.T) {
+	child := newChildAgent(t, gantry.LLMResponse{Content: "  \n", StopReason: gantry.StopReasonEnd})
+	tl := New("research_specialist", "d", child)
+
+	_, err := tl.Invoke(context.Background(), json.RawMessage(`{"goal":"g"}`))
+	if err == nil {
+		t.Fatal("Invoke err = nil, want an error for empty child output")
+	}
+	want := "research_specialist: child run produced no output (done_reason=no_tool_calls)"
+	if err.Error() != want {
+		t.Errorf("err = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestInvokeCappedChildWithEmptyWrapUpIsError(t *testing.T) {
+	llm := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "noop"}}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "", StopReason: gantry.StopReasonEnd},
+	)
+	child, err := gantry.NewAgent(gantry.WithLLM(llm), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+
+	_, err = New("query_data", "d", child).Invoke(context.Background(), json.RawMessage(`{"goal":"g"}`))
+	if err == nil || !strings.Contains(err.Error(), "done_reason=max_iterations") {
+		t.Fatalf("err = %v, want a no-output error naming max_iterations", err)
+	}
+}
+
+func TestInvokeCappedChildReturnsWrapUpAnswer(t *testing.T) {
+	llm := eval.NewMockLLMClient(
+		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "noop"}}, StopReason: gantry.StopReasonToolUse},
+		gantry.LLMResponse{Content: "partial: revenue up 20%", StopReason: gantry.StopReasonEnd},
+	)
+	child, err := gantry.NewAgent(gantry.WithLLM(llm), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+
+	out, err := New("query_data", "d", child).Invoke(context.Background(), json.RawMessage(`{"goal":"g"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if string(out) != `{"output":"partial: revenue up 20%"}` {
+		t.Errorf("out = %s, want the plain {\"output\": ...} shape", out)
+	}
+}
