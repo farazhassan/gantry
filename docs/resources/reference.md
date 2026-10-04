@@ -3,7 +3,7 @@
 Detailed reference for Gantry's components, conformance suites, eval harness,
 testing, and repository layout. For the overview, install steps, quick start,
 and core concepts, see the [main README](https://github.com/farazhassan/gantry#readme). For keyed, durable
-multi-turn conversations, see the [sessions guide](sessions.md).
+multi-turn conversations, see the [sessions guide](../guide/sessions.md).
 
 ## Contents
 

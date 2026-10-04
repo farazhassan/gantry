@@ -16,6 +16,10 @@ not committed dates.
 - **Checkpointing** — mid-run checkpoint hooks (`checkpointer.New`'s
   `extraPhases`) and a distributed `Lease` primitive (Redis + etcd) for
   safe multi-worker resume — see `examples/checkpoint-resume`
+- **Orchestration** — Tasks: durable, plan-driven work items run across many
+  agent runs, with per-session queues, spawning, scheduling, and headless
+  dispatch (`task`, `taskmanager`) — see the [tasks guide](../guide/task-management.md)
+  and `examples/task-lifecycle`
 
 ## Toward v0.1
 
@@ -29,7 +33,8 @@ not committed dates.
 
 - **Guardrails** — HarmfulContent · OutOfBudget
 - **Tools** — internal, production-ready tools
-- **Orchestration** — support for adding Tasks ([design](task-management.md)) ·
+- **Orchestration** — durable Task backends (the `TaskStore`, `MetaStore`,
+  and queue stores ship in-memory only) · handoff inside task-driven runs ·
   support for adding subagents
 - **Examples** — a production-ready, runnable end-to-end demo with a frontend
   component

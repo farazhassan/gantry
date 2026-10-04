@@ -181,17 +181,17 @@ Batteries-included, opt-in capabilities that attach as middleware via convenienc
 
 Each ships a reference built-in (swap in your own by satisfying the component's
 interface). Full reference table, built-ins, and an end-to-end example wiring
-the core components onto one agent → **[docs/reference.md](docs/reference.md#components)**.
+the core components onto one agent → **[docs/resources/reference.md](docs/resources/reference.md#components)**.
 
 For keyed, durable multi-turn conversations — how state is shared across every
-message in a session — see the **[sessions guide](docs/sessions.md)**.
+message in a session — see the **[sessions guide](docs/guide/sessions.md)**.
 
 ## Examples
 
 Start with the focused examples below — each teaches exactly one idea and runs
 under `go test` with no API keys. `examples/e2e` is the "everything together"
 reference once the pieces click — its full wiring is in
-[docs/reference.md](docs/reference.md#components).
+[docs/resources/reference.md](docs/resources/reference.md#components).
 
 | Example | One concept it teaches | Run |
 |---------|------------------------|-----|
@@ -208,12 +208,12 @@ reference once the pieces click — its full wiring is in
 
 Run the root module test suite with `go test ./...` (CI runs `go test -race ./...`).
 This repo also contains nested Go modules (e.g. `gantry/mcp`, `examples/assistant`); run `go test ./...` inside them as needed.
-Conformance suites, the eval harness, and the CI/release pipeline are documented in **[docs/reference.md](docs/reference.md)**.
+Conformance suites, the eval harness, and the CI/release pipeline are documented in **[docs/resources/reference.md](docs/resources/reference.md)**.
 
 ## Roadmap
 
 The core loop and component contracts are in place; planned built-ins, adapters,
-and capabilities — grouped by milestone — live in **[docs/roadmap.md](docs/roadmap.md)**.
+and capabilities — grouped by milestone — live in **[docs/resources/roadmap.md](docs/resources/roadmap.md)**.
 Contributions toward any of them are especially welcome.
 
 ## Contributing

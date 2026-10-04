@@ -7,10 +7,10 @@ documentation improvements are all appreciated.
 
 - **Found a bug or have an idea?** Open an issue to discuss it first.
 - **Building a component?** Implement the relevant interface, validate it against
-  the matching [conformance suite](docs/reference.md#conformance), and add tests.
+  the matching [conformance suite](docs/resources/reference.md#conformance), and add tests.
 - **Improving docs?** Fixes and clarifications to the README, the
-  [reference](docs/reference.md), or these guidelines are all welcome.
-- **Picking up a roadmap item?** See the [roadmap](docs/roadmap.md) — it's a great
+  [reference](docs/resources/reference.md), or these guidelines are all welcome.
+- **Picking up a roadmap item?** See the [roadmap](docs/resources/roadmap.md) — it's a great
   place to start.
 
 ## Development setup
