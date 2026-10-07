@@ -27,13 +27,23 @@ type Compactor interface {
 }
 
 // Budget describes the constraints the Compactor should honor.
-// Counter is the token-counting function; if nil, a default (4 chars/token)
-// is used.
+//
+// MaxTokens is the hard prompt-size target; SoftLimit is the size below which
+// a strategy may skip compaction. Force means the caller needs the result to
+// be smaller than MaxTokens regardless of SoftLimit (set by the overflow
+// retry after the provider rejected the prompt as too long). Counter is the
+// per-message token estimator; if nil, a default (bytes/4 over content, tool
+// calls and IDs, plus a per-message overhead) is used.
 type Budget struct {
 	MaxTokens int
 	SoftLimit int
+	Force     bool
 	Counter   func(gantry.Message) int
 }
+
+// perMessageOverhead approximates the role/framing tokens providers add to
+// every message.
+const perMessageOverhead = 4
 
 // Count returns the number of tokens for m, using Budget.Counter or a
 // default approximation.
@@ -41,6 +51,12 @@ func (b Budget) Count(m gantry.Message) int {
 	if b.Counter != nil {
 		return b.Counter(m)
 	}
-	// Default: roughly 4 characters per token.
-	return (len(m.Content) + 3) / 4
+	n := len(m.Content) + len(m.ToolCallID) + len(m.Name)
+	for _, tc := range m.ToolCalls {
+		n += len(tc.ID) + len(tc.Name) + len(tc.Input)
+	}
+	return bytesToTokens(n) + perMessageOverhead
 }
+
+// bytesToTokens is the shared ~4-bytes-per-token approximation.
+func bytesToTokens(n int) int { return (n + 3) / 4 }
