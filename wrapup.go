@@ -50,7 +50,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// nothing (left) to remove) and how many identical messages preceded it.
 	inj := wrapUpInjection{idx: -1}
 	defer func() { removeInjectedWrapUpPrompt(state, &inj) }()
-	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
+	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}), &inj)
 
 	prompted := false
 	for _, ph := range a.phases {
@@ -101,16 +101,37 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 
 // wrapUpKey marks the context of the max-iterations wrap-up pass, so
 // DefaultPostLLMHandler can record DoneMaxIterations rather than
-// DoneNoToolCalls for the wrap-up answer.
+// DoneNoToolCalls for the wrap-up answer. Its value is the pass's injection
+// record, so WrapUpPromptIndex can find the prompt even after middleware
+// rebuilt messages and dropped the marker.
 type wrapUpKey struct{}
 
-func withWrapUp(ctx context.Context) context.Context {
-	return context.WithValue(ctx, wrapUpKey{}, true)
+func withWrapUp(ctx context.Context, inj *wrapUpInjection) context.Context {
+	return context.WithValue(ctx, wrapUpKey{}, inj)
 }
 
 func isWrapUp(ctx context.Context) bool {
-	v, _ := ctx.Value(wrapUpKey{}).(bool)
-	return v
+	return wrapUpFrom(ctx) != nil
+}
+
+func wrapUpFrom(ctx context.Context) *wrapUpInjection {
+	inj, _ := ctx.Value(wrapUpKey{}).(*wrapUpInjection)
+	return inj
+}
+
+// WrapUpPromptIndex returns the index in msgs of the prompt injected by the
+// current max-iterations wrap-up pass, or -1. It finds the prompt the same way
+// the pass's own cleanup does — by its marker, else (when middleware rebuilt
+// messages and dropped the marker) by its text using the pass's injection
+// record carried on ctx — so middleware that rewrites the transcript during
+// the wrap-up turn (e.g. components/compactor) can hold it aside. Outside a
+// wrap-up pass only the marker is used.
+func WrapUpPromptIndex(ctx context.Context, msgs []Message) int {
+	inj := wrapUpFrom(ctx)
+	if inj == nil {
+		return findInjectedWrapUpPrompt(msgs, wrapUpInjection{idx: -1})
+	}
+	return findInjectedWrapUpPrompt(msgs, *inj)
 }
 
 // stripWrapUpToolCalls discards tool calls a model returned on the wrap-up
@@ -171,31 +192,40 @@ type wrapUpInjection struct {
 //
 // It then sets idx to -1, so a later call (the deferred cleanup) is a no-op.
 func removeInjectedWrapUpPrompt(state *State, inj *wrapUpInjection) {
-	start := inj.idx
-	if start < 0 {
+	if inj.idx < 0 {
 		return
 	}
+	i := findInjectedWrapUpPrompt(state.Messages, *inj)
 	inj.idx = -1
-	remove := func(i int) {
+	if i >= 0 {
 		state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
 		state.ContextUsage = ContextUsage{} // not an append: anchor invalid
 	}
-	for i := len(state.Messages) - 1; i >= 0; i-- {
-		if state.Messages[i].wrapUp {
-			remove(i)
-			return
+}
+
+// findInjectedWrapUpPrompt returns the index removeInjectedWrapUpPrompt would
+// remove (see its doc for the order of checks), or -1. With inj.idx < 0 (no
+// pending injection) only the marker is used.
+func findInjectedWrapUpPrompt(msgs []Message, inj wrapUpInjection) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].wrapUp {
+			return i
 		}
 	}
+	if inj.idx < 0 {
+		return -1
+	}
 	last := -1
-	for i := len(state.Messages) - 1; i >= 0; i-- {
-		if isWrapUpText(state.Messages[i]) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if isWrapUpText(msgs[i]) {
 			last = i
 			break
 		}
 	}
-	if last >= 0 && (last >= start || countWrapUpText(state.Messages) > inj.prior) {
-		remove(last)
+	if last >= 0 && (last >= inj.idx || countWrapUpText(msgs) > inj.prior) {
+		return last
 	}
+	return -1
 }
 
 // isWrapUpText reports whether m has the wrap-up prompt's role and text.

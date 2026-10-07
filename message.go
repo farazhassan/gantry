@@ -37,5 +37,7 @@ type Message struct {
 // middleware that rewrites the transcript (compaction, trimming, redaction),
 // which can use it to hold the prompt aside and re-append it unchanged after
 // rewriting the rest, so the run can still find and remove it. A message with
-// the same content that is not the injected one reports false.
+// the same content that is not the injected one reports false. Prefer
+// WrapUpPromptIndex, which also finds the prompt after another middleware
+// rebuilt messages and dropped the marker.
 func IsWrapUpPrompt(m Message) bool { return m.wrapUp }

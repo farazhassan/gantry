@@ -177,3 +177,17 @@ func TestContextWindowStopWithoutStreamedTextStillRetriesInStream(t *testing.T) 
 		t.Errorf("RunStream = %q, %v; want ok after a retry (nothing was streamed)", s.FinalOutput, err)
 	}
 }
+
+func TestContextWindowOverflowAnchorsMeasuredInput(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Response: cutOffToolResp()}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	var seen gantry.ContextUsage
+	_ = a.OnContextOverflow(func(_ context.Context, s *gantry.State, _ error) (bool, error) {
+		seen = s.ContextUsage
+		return false, nil
+	})
+	_, _ = a.Run(context.Background(), "hi")
+	if want := (gantry.ContextUsage{PromptTokens: 90, MessageCount: 1}); seen != want {
+		t.Errorf("ContextUsage seen by the overflow handler = %+v, want %+v", seen, want)
+	}
+}

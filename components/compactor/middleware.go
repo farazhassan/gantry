@@ -50,7 +50,7 @@ type component struct {
 // the retry only helps when the strategy shrinks further under Force
 // (Summarizing, or a custom compactor).
 //
-// The max-iterations wrap-up prompt (gantry.IsWrapUpPrompt) is never passed to
+// The max-iterations wrap-up prompt (gantry.WrapUpPromptIndex) is never passed to
 // the Compactor: wherever it sits, the Compactor sees only the messages before
 // it, and the prompt plus anything appended after it are re-appended unchanged.
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
@@ -131,14 +131,14 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 }
 
 // compact runs the Compactor over msgs. On the max-iterations wrap-up turn the
-// injected wrap-up prompt (gantry.IsWrapUpPrompt) is held out wherever it sits,
+// injected wrap-up prompt (gantry.WrapUpPromptIndex) is held out wherever it sits,
 // together with anything appended after it, so the Compactor never sees,
 // rewrites, or drops it; that suffix is re-appended unchanged to the result,
 // and its estimated tokens are taken out of a non-zero Budget.MaxTokens first.
 // Change detection compares like with like, because the held-out suffix is
 // identical on both sides.
 func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
-	i := lastWrapUpPrompt(msgs)
+	i := gantry.WrapUpPromptIndex(ctx, msgs)
 	if i < 0 {
 		return comp.c.Compact(ctx, msgs, b)
 	}
@@ -158,17 +158,6 @@ func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Bud
 	out := make([]gantry.Message, 0, len(compacted)+len(suffix))
 	out = append(out, compacted...)
 	return append(out, suffix...), nil
-}
-
-// lastWrapUpPrompt returns the index of the last injected wrap-up prompt in
-// msgs, or -1.
-func lastWrapUpPrompt(msgs []gantry.Message) int {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if gantry.IsWrapUpPrompt(msgs[i]) {
-			return i
-		}
-	}
-	return -1
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages

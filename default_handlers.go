@@ -49,6 +49,11 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			// append a second answer after the abandoned one. The tokens were
 			// still spent.
 			state.Usage = state.Usage.Add(resp.Usage)
+			if resp.Usage.InputTokens > 0 {
+				// The request's prompt was still measured: anchor it so the
+				// overflow handler can size its target from it.
+				state.ContextUsage = ContextUsage{PromptTokens: resp.Usage.InputTokens, MessageCount: len(req.Messages)}
+			}
 			cause := errors.New("context window filled during a tool call")
 			if streamed {
 				cause = fmt.Errorf("context window filled during a tool call: %w", errOutputStreamed)

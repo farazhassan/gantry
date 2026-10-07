@@ -614,3 +614,50 @@ func TestInstallPreflightsMiddlewareNames(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapUpPromptHeldOutAfterMarkerDroppingRebuild(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(300)}, // wrap-up turn overflows
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	// Rebuilds the transcript field-by-field before every LLM call, dropping
+	// the wrap-up marker.
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			out := make([]gantry.Message, len(s.Messages))
+			for i, m := range s.Messages {
+				out[i] = gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
+			}
+			s.Messages = out
+			return next(ctx, s)
+		}
+	})
+	rc := &rebuildCompactor{}
+	_ = a.With(compactor.New(rc, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, m := range rc.seen {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("compactor received the injected wrap-up prompt after a marker-dropping rebuild")
+		}
+	}
+	reqs := mock.Requests()
+	retry := reqs[len(reqs)-1].Messages
+	if n := len(retry); n == 0 || retry[n-1].Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("retried request does not end with the wrap-up prompt: %+v", retry)
+	}
+	for _, m := range s.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("wrap-up prompt leaked into transcript")
+		}
+	}
+}
