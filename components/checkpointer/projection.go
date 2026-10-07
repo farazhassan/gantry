@@ -23,6 +23,8 @@ const (
 	FieldLastResponse     Field = "LastResponse"
 	FieldPendingToolCalls Field = "PendingToolCalls"
 	FieldToolResults      Field = "ToolResults"
+	FieldContextWindow    Field = "ContextWindow"
+	FieldContextUsage     Field = "ContextUsage"
 	FieldDone             Field = "Done"
 	FieldDoneReason       Field = "DoneReason"
 	FieldFinalOutput      Field = "FinalOutput"
@@ -37,7 +39,7 @@ func AllFields() []Field {
 	return []Field{
 		FieldInput, FieldTask, FieldSystem, FieldMessages, FieldTools, FieldRetrieved,
 		FieldPlan, FieldIteration, FieldLastResponse, FieldPendingToolCalls,
-		FieldToolResults, FieldDone, FieldDoneReason, FieldFinalOutput, FieldTrace,
+		FieldToolResults, FieldContextWindow, FieldContextUsage, FieldDone, FieldDoneReason, FieldFinalOutput, FieldTrace,
 		FieldUsage, FieldMeta, FieldHandoff,
 	}
 }

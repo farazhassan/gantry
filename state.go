@@ -21,6 +21,14 @@ type State struct {
 	PendingToolCalls []ToolCall
 	ToolResults      []ToolResult
 
+	// ContextWindow is the model's maximum prompt tokens, resolved once per
+	// run before PhaseStart from WithContextWindow or the client's
+	// ContextWindowReporter. 0 means unknown.
+	ContextWindow int
+	// ContextUsage anchors the last provider-measured prompt size to the
+	// transcript. See ContextUsage.
+	ContextUsage ContextUsage
+
 	// Termination
 	Done        bool
 	DoneReason  DoneReason
@@ -34,6 +42,16 @@ type State struct {
 	// Escape hatch for middleware-to-middleware state.
 	// Callers should namespace keys (e.g. "components/cache:key") to avoid collisions.
 	Meta map[string]any
+}
+
+// ContextUsage anchors a provider-measured prompt size to the transcript.
+// PromptTokens covers System, Tools and Messages[:MessageCount] as sent, plus
+// the assistant reply that followed (its output tokens). MessageCount == 0
+// means no valid measurement. Middleware that rewrites Messages other than by
+// appending must reset it to the zero value.
+type ContextUsage struct {
+	PromptTokens int
+	MessageCount int
 }
 
 // NewState returns a State ready to feed into Agent.Run.

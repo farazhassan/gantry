@@ -8,6 +8,14 @@ type LLMClient interface {
 	Generate(ctx context.Context, req LLMRequest) (LLMResponse, error)
 }
 
+// ContextWindowReporter is optionally implemented by LLMClient adapters that
+// can discover the model's context window (maximum prompt tokens), typically
+// from the provider's models endpoint. Implementations should cache the
+// result: the agent asks once per run.
+type ContextWindowReporter interface {
+	ContextWindow(ctx context.Context) (int, error)
+}
+
 // LLMRequest carries a normalized prompt to the LLM.
 type LLMRequest struct {
 	System      string

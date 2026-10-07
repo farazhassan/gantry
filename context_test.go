@@ -1,11 +1,13 @@
 package gantry_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/farazhassan/gantry"
+	"github.com/farazhassan/gantry/eval"
 )
 
 func TestUsageAddSumsCacheFields(t *testing.T) {
@@ -48,5 +50,78 @@ func TestContextLengthErrorMessageWithoutNumbers(t *testing.T) {
 func TestStopReasonContextWindowValue(t *testing.T) {
 	if gantry.StopReasonContextWindow != "context_window" {
 		t.Errorf("StopReasonContextWindow = %q", gantry.StopReasonContextWindow)
+	}
+}
+
+// windowLLM wraps the mock and reports a fixed context window (or an error).
+type windowLLM struct {
+	*eval.MockLLMClient
+	window int
+	err    error
+	calls  int
+}
+
+func (w *windowLLM) ContextWindow(ctx context.Context) (int, error) {
+	w.calls++
+	return w.window, w.err
+}
+
+func endResp() gantry.LLMResponse {
+	return gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}
+}
+
+func TestContextWindowFromReporter(t *testing.T) {
+	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: 1000}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.ContextWindow != 1000 {
+		t.Errorf("ContextWindow = %d, want 1000", s.ContextWindow)
+	}
+}
+
+func TestContextWindowOptionOverridesReporter(t *testing.T) {
+	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: 1000}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm), gantry.WithContextWindow(500))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.ContextWindow != 500 {
+		t.Errorf("ContextWindow = %d, want 500", s.ContextWindow)
+	}
+	if llm.calls != 0 {
+		t.Errorf("reporter called %d times, want 0 when option set", llm.calls)
+	}
+}
+
+func TestContextWindowReporterErrorDoesNotFailRun(t *testing.T) {
+	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), err: errors.New("lookup failed")}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v (reporter error must not fail the run)", err)
+	}
+	if s.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0 (unknown)", s.ContextWindow)
+	}
+}
+
+func TestContextWindowUnknownWithoutReporter(t *testing.T) {
+	a, _ := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(endResp())))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0", s.ContextWindow)
+	}
+}
+
+func TestWithContextWindowRejectsNegative(t *testing.T) {
+	if _, err := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient()), gantry.WithContextWindow(-1)); err == nil {
+		t.Error("WithContextWindow(-1): want error")
 	}
 }

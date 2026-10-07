@@ -22,6 +22,7 @@ type Agent struct {
 	tracer        Tracer
 	maxIterations int
 	temperature   float64
+	contextWindow int
 	name          string
 
 	chains      map[Phase][]namedMW
@@ -100,6 +101,20 @@ func WithTemperature(t float64) Option {
 			return errors.New("gantry: WithTemperature must be a non-negative finite number")
 		}
 		a.temperature = t
+		return nil
+	}
+}
+
+// WithContextWindow sets the model's context window (maximum prompt tokens),
+// overriding whatever the LLMClient reports via ContextWindowReporter. It is
+// copied into State.ContextWindow at the start of each run. Zero (the
+// default) means "ask the client, else unknown".
+func WithContextWindow(n int) Option {
+	return func(a *Agent) error {
+		if n < 0 {
+			return errors.New("gantry: WithContextWindow must be non-negative")
+		}
+		a.contextWindow = n
 		return nil
 	}
 }
@@ -356,6 +371,8 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// this is a no-op for them.
 	state.Tools = nil
 
+	a.resolveContextWindow(ctx, state, runSpan)
+
 	// PhaseStart (once).
 	if err := a.runPhase(ctx, tracer, PhaseStart, state); err != nil {
 		return state, wrap(err)
@@ -473,4 +490,28 @@ func (a *Agent) resolveInner(phase Phase) Handler {
 	default:
 		return noopHandler
 	}
+}
+
+// resolveContextWindow fills state.ContextWindow once per run: an already-set
+// value (Resume) is kept, then WithContextWindow, then the client's
+// ContextWindowReporter. A reporter error is recorded on span and leaves the
+// window unknown (0) — it never fails the run.
+func (a *Agent) resolveContextWindow(ctx context.Context, state *State, span Span) {
+	if state.ContextWindow > 0 {
+		return
+	}
+	if a.contextWindow > 0 {
+		state.ContextWindow = a.contextWindow
+		return
+	}
+	r, ok := a.llm.(ContextWindowReporter)
+	if !ok {
+		return
+	}
+	n, err := r.ContextWindow(ctx)
+	if err != nil {
+		span.SetAttr("context_window.error", err.Error())
+		return
+	}
+	state.ContextWindow = n
 }
