@@ -125,3 +125,58 @@ func TestWithContextWindowRejectsNegative(t *testing.T) {
 		t.Error("WithContextWindow(-1): want error")
 	}
 }
+
+func TestContextUsageAnchoredAfterCall(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{
+		Content: "ok", StopReason: gantry.StopReasonEnd,
+		Usage: gantry.Usage{InputTokens: 120, OutputTokens: 30},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := gantry.ContextUsage{PromptTokens: 150, MessageCount: 1}
+	if s.ContextUsage != want {
+		t.Errorf("ContextUsage = %+v, want %+v", s.ContextUsage, want)
+	}
+}
+
+func TestContextUsageClearedWhenUsageMissing(t *testing.T) {
+	mock := eval.NewMockLLMClient(endResp()) // no Usage
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	s := gantry.NewState("hi")
+	s.ContextUsage = gantry.ContextUsage{PromptTokens: 99, MessageCount: 7}
+	s, err := a.Resume(context.Background(), s)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if s.ContextUsage != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage = %+v, want zero", s.ContextUsage)
+	}
+}
+
+func TestRunFromCarriesContextUsageAndWindow(t *testing.T) {
+	prior := gantry.NewState("hi")
+	prior.Messages = []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}, {Role: gantry.RoleAssistant, Content: "ok"}}
+	prior.ContextUsage = gantry.ContextUsage{PromptTokens: 150, MessageCount: 1}
+	prior.ContextWindow = 4096
+	prior.Done = true
+
+	var seen gantry.ContextUsage
+	var seenWindow int
+	mock := eval.NewMockLLMClient(endResp())
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			seen, seenWindow = s.ContextUsage, s.ContextWindow
+			return next(ctx, s)
+		}
+	})
+	if _, err := a.RunFrom(context.Background(), prior, "next"); err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if seen != prior.ContextUsage || seenWindow != 4096 {
+		t.Errorf("next turn saw ContextUsage %+v window %d, want %+v and 4096", seen, seenWindow, prior.ContextUsage)
+	}
+}

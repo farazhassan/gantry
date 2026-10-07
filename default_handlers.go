@@ -44,6 +44,14 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 		}
 		state.LastResponse = &resp
 		state.Usage = state.Usage.Add(resp.Usage)
+		if resp.Usage.InputTokens > 0 {
+			state.ContextUsage = ContextUsage{
+				PromptTokens: resp.Usage.InputTokens + resp.Usage.OutputTokens,
+				MessageCount: len(req.Messages),
+			}
+		} else {
+			state.ContextUsage = ContextUsage{}
+		}
 		return nil
 	}
 }
