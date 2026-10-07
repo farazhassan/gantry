@@ -1,6 +1,9 @@
 package gantry
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors returned by middleware and inspected by the loop and by
 // downstream code via errors.Is / errors.As.
@@ -31,7 +34,33 @@ var (
 	// earlier failure in the same dispatch batch set BatchFailureMode to a
 	// stopping mode (see components/tool.Policy).
 	ErrToolSkipped = errors.New("gantry: tool call skipped due to policy")
+	// ErrContextLengthExceeded is matched (via errors.Is) by every
+	// *ContextLengthError an LLM adapter returns when the provider rejects a
+	// request because the prompt exceeds the model's context window.
+	ErrContextLengthExceeded = errors.New("gantry: context length exceeded")
 )
+
+// ContextLengthError is returned by LLM adapters when the provider rejects a
+// request because the prompt exceeds the model's context window. Limit and
+// Requested are 0 when the provider's error does not report them. It matches
+// ErrContextLengthExceeded via errors.Is and unwraps to the provider error.
+type ContextLengthError struct {
+	Limit     int   // the model's maximum prompt tokens, if reported
+	Requested int   // the prompt tokens the request needed, if reported
+	Err       error // the underlying provider error
+}
+
+func (e *ContextLengthError) Error() string {
+	if e.Limit > 0 || e.Requested > 0 {
+		return fmt.Sprintf("%s (requested %d, limit %d): %v", ErrContextLengthExceeded, e.Requested, e.Limit, e.Err)
+	}
+	return fmt.Sprintf("%s: %v", ErrContextLengthExceeded, e.Err)
+}
+
+func (e *ContextLengthError) Unwrap() error { return e.Err }
+
+// Is reports whether target is ErrContextLengthExceeded.
+func (e *ContextLengthError) Is(target error) bool { return target == ErrContextLengthExceeded }
 
 // DoneReason describes why the agent loop terminated.
 //

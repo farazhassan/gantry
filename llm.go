@@ -78,4 +78,10 @@ const (
 	StopReasonEnd       StopReason = "end_turn"
 	StopReasonToolUse   StopReason = "tool_use"
 	StopReasonMaxTokens StopReason = "max_tokens"
+	// StopReasonContextWindow means generation stopped because the model's
+	// context window filled up (prompt + output), as opposed to the
+	// requested output cap (StopReasonMaxTokens). Anthropic reports it as
+	// model_context_window_exceeded. The loop treats it like any other
+	// non-tool stop.
+	StopReasonContextWindow StopReason = "context_window"
 )
