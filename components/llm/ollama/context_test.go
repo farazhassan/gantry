@@ -40,3 +40,25 @@ func TestContextWindowUnknownWithoutNumCtx(t *testing.T) {
 		t.Error("ContextWindow without WithNumCtx: want error (unknown)")
 	}
 }
+
+func TestWithNumCtxSentOnStreamingPath(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"x"},"done":true,"done_reason":"stop"}`+"\n")
+	}))
+	t.Cleanup(ts.Close)
+
+	c := ollama.New("test-model", ollama.WithNumCtx(16384), ollama.WithBaseURL(ts.URL), ollama.WithHTTPClient(ts.Client()))
+	req := gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}
+	if _, err := c.GenerateStream(context.Background(), req, func(gantry.StreamChunk) error { return nil }); err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if gotBody["stream"] != true {
+		t.Errorf("stream = %v, want true", gotBody["stream"])
+	}
+	opts, _ := gotBody["options"].(map[string]any)
+	if opts["num_ctx"] != float64(16384) {
+		t.Errorf("options.num_ctx = %v, want 16384", opts["num_ctx"])
+	}
+}

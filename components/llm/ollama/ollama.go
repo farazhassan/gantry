@@ -88,6 +88,10 @@ func WithThinking(enabled bool) Option {
 // num_ctx instead of returning an error, so set this whenever compaction
 // should know the real limit. n <= 0 leaves Ollama's default (and the window
 // unknown).
+//
+// Changing num_ctx from the value the loaded model was started with makes
+// Ollama reload the model, so keep it constant across requests and clients
+// that share a server.
 func WithNumCtx(n int) Option {
 	return func(c *Client) {
 		if n > 0 {
