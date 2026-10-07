@@ -41,6 +41,10 @@ type component struct {
 // compactor sees overflows first. The built-in SlidingWindow and HeadTail
 // ignore Budget, so the retry only helps when the strategy shrinks further
 // under Force (Summarizing, or a custom compactor).
+//
+// The max-iterations wrap-up prompt (gantry.IsWrapUpPrompt) is never passed to
+// the Compactor: when it is the last message, the Compactor sees the transcript
+// without it and the prompt is re-appended unchanged afterwards.
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
 
 func (comp *component) Install(a *gantry.Agent) error {
@@ -52,7 +56,7 @@ func (comp *component) Install(a *gantry.Agent) error {
 				return err
 			}
 			before := s.Messages // Compact must not alias its input
-			compacted, err := comp.c.Compact(ctx, s.Messages, comp.b)
+			compacted, err := comp.compact(ctx, s.Messages, comp.b)
 			if err != nil {
 				return err
 			}
@@ -75,7 +79,7 @@ func (comp *component) Install(a *gantry.Agent) error {
 			b := comp.b
 			b.Force = true
 			b.MaxTokens = comp.overflowTarget(s, err)
-			compacted, cerr := comp.c.Compact(ctx, s.Messages, b)
+			compacted, cerr := comp.compact(ctx, s.Messages, b)
 			if cerr != nil {
 				return errors.Join(err, cerr)
 			}
@@ -93,6 +97,26 @@ func (comp *component) Install(a *gantry.Agent) error {
 			return next(ctx, s)
 		}
 	})
+}
+
+// compact runs the Compactor over msgs. On the max-iterations wrap-up turn the
+// last message is the injected wrap-up prompt (gantry.IsWrapUpPrompt); it is
+// held out so the Compactor never sees, rewrites, or drops it, and re-appended
+// unchanged to the result. Change detection compares like with like, because
+// the held-out prompt is identical on both sides.
+func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
+	n := len(msgs)
+	if n == 0 || !gantry.IsWrapUpPrompt(msgs[n-1]) {
+		return comp.c.Compact(ctx, msgs, b)
+	}
+	prompt := msgs[n-1]
+	compacted, err := comp.c.Compact(ctx, msgs[:n-1:n-1], b)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gantry.Message, 0, len(compacted)+1)
+	out = append(out, compacted...)
+	return append(out, prompt), nil
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages

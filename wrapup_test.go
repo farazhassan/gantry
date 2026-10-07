@@ -706,3 +706,106 @@ func TestWrapUpResetsContextUsageAnchor(t *testing.T) {
 		t.Errorf("ContextUsage = %+v, want zero (wrap-up prompt removal is not an append)", state.ContextUsage)
 	}
 }
+
+// useLLMCallPre installs a PhaseLLMCall middleware running fn before the model
+// call.
+func useLLMCallPre(t *testing.T, a *gantry.Agent, fn func(s *gantry.State)) {
+	t.Helper()
+	err := a.UseNamed(gantry.PhaseLLMCall, "test:pre", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			fn(s)
+			return next(ctx, s)
+		}
+	})
+	if err != nil {
+		t.Fatalf("UseNamed: %v", err)
+	}
+}
+
+func wrapUpMock() *eval.MockLLMClient {
+	return eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "wrapped", StopReason: gantry.StopReasonEnd},
+	)
+}
+
+func TestWrapUpRebuiltMessagesStillRemovePrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		if n := len(s.Messages); n == 0 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		out := make([]gantry.Message, len(s.Messages))
+		for i, m := range s.Messages {
+			out[i] = gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertNoWrapUpPrompt(t, state)
+	if state.FinalOutput != "wrapped" {
+		t.Errorf("FinalOutput = %q, want wrapped", state.FinalOutput)
+	}
+}
+
+func TestWrapUpDroppedPromptKeepsGenuineMessageBelowIndex(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(wrapUpMock()), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		n := len(s.Messages)
+		if n == 0 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		// Drop the injected prompt, rebuilding the rest.
+		out := make([]gantry.Message, 0, n-1)
+		for _, m := range s.Messages[:n-1] {
+			out = append(out, gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name})
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), gantry.MaxIterationsWrapUpPrompt)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if m := state.Messages[0]; m.Role != gantry.RoleUser || m.Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("messages[0] = %+v, want the genuine user input kept", m)
+	}
+}
+
+func TestIsWrapUpPrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	var marked, unmarked int
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		for _, m := range s.Messages {
+			if gantry.IsWrapUpPrompt(m) {
+				marked++
+				if m.Content != gantry.MaxIterationsWrapUpPrompt || m.Role != gantry.RoleUser {
+					t.Errorf("marked message = %+v", m)
+				}
+			} else {
+				unmarked++
+			}
+		}
+	})
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if marked != 1 {
+		t.Errorf("marked messages seen = %d, want 1 (only on the wrap-up turn)", marked)
+	}
+	if unmarked == 0 {
+		t.Error("expected unmarked messages")
+	}
+	plain := gantry.Message{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt}
+	if gantry.IsWrapUpPrompt(plain) {
+		t.Error("IsWrapUpPrompt(plain message with same content) = true, want false")
+	}
+}

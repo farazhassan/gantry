@@ -46,9 +46,10 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
 	// resumed pass doesn't send it twice.
 	removeTrailingWrapUpPrompt(state)
-	// The injected prompt carries a marker, so cleanup finds it wherever
-	// compaction or other middleware moved it, and is a no-op once removed.
-	defer removeInjectedWrapUpPrompt(state)
+	// promptIdx is where this pass injected the prompt, or -1 while there is
+	// nothing (left) to remove.
+	promptIdx := -1
+	defer func() { removeInjectedWrapUpPrompt(state, &promptIdx) }()
 	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
 
 	prompted := false
@@ -64,6 +65,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		}
 		if ph == PhaseLLMCall && !prompted {
 			prompted = true
+			promptIdx = len(state.Messages)
 			state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt, wrapUp: true})
 		}
 		prev := state.LastResponse
@@ -73,7 +75,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		if ph == PhaseLLMCall {
 			// The model has consumed the prompt; drop it now so PostLLM
 			// middleware (e.g. a checkpointer) never sees or saves it.
-			removeInjectedWrapUpPrompt(state)
+			removeInjectedWrapUpPrompt(state, &promptIdx)
 			// Only a response produced by this pass is stripped: if
 			// middleware ended the pass without calling the LLM,
 			// LastResponse is still the capped turn's, whose tool calls
@@ -142,18 +144,32 @@ func removeTrailingWrapUpPrompt(state *State) {
 	}
 }
 
-// removeInjectedWrapUpPrompt removes the prompt this pass injected: the last
-// message carrying the wrapUp marker, wherever it now sits (middleware such as
-// the compactor may have reordered or shrunk the transcript, or appended after
-// it). Identification is by marker, never by content, so a genuine user message
-// with identical text is never touched. A pass whose prompt was already removed
-// (or dropped by a compactor) finds no marker, so the deferred cleanup is a
-// no-op.
-func removeInjectedWrapUpPrompt(state *State) {
+// removeInjectedWrapUpPrompt removes the prompt this pass injected at index
+// *idx. It first removes the last message carrying the wrapUp marker, wherever
+// it now sits (middleware such as the compactor may have reordered or shrunk
+// the transcript, or appended after it). If no marked message remains —
+// middleware rebuilt the messages field-by-field and dropped the marker — it
+// falls back to the last RoleUser MaxIterationsWrapUpPrompt message at or
+// after *idx, never below it, so a genuine earlier message with identical
+// content is untouched. It then sets *idx to -1, so a later call (the deferred
+// cleanup) is a no-op.
+func removeInjectedWrapUpPrompt(state *State, idx *int) {
+	start := *idx
+	if start < 0 {
+		return
+	}
+	*idx = -1
 	for i := len(state.Messages) - 1; i >= 0; i-- {
 		if state.Messages[i].wrapUp {
 			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
 			state.ContextUsage = ContextUsage{} // not an append: anchor invalid
+			return
+		}
+	}
+	for i := len(state.Messages) - 1; i >= start; i-- {
+		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
+			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
+			state.ContextUsage = ContextUsage{}
 			return
 		}
 	}

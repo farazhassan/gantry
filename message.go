@@ -18,9 +18,10 @@ const (
 // ToolCall.ID it is responding to.
 //
 // Message has one unexported marker field (wrapUp) that identifies the prompt
-// injected by the max-iterations wrap-up turn. It survives Compactors that
-// copy Message values, but a custom Compactor that rebuilds messages
-// field-by-field drops it and would leave the prompt in the transcript.
+// injected by the max-iterations wrap-up turn (see IsWrapUpPrompt). It survives
+// code that copies Message values, but is dropped by code that rebuilds
+// messages field-by-field; the run then falls back to locating the prompt by
+// position and content.
 type Message struct {
 	Role       Role
 	Content    string
@@ -30,3 +31,11 @@ type Message struct {
 
 	wrapUp bool // set only on the prompt injected by the max-iterations wrap-up turn
 }
+
+// IsWrapUpPrompt reports whether m is the prompt injected by the current
+// max-iterations wrap-up turn (MaxIterationsWrapUpPrompt). It is meant for
+// middleware that rewrites the transcript (compaction, trimming, redaction),
+// which can use it to hold the prompt aside and re-append it unchanged after
+// rewriting the rest, so the run can still find and remove it. A message with
+// the same content that is not the injected one reports false.
+func IsWrapUpPrompt(m Message) bool { return m.wrapUp }

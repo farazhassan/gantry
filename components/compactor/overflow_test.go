@@ -262,7 +262,7 @@ func TestOverflowOnWrapUpTurnDoesNotLeakPrompt(t *testing.T) {
 		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
-	_ = a.With(compactor.New(&recordingCompactor{keep: 100, forceKeep: 3}, compactor.Budget{}))
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100, forceKeep: 2}, compactor.Budget{}))
 
 	s, err := a.Run(context.Background(), "go")
 	if err != nil {
@@ -394,5 +394,58 @@ func TestOverflowRetriesOnSameLengthRewrite(t *testing.T) {
 	}
 	if n, _ := s.Meta[compactor.MetaOverflowRetries].(int); n != 1 {
 		t.Errorf("Meta[%s] = %d, want 1", compactor.MetaOverflowRetries, n)
+	}
+}
+
+// rebuildCompactor rebuilds every message field-by-field (dropping any
+// unexported state) and, under Force, keeps only the head. It records every
+// message it was given.
+type rebuildCompactor struct{ seen []gantry.Message }
+
+func (r *rebuildCompactor) Compact(_ context.Context, msgs []gantry.Message, b compactor.Budget) ([]gantry.Message, error) {
+	r.seen = append(r.seen, msgs...)
+	if b.Force && len(msgs) > 1 {
+		msgs = msgs[:1]
+	}
+	out := make([]gantry.Message, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name})
+	}
+	return out, nil
+}
+
+func TestWrapUpPromptNeverReachesCompactor(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(300)}, // wrap-up turn overflows
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	rc := &rebuildCompactor{}
+	_ = a.With(compactor.New(rc, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q, want final", s.FinalOutput)
+	}
+	if len(rc.seen) == 0 {
+		t.Fatal("compactor never ran")
+	}
+	for _, m := range rc.seen {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("compactor received the injected wrap-up prompt: %+v", m)
+		}
+	}
+	for _, m := range s.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("wrap-up prompt leaked into transcript: %+v", s.Messages)
+		}
 	}
 }
