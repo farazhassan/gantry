@@ -15,8 +15,9 @@ type ContextOverflowHandler func(ctx context.Context, state *State, err error) (
 
 // OnContextOverflow registers the agent's ContextOverflowHandler. At most one
 // may be registered (components/compactor installs one); a nil handler or a
-// second registration is an error. The retry happens at most once per LLM
-// call, inside the same phase span and phase events, which carry the
+// second registration is an error. An overflow whose attempt already streamed
+// text or reasoning to a RunStream sink is not retried. The retry happens at
+// most once per LLM call, inside the same phase span and phase events, which carry the
 // "context_overflow.retry" span attribute when it ran.
 func (a *Agent) OnContextOverflow(h ContextOverflowHandler) error {
 	if h == nil {
@@ -29,10 +30,15 @@ func (a *Agent) OnContextOverflow(h ContextOverflowHandler) error {
 	return nil
 }
 
+// errOutputStreamed marks an overflow whose attempt already streamed text or
+// reasoning deltas to the sink; retrying would show a second answer after the
+// abandoned one, so it is never retried.
+var errOutputStreamed = errors.New("output already streamed")
+
 // retryOnOverflow runs the context-overflow handler for an LLM-call error and,
 // if it asks for a retry, re-runs handler once. It returns the error to report.
 func (a *Agent) retryOnOverflow(ctx context.Context, state *State, span Span, handler Handler, err error) error {
-	if a.overflow == nil || state.Done || !errors.Is(err, ErrContextLengthExceeded) {
+	if a.overflow == nil || state.Done || !errors.Is(err, ErrContextLengthExceeded) || errors.Is(err, errOutputStreamed) {
 		return err
 	}
 	retry, herr := a.overflow(ctx, state, err)

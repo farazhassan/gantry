@@ -145,3 +145,35 @@ func TestContextWindowStopWithoutToolCallsIsNormal(t *testing.T) {
 		t.Errorf("Run = %q, %v; want partial, nil", s.FinalOutput, err)
 	}
 }
+
+func TestContextWindowStopAfterStreamedTextIsNotRetried(t *testing.T) {
+	cut := cutOffToolResp()
+	cut.Content = "partial text"
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Response: cut}, {Response: okResp()}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	called := false
+	_ = a.OnContextOverflow(func(context.Context, *gantry.State, error) (bool, error) { called = true; return true, nil })
+	var deltas []string
+	_, err := a.RunStream(context.Background(), "hi", func(ev gantry.Event) error {
+		if ev.Type == gantry.EventTextDelta {
+			deltas = append(deltas, ev.TextDelta)
+		}
+		return nil
+	})
+	if !errors.Is(err, gantry.ErrContextLengthExceeded) {
+		t.Fatalf("RunStream err = %v, want ErrContextLengthExceeded", err)
+	}
+	if called || len(mock.Requests()) != 1 {
+		t.Errorf("handler called = %v, LLM calls = %d; want no retry once text was streamed (deltas %q)", called, len(mock.Requests()), deltas)
+	}
+}
+
+func TestContextWindowStopWithoutStreamedTextStillRetriesInStream(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Response: cutOffToolResp()}, {Response: okResp()}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	_ = a.OnContextOverflow(func(context.Context, *gantry.State, error) (bool, error) { return true, nil })
+	s, err := a.RunStream(context.Background(), "hi", func(gantry.Event) error { return nil })
+	if err != nil || s.FinalOutput != "ok" {
+		t.Errorf("RunStream = %q, %v; want ok after a retry (nothing was streamed)", s.FinalOutput, err)
+	}
+}

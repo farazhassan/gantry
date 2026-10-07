@@ -10,7 +10,8 @@ import (
 type component struct{ l Limiter }
 
 // New returns a Component that installs token-budget middleware: a PhaseLLMCall
-// pre-check, a PhasePostLLM usage recorder, and a PhasePostLLM finalize that
+// pre-check (which also records tokens a failed call spent, since PostLLM won't
+// run for it), a PhasePostLLM usage recorder, and a PhasePostLLM finalize that
 // terminates the loop when the limit is exceeded. Register limiter before
 // transcript so transcript:persist observes the finalized turn (see package doc).
 //
@@ -40,7 +41,17 @@ func (c *component) Install(a *gantry.Agent) error {
 				}
 				return err
 			}
-			return next(ctx, s)
+			before := s.Usage
+			err := next(ctx, s)
+			if err != nil {
+				// A failed call can still have spent tokens (e.g. a
+				// context-window stop turned into an overflow error). PostLLM
+				// won't run to record them, so record them here, once.
+				if spent := usageSince(before, s.Usage); spent != (gantry.Usage{}) {
+					c.l.Record(ctx, spent)
+				}
+			}
+			return err
 		}
 	}); err != nil {
 		return err
@@ -69,4 +80,15 @@ func (c *component) Install(a *gantry.Agent) error {
 			return nil
 		}
 	})
+}
+
+// usageSince returns the usage added to state between before and after.
+func usageSince(before, after gantry.Usage) gantry.Usage {
+	return gantry.Usage{
+		InputTokens:      after.InputTokens - before.InputTokens,
+		OutputTokens:     after.OutputTokens - before.OutputTokens,
+		CacheReadTokens:  after.CacheReadTokens - before.CacheReadTokens,
+		CacheWriteTokens: after.CacheWriteTokens - before.CacheWriteTokens,
+		Cost:             after.Cost - before.Cost,
+	}
 }
