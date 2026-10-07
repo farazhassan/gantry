@@ -6,15 +6,16 @@ import "github.com/farazhassan/gantry"
 //
 // When s.ContextUsage holds a valid anchor (0 < MessageCount <= len(Messages))
 // it returns the provider-measured PromptTokens plus b.Count for each message
-// appended after the anchored reply — i.e. Messages[MessageCount+1:], since
-// Messages[MessageCount] is the assistant reply already counted in the
-// measurement's output tokens. Otherwise it estimates the whole prompt:
+// after the measured request — Messages[MessageCount:], starting with the
+// assistant reply (estimated from its visible content, since the provider's
+// output tokens can include hidden reasoning). Otherwise it estimates the
+// whole prompt:
 // System, Tools (name, description, schema) and every message.
 func EstimatePromptTokens(s *gantry.State, b Budget) int {
 	cu := s.ContextUsage
 	if cu.MessageCount > 0 && cu.MessageCount <= len(s.Messages) {
 		total := cu.PromptTokens
-		for i := cu.MessageCount + 1; i < len(s.Messages); i++ {
+		for i := cu.MessageCount; i < len(s.Messages); i++ {
 			total += b.Count(s.Messages[i])
 		}
 		return total

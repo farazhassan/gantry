@@ -200,14 +200,16 @@ func TestWithContextWindowRejectsNegative(t *testing.T) {
 func TestContextUsageAnchoredAfterCall(t *testing.T) {
 	mock := eval.NewMockLLMClient(gantry.LLMResponse{
 		Content: "ok", StopReason: gantry.StopReasonEnd,
-		Usage: gantry.Usage{InputTokens: 120, OutputTokens: 30},
+		// OutputTokens includes hidden reasoning that is never replayed, so
+		// it must not inflate the anchor.
+		Usage: gantry.Usage{InputTokens: 120, OutputTokens: 30000},
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	s, err := a.Run(context.Background(), "hi")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	want := gantry.ContextUsage{PromptTokens: 150, MessageCount: 1}
+	want := gantry.ContextUsage{PromptTokens: 120, MessageCount: 1}
 	if s.ContextUsage != want {
 		t.Errorf("ContextUsage = %+v, want %+v", s.ContextUsage, want)
 	}

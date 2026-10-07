@@ -45,8 +45,11 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 		state.LastResponse = &resp
 		state.Usage = state.Usage.Add(resp.Usage)
 		if resp.Usage.InputTokens > 0 {
+			// Only the prompt is anchored: OutputTokens can include hidden
+			// reasoning that is never replayed, so the reply is estimated from
+			// its visible content instead (see ContextUsage).
 			state.ContextUsage = ContextUsage{
-				PromptTokens: resp.Usage.InputTokens + resp.Usage.OutputTokens,
+				PromptTokens: resp.Usage.InputTokens,
 				MessageCount: len(req.Messages),
 			}
 		} else {

@@ -39,14 +39,14 @@ func TestEstimatePromptTokensWithAnchor(t *testing.T) {
 	s := &gantry.State{
 		Messages: []gantry.Message{
 			{Role: gantry.RoleUser, Content: "q"},          // 0: measured
-			{Role: gantry.RoleAssistant, Content: "call"},  // 1: reply, counted in OutputTokens
+			{Role: gantry.RoleAssistant, Content: "call"},  // 1: reply, estimated
 			{Role: gantry.RoleTool, Content: "result one"}, // 2: new
 			{Role: gantry.RoleTool, Content: "result two"}, // 3: new
 		},
 		ContextUsage: gantry.ContextUsage{PromptTokens: 500, MessageCount: 1},
 	}
-	if got := compactor.EstimatePromptTokens(s, fixedCounter(10)); got != 520 {
-		t.Errorf("EstimatePromptTokens = %d, want 520 (500 measured + 2×10)", got)
+	if got := compactor.EstimatePromptTokens(s, fixedCounter(10)); got != 530 {
+		t.Errorf("EstimatePromptTokens = %d, want 530 (500 measured + 3×10)", got)
 	}
 }
 
