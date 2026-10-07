@@ -22,6 +22,8 @@ type Agent struct {
 	tracer        Tracer
 	maxIterations int
 	temperature   float64
+	contextWindow int
+	overflow      ContextOverflowHandler
 	name          string
 
 	chains      map[Phase][]namedMW
@@ -100,6 +102,21 @@ func WithTemperature(t float64) Option {
 			return errors.New("gantry: WithTemperature must be a non-negative finite number")
 		}
 		a.temperature = t
+		return nil
+	}
+}
+
+// WithContextWindow sets the model's context window (maximum prompt tokens),
+// skipping the LLMClient's ContextWindowReporter lookup entirely. It is
+// copied into State.ContextWindow at the start of each run. Zero (the
+// default) means "ask the client, falling back to a window carried on the
+// State, else unknown".
+func WithContextWindow(n int) Option {
+	return func(a *Agent) error {
+		if n < 0 {
+			return errors.New("gantry: WithContextWindow must be non-negative")
+		}
+		a.contextWindow = n
 		return nil
 	}
 }
@@ -356,6 +373,13 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// this is a no-op for them.
 	state.Tools = nil
 
+	a.resolveContextWindow(ctx, state, runSpan)
+	// A lookup failure is non-fatal, but a caller cancelling while it ran is
+	// terminal: don't let PhaseStart middleware act after cancellation.
+	if err := ctx.Err(); err != nil {
+		return state, wrap(err)
+	}
+
 	// PhaseStart (once).
 	if err := a.runPhase(ctx, tracer, PhaseStart, state); err != nil {
 		return state, wrap(err)
@@ -438,6 +462,9 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 	}
 	handler := Compose(inner, mws)
 	err := handler(ctx, state)
+	if err != nil && phase == PhaseLLMCall {
+		err = a.retryOnOverflow(ctx, state, span, handler, err)
+	}
 
 	if state.Done {
 		span.SetAttr("done", true)
@@ -472,5 +499,29 @@ func (a *Agent) resolveInner(phase Phase) Handler {
 		return DefaultObserveHandler
 	default:
 		return noopHandler
+	}
+}
+
+// resolveContextWindow fills state.ContextWindow once per run. Precedence:
+// WithContextWindow (>0) wins; otherwise the client's ContextWindowReporter
+// is asked and a positive, error-free result is used; otherwise a window
+// already on the state (carried by Resume/RunFrom) is kept as a fallback;
+// otherwise 0 (unknown). The client is preferred over a carried value because
+// a session can hand off between agents or models; adapters memoize, so
+// asking is cheap. A reporter error is recorded on span as
+// context_window.error and never fails the run.
+func (a *Agent) resolveContextWindow(ctx context.Context, state *State, span Span) {
+	if a.contextWindow > 0 {
+		state.ContextWindow = a.contextWindow
+		return
+	}
+	if r, ok := a.llm.(ContextWindowReporter); ok {
+		n, err := r.ContextWindow(ctx)
+		if err != nil {
+			span.SetAttr("context_window.error", err.Error())
+		} else if n > 0 {
+			state.ContextWindow = n
+			return
+		}
 	}
 }

@@ -96,7 +96,9 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	// becomes a problem in practice.
 	if err := agent.With(compactor.New(
 		compactor.NewHeadTail(cfg.HistoryHead, cfg.HistoryTail),
-		compactor.Budget{MaxTokens: cfg.MaxTokens},
+		// MaxTokens here would be a prompt-size target; cfg.MaxTokens is the
+		// run's cumulative spend cap (see limiter above), so leave it unset.
+		compactor.Budget{},
 	)); err != nil {
 		return nil, err
 	}

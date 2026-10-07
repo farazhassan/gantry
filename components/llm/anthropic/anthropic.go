@@ -25,16 +25,19 @@ const (
 
 // Client is a gantry.StreamingLLMClient backed by Anthropic's /v1/messages
 // endpoint. It is safe for concurrent use: it holds no per-call state and the
-// underlying *http.Client is concurrency-safe.
+// underlying *http.Client is concurrency-safe. The only shared state is the
+// memoized context window, guarded by a mutex.
 type Client struct {
 	model          string
 	baseURL        string
 	apiKey         string
 	thinkingBudget int
 	httpc          *http.Client
+	ctxWindow      windowCache
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
+var _ gantry.ContextWindowReporter = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)
@@ -140,7 +143,16 @@ type streamEvent struct {
 	Message      *streamStart `json:"message"`
 	ContentBlock *streamBlock `json:"content_block"`
 	Delta        *streamDelta `json:"delta"`
-	Usage        *usage       `json:"usage"`
+	Usage        *deltaUsage  `json:"usage"`
+}
+
+// deltaUsage is the message_delta usage; pointer fields distinguish absent
+// from zero so only reported counts override the message_start values.
+type deltaUsage struct {
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 }
 
 type streamStart struct {
@@ -201,6 +213,8 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		case "message_start":
 			if ev.Message != nil {
 				u.InputTokens = ev.Message.Usage.InputTokens
+				u.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+				u.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
 			}
 		case "content_block_start":
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
@@ -232,7 +246,19 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 				stopReason = ev.Delta.StopReason
 			}
 			if ev.Usage != nil {
+				// message_delta usage is cumulative: output_tokens always, and
+				// input/cache counts when the API repeats them. Override the
+				// message_start values only for fields actually present.
 				u.OutputTokens = ev.Usage.OutputTokens
+				if ev.Usage.InputTokens != nil {
+					u.InputTokens = *ev.Usage.InputTokens
+				}
+				if ev.Usage.CacheReadInputTokens != nil {
+					u.CacheReadInputTokens = *ev.Usage.CacheReadInputTokens
+				}
+				if ev.Usage.CacheCreationInputTokens != nil {
+					u.CacheCreationInputTokens = *ev.Usage.CacheCreationInputTokens
+				}
 			}
 		case "message_stop":
 			// terminal; loop will end at EOF
@@ -335,5 +361,11 @@ func checkStatus(resp *http.Response) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("anthropic: messages: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	err := fmt.Errorf("anthropic: messages: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	if resp.StatusCode == http.StatusBadRequest {
+		if cle := contextLengthError(body, err); cle != nil {
+			return cle
+		}
+	}
+	return err
 }

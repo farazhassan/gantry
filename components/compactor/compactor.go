@@ -1,6 +1,10 @@
 // Package compactor defines the Compactor interface and reference
 // implementations for trimming/summarizing conversation history before
 // the LLM call.
+//
+// The New middleware also recovers from context overflow: when the LLM call
+// fails with gantry.ErrContextLengthExceeded it compacts once with
+// Budget.Force and retries the call exactly once.
 package compactor
 
 import (
@@ -26,14 +30,28 @@ type Compactor interface {
 	Compact(ctx context.Context, msgs []gantry.Message, budget Budget) ([]gantry.Message, error)
 }
 
-// Budget describes the constraints the Compactor should honor.
-// Counter is the token-counting function; if nil, a default (4 chars/token)
-// is used.
+// Budget describes what the caller asks the Compactor to aim for. It is a
+// request, not a guarantee: strategies decide how much of it they honour.
+//
+// MaxTokens is the requested prompt-size target for Messages; SoftLimit is the
+// size below which a strategy may skip compaction. Force asks the strategy to
+// try to compact further than it otherwise would, ignoring SoftLimit (set by
+// the overflow handler after the provider rejected the prompt as too long).
+// The built-in SlidingWindow and HeadTail ignore all three (they trim by
+// message count); Summarizing uses SoftLimit and Force but does not check its
+// result against MaxTokens. Counter is the per-message token estimator; if
+// nil, a default (bytes/4 over content, tool calls and IDs, plus a
+// per-message overhead) is used.
 type Budget struct {
 	MaxTokens int
 	SoftLimit int
+	Force     bool
 	Counter   func(gantry.Message) int
 }
+
+// perMessageOverhead approximates the role/framing tokens providers add to
+// every message.
+const perMessageOverhead = 4
 
 // Count returns the number of tokens for m, using Budget.Counter or a
 // default approximation.
@@ -41,6 +59,12 @@ func (b Budget) Count(m gantry.Message) int {
 	if b.Counter != nil {
 		return b.Counter(m)
 	}
-	// Default: roughly 4 characters per token.
-	return (len(m.Content) + 3) / 4
+	n := len(m.Content) + len(m.ToolCallID) + len(m.Name)
+	for _, tc := range m.ToolCalls {
+		n += len(tc.ID) + len(tc.Name) + len(tc.Input)
+	}
+	return bytesToTokens(n) + perMessageOverhead
 }
+
+// bytesToTokens is the shared ~4-bytes-per-token approximation.
+func bytesToTokens(n int) int { return (n + 3) / 4 }

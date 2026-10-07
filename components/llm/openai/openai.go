@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/farazhassan/gantry"
@@ -268,12 +270,68 @@ func checkStatus(resp *http.Response) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("openai: chat: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	err := fmt.Errorf("openai: chat: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	if resp.StatusCode == http.StatusBadRequest {
+		if cle := contextLengthError(body, err); cle != nil {
+			return cle
+		}
+	}
+	return err
+}
+
+var (
+	maxContextRe = regexp.MustCompile(`(?i)(?:maximum context length is|limit of) ([\d,]+) tokens`)
+	requestedRe  = regexp.MustCompile(`(?i)(?:resulted in|requested(?: about)?) ([\d,]+) tokens`)
+)
+
+// atoiCommas parses a possibly comma-grouped number ("272,000").
+func atoiCommas(s string) int {
+	n, _ := strconv.Atoi(strings.ReplaceAll(s, ",", ""))
+	return n
+}
+
+// contextLengthError returns a *gantry.ContextLengthError when body is
+// OpenAI's context_length_exceeded error, else nil. The error code is
+// authoritative when it is a string: context_length_exceeded is overflow and any
+// other string code is not. Only when the code is absent, null or non-string is
+// the message wording used.
+func contextLengthError(body []byte, err error) error {
+	var e struct {
+		Error struct {
+			Message string          `json:"message"`
+			Code    json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) != nil {
+		return nil
+	}
+	var code string
+	_ = json.Unmarshal(e.Error.Code, &code)
+	limit := maxContextRe.FindStringSubmatch(e.Error.Message)
+	switch {
+	case code == "context_length_exceeded":
+	case code != "": // an explicit, different code is not overflow
+		return nil
+	case limit == nil:
+		return nil
+	}
+	cle := &gantry.ContextLengthError{Err: err}
+	if limit != nil {
+		cle.Limit = atoiCommas(limit[1])
+	}
+	if m := requestedRe.FindStringSubmatch(e.Error.Message); m != nil {
+		cle.Requested = atoiCommas(m[1])
+	}
+	return cle
 }
 
 func toUsage(u *usage) gantry.Usage {
 	if u == nil {
 		return gantry.Usage{}
 	}
-	return gantry.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	return gantry.Usage{
+		InputTokens:     u.PromptTokens, // already includes cached tokens
+		OutputTokens:    u.CompletionTokens,
+		CacheReadTokens: u.PromptTokensDetails.CachedTokens,
+	}
 }

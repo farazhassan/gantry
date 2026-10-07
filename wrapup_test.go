@@ -691,3 +691,186 @@ func TestWrapUpPostLLMCheckpointIsTerminalAndClean(t *testing.T) {
 		t.Errorf("checkpoint saved at post_llm still holds the wrap-up prompt")
 	}
 }
+
+func TestWrapUpResetsContextUsageAnchor(t *testing.T) {
+	u := gantry.Usage{InputTokens: 10, OutputTokens: 2}
+	turn := toolTurn("a")
+	turn.Usage = u
+	end := gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd, Usage: u}
+	a := newCappedAgent(t, eval.NewMockLLMClient(turn, end), 1)
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.ContextUsage != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage = %+v, want zero (wrap-up prompt removal is not an append)", state.ContextUsage)
+	}
+}
+
+// useLLMCallPre installs a PhaseLLMCall middleware running fn before the model
+// call.
+func useLLMCallPre(t *testing.T, a *gantry.Agent, fn func(s *gantry.State)) {
+	t.Helper()
+	err := a.UseNamed(gantry.PhaseLLMCall, "test:pre", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			fn(s)
+			return next(ctx, s)
+		}
+	})
+	if err != nil {
+		t.Fatalf("UseNamed: %v", err)
+	}
+}
+
+func wrapUpMock() *eval.MockLLMClient {
+	return eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "wrapped", StopReason: gantry.StopReasonEnd},
+	)
+}
+
+func TestWrapUpRebuiltMessagesStillRemovePrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		if n := len(s.Messages); n == 0 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		out := make([]gantry.Message, len(s.Messages))
+		for i, m := range s.Messages {
+			out[i] = gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertNoWrapUpPrompt(t, state)
+	if state.FinalOutput != "wrapped" {
+		t.Errorf("FinalOutput = %q, want wrapped", state.FinalOutput)
+	}
+}
+
+func TestWrapUpDroppedPromptKeepsGenuineMessageBelowIndex(t *testing.T) {
+	a, err := gantry.NewAgent(gantry.WithLLM(wrapUpMock()), gantry.WithMaxIterations(1))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if err := a.With(tool.FromTools(1, wrapUpNoopTool{})); err != nil {
+		t.Fatalf("install tool: %v", err)
+	}
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		n := len(s.Messages)
+		if n == 0 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		// Drop the injected prompt, rebuilding the rest.
+		out := make([]gantry.Message, 0, n-1)
+		for _, m := range s.Messages[:n-1] {
+			out = append(out, gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name})
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), gantry.MaxIterationsWrapUpPrompt)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if m := state.Messages[0]; m.Role != gantry.RoleUser || m.Content != gantry.MaxIterationsWrapUpPrompt {
+		t.Errorf("messages[0] = %+v, want the genuine user input kept", m)
+	}
+}
+
+func TestIsWrapUpPrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	var marked, unmarked int
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		for _, m := range s.Messages {
+			if gantry.IsWrapUpPrompt(m) {
+				marked++
+				if m.Content != gantry.MaxIterationsWrapUpPrompt || m.Role != gantry.RoleUser {
+					t.Errorf("marked message = %+v", m)
+				}
+			} else {
+				unmarked++
+			}
+		}
+	})
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if marked != 1 {
+		t.Errorf("marked messages seen = %d, want 1 (only on the wrap-up turn)", marked)
+	}
+	if unmarked == 0 {
+		t.Error("expected unmarked messages")
+	}
+	plain := gantry.Message{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt}
+	if gantry.IsWrapUpPrompt(plain) {
+		t.Error("IsWrapUpPrompt(plain message with same content) = true, want false")
+	}
+}
+
+func TestWrapUpResumedCheckpointRemovesNonTrailingPrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "first wrap", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "resumed wrap", StopReason: gantry.StopReasonEnd},
+	)
+	a := newCappedAgent(t, mock, 1)
+	ctx := context.Background()
+
+	st, err := a.Run(ctx, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// A checkpoint taken mid-wrap-up after middleware appended past the
+	// prompt: JSON drops the marker, so the prompt comes back unmarked and
+	// not last.
+	st.Done = false
+	st.DoneReason = ""
+	st.Messages = append(st.Messages,
+		gantry.Message{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt},
+		gantry.Message{Role: gantry.RoleUser, Content: "late"},
+	)
+
+	final, err := a.Resume(ctx, st)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	reqs := mock.Requests()
+	count := 0
+	for _, m := range reqs[len(reqs)-1].Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("resumed wrap-up request has %d wrap-up prompts, want 1", count)
+	}
+	for _, m := range final.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("wrap-up prompt left in transcript: %+v", final.Messages)
+		}
+	}
+}
+
+func TestWrapUpRebuiltAndTrimmedMessagesStillRemovePrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		if n := len(s.Messages); n < 2 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		// Trim the oldest message and rebuild the rest: the marker is lost and
+		// the prompt moves below its injection index.
+		out := make([]gantry.Message, 0, len(s.Messages)-1)
+		for _, m := range s.Messages[1:] {
+			out = append(out, gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name})
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertNoWrapUpPrompt(t, state)
+}

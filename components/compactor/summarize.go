@@ -28,7 +28,7 @@ func NewSummarizing(client gantry.LLMClient, head, tail int) *Summarizing {
 
 func (s *Summarizing) Compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
 	// Count tokens; if under SoftLimit, no compaction needed.
-	if b.SoftLimit > 0 {
+	if b.SoftLimit > 0 && !b.Force {
 		total := 0
 		for _, m := range msgs {
 			total += b.Count(m)
