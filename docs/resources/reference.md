@@ -49,12 +49,6 @@ third-party dependency and live in the root module; `checkpointer/redis`,
 `checkpointer/etcd`, and `sqlitevec` do need one, so each lives in its own Go
 module.
 
-### Context window
-
-- `gantry.WithContextWindow(n)` — the model's maximum prompt tokens. Overrides what the LLM client reports; copied to `State.ContextWindow` each run (0 = unknown). The Anthropic and OpenRouter adapters look the window up automatically; OpenAI needs this option; Ollama reports `ollama.WithNumCtx(n)`.
-- `State.ContextUsage` anchors the last provider-measured prompt size (`Usage.InputTokens`, which includes cached tokens on every adapter) to the transcript.
-- `gantry.ErrContextLengthExceeded` — the provider rejected the prompt as longer than the model's context window. Adapters return a `*gantry.ContextLengthError` (with `Limit`/`Requested` when the provider reports them) that matches it via `errors.Is`. The compactor component recovers by compacting and retrying once.
-
 For crash recovery across horizontally-scaled workers, pair a `checkpointer.Lease`
 (`redis.NewLease`/`etcd.New`) with `checkpointer.ResumeLocked`, which wraps
 Acquire → Load → Resume → Release into one call — see
@@ -65,6 +59,12 @@ and read-only — over one shared **`components/vectorstore`** `Store` interface
 (`Add`/`Search` over embedded items). `vectorstore.NewInMemoryStore()` is the
 built-in backend; `sqlitevec` is a durable one. Verify a backend with
 `conformance.VectorStoreSuite`.
+
+### Context window
+
+- `gantry.WithContextWindow(n)` — the model's maximum prompt tokens. When set, the client's lookup is skipped entirely; otherwise the client's lookup is preferred over a value carried from a previous turn (the carried value is only a fallback). Copied to `State.ContextWindow` each run (0 = unknown). The Anthropic and OpenRouter adapters look the window up automatically; OpenAI needs this option; Ollama reports `ollama.WithNumCtx(n)`.
+- `State.ContextUsage` anchors the last provider-measured prompt size (`Usage.InputTokens`, which includes cached tokens on every adapter) to the transcript.
+- `gantry.ErrContextLengthExceeded` — the provider rejected the prompt as longer than the model's context window. Adapters return a `*gantry.ContextLengthError` (with `Limit`/`Requested` when the provider reports them) that matches it via `errors.Is`. The compactor component recovers by compacting and retrying once.
 
 ### Putting it together
 
