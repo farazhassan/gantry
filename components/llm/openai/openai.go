@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/farazhassan/gantry"
@@ -268,12 +270,49 @@ func checkStatus(resp *http.Response) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("openai: chat: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	err := fmt.Errorf("openai: chat: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	if resp.StatusCode == http.StatusBadRequest {
+		if cle := contextLengthError(body, err); cle != nil {
+			return cle
+		}
+	}
+	return err
+}
+
+var (
+	maxContextRe = regexp.MustCompile(`maximum context length is (\d+) tokens`)
+	requestedRe  = regexp.MustCompile(`(?:resulted in|requested(?: about)?) (\d+) tokens`)
+)
+
+// contextLengthError returns a *gantry.ContextLengthError when body is
+// OpenAI's context_length_exceeded error, else nil.
+func contextLengthError(body []byte, err error) error {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) != nil || e.Error.Code != "context_length_exceeded" {
+		return nil
+	}
+	cle := &gantry.ContextLengthError{Err: err}
+	if m := maxContextRe.FindStringSubmatch(e.Error.Message); m != nil {
+		cle.Limit, _ = strconv.Atoi(m[1])
+	}
+	if m := requestedRe.FindStringSubmatch(e.Error.Message); m != nil {
+		cle.Requested, _ = strconv.Atoi(m[1])
+	}
+	return cle
 }
 
 func toUsage(u *usage) gantry.Usage {
 	if u == nil {
 		return gantry.Usage{}
 	}
-	return gantry.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	return gantry.Usage{
+		InputTokens:     u.PromptTokens, // already includes cached tokens
+		OutputTokens:    u.CompletionTokens,
+		CacheReadTokens: u.PromptTokensDetails.CachedTokens,
+	}
 }
