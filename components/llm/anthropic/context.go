@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/farazhassan/gantry"
 )
@@ -31,7 +32,7 @@ func contextLengthError(body []byte, err error) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &e) != nil || !strings.Contains(e.Error.Message, "prompt is too long") {
+	if json.Unmarshal(body, &e) != nil || e.Error.Type != "invalid_request_error" || !strings.Contains(e.Error.Message, "prompt is too long") {
 		return nil
 	}
 	cle := &gantry.ContextLengthError{Err: err}
@@ -42,21 +43,58 @@ func contextLengthError(body []byte, err error) error {
 	return cle
 }
 
+// windowLookupTimeout bounds a single models lookup so one hung request cannot
+// stall every concurrent run waiting on the same client.
+const windowLookupTimeout = 10 * time.Second
+
 // windowCache memoizes a successful context-window lookup. Failures are not
-// cached so a transient error does not stick for the client's lifetime.
+// cached so a transient error does not stick for the client's lifetime. A
+// 1-buffered channel gates the lookup so waiters can abandon on their own
+// context instead of blocking behind another caller's HTTP request. The zero
+// value is ready to use.
 type windowCache struct {
-	mu sync.Mutex
-	n  int
+	once sync.Once
+	gate chan struct{}
+	mu   sync.Mutex // guards n only; never held across I/O
+	n    int
+}
+
+func (w *windowCache) get() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.n
 }
 
 // ContextWindow returns the model's max input tokens from the Models API
 // (GET /v1/models/{model} → max_input_tokens), cached after the first success.
 func (c *Client) ContextWindow(ctx context.Context) (int, error) {
-	c.ctxWindow.mu.Lock()
-	defer c.ctxWindow.mu.Unlock()
-	if c.ctxWindow.n > 0 {
-		return c.ctxWindow.n, nil
+	w := &c.ctxWindow
+	if n := w.get(); n > 0 {
+		return n, nil
 	}
+	w.once.Do(func() { w.gate = make(chan struct{}, 1) })
+	select {
+	case w.gate <- struct{}{}:
+		defer func() { <-w.gate }()
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	if n := w.get(); n > 0 { // another caller finished while we waited
+		return n, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, windowLookupTimeout)
+	defer cancel()
+	n, err := c.fetchContextWindow(ctx)
+	if err != nil {
+		return 0, err
+	}
+	w.mu.Lock()
+	w.n = n
+	w.mu.Unlock()
+	return n, nil
+}
+
+func (c *Client) fetchContextWindow(ctx context.Context) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+modelsPath+url.PathEscape(c.model), nil)
 	if err != nil {
 		return 0, fmt.Errorf("anthropic: build models request: %w", err)
@@ -81,6 +119,5 @@ func (c *Client) ContextWindow(ctx context.Context) (int, error) {
 	if m.MaxInputTokens <= 0 {
 		return 0, fmt.Errorf("anthropic: models response has no max_input_tokens for %q", c.model)
 	}
-	c.ctxWindow.n = m.MaxInputTokens
 	return m.MaxInputTokens, nil
 }

@@ -143,7 +143,16 @@ type streamEvent struct {
 	Message      *streamStart `json:"message"`
 	ContentBlock *streamBlock `json:"content_block"`
 	Delta        *streamDelta `json:"delta"`
-	Usage        *usage       `json:"usage"`
+	Usage        *deltaUsage  `json:"usage"`
+}
+
+// deltaUsage is the message_delta usage; pointer fields distinguish absent
+// from zero so only reported counts override the message_start values.
+type deltaUsage struct {
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 }
 
 type streamStart struct {
@@ -237,7 +246,19 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 				stopReason = ev.Delta.StopReason
 			}
 			if ev.Usage != nil {
+				// message_delta usage is cumulative: output_tokens always, and
+				// input/cache counts when the API repeats them. Override the
+				// message_start values only for fields actually present.
 				u.OutputTokens = ev.Usage.OutputTokens
+				if ev.Usage.InputTokens != nil {
+					u.InputTokens = *ev.Usage.InputTokens
+				}
+				if ev.Usage.CacheReadInputTokens != nil {
+					u.CacheReadInputTokens = *ev.Usage.CacheReadInputTokens
+				}
+				if ev.Usage.CacheCreationInputTokens != nil {
+					u.CacheCreationInputTokens = *ev.Usage.CacheCreationInputTokens
+				}
 			}
 		case "message_stop":
 			// terminal; loop will end at EOF

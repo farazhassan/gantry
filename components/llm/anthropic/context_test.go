@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/components/llm/anthropic"
@@ -140,5 +143,91 @@ func TestContextWindowErrorNotCached(t *testing.T) {
 	}
 	if n, err := c.ContextWindow(context.Background()); err != nil || n != 500 {
 		t.Errorf("second ContextWindow = %d, %v; want 500, nil", n, err)
+	}
+}
+
+func TestStreamMessageDeltaCumulativeUsageOverrides(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}}}`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"cache_read_input_tokens":110,"output_tokens":5}}`,
+			`data: {"type":"message_stop"}`,
+			"",
+		}, "\n"))
+	})
+	resp, err := c.GenerateStream(context.Background(), userReq(), func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	// input 12 + cache read 110 + cache write 20 (not repeated in delta, kept from start).
+	want := gantry.Usage{InputTokens: 142, OutputTokens: 5, CacheReadTokens: 110, CacheWriteTokens: 20}
+	if resp.Usage != want {
+		t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
+	}
+}
+
+func TestPromptTooLongWrongErrorTypeStaysGeneric(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"api_error","message":"prompt is too long: 2 tokens > 1 maximum"}}`)
+	})
+	_, err := c.Generate(context.Background(), userReq())
+	if err == nil || errors.Is(err, gantry.ErrContextLengthExceeded) {
+		t.Errorf("err = %v, want generic error", err)
+	}
+}
+
+func TestContextWindowConcurrentSingleRequest(t *testing.T) {
+	var calls atomic.Int32
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(w, `{"max_input_tokens":1000}`)
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if n, err := c.ContextWindow(context.Background()); err != nil || n != 1000 {
+				t.Errorf("ContextWindow = %d, %v", n, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Errorf("models API called %d times, want 1", got)
+	}
+}
+
+func TestContextWindowWaiterHonoursContext(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		_, _ = io.WriteString(w, `{"max_input_tokens":1000}`)
+	})
+	first := make(chan error, 1)
+	go func() { _, err := c.ContextWindow(context.Background()); first <- err }()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	_, err := c.ContextWindow(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiter err = %v, want deadline exceeded", err)
+	}
+	if time.Since(begin) > time.Second {
+		t.Errorf("waiter blocked %v behind the in-flight lookup", time.Since(begin))
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Errorf("first call: %v", err)
 	}
 }
