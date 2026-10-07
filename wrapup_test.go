@@ -691,3 +691,18 @@ func TestWrapUpPostLLMCheckpointIsTerminalAndClean(t *testing.T) {
 		t.Errorf("checkpoint saved at post_llm still holds the wrap-up prompt")
 	}
 }
+
+func TestWrapUpResetsContextUsageAnchor(t *testing.T) {
+	u := gantry.Usage{InputTokens: 10, OutputTokens: 2}
+	turn := toolTurn("a")
+	turn.Usage = u
+	end := gantry.LLMResponse{Content: "done", StopReason: gantry.StopReasonEnd, Usage: u}
+	a := newCappedAgent(t, eval.NewMockLLMClient(turn, end), 1)
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.ContextUsage != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage = %+v, want zero (wrap-up prompt removal is not an append)", state.ContextUsage)
+	}
+}

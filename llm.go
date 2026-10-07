@@ -11,7 +11,9 @@ type LLMClient interface {
 // ContextWindowReporter is optionally implemented by LLMClient adapters that
 // can discover the model's context window (maximum prompt tokens), typically
 // from the provider's models endpoint. Implementations should cache the
-// result: the agent asks once per run.
+// result: the agent asks once per run, and one client is shared across
+// concurrent runs, so ContextWindow and its cache must be safe for
+// concurrent use.
 type ContextWindowReporter interface {
 	ContextWindow(ctx context.Context) (int, error)
 }

@@ -39,8 +39,9 @@ func AllFields() []Field {
 	return []Field{
 		FieldInput, FieldTask, FieldSystem, FieldMessages, FieldTools, FieldRetrieved,
 		FieldPlan, FieldIteration, FieldLastResponse, FieldPendingToolCalls,
-		FieldToolResults, FieldContextWindow, FieldContextUsage, FieldDone, FieldDoneReason, FieldFinalOutput, FieldTrace,
-		FieldUsage, FieldMeta, FieldHandoff,
+		FieldToolResults, FieldContextWindow, FieldContextUsage, FieldDone,
+		FieldDoneReason, FieldFinalOutput, FieldTrace, FieldUsage, FieldMeta,
+		FieldHandoff,
 	}
 }
 

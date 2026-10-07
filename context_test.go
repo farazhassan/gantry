@@ -107,6 +107,56 @@ func TestContextWindowReporterErrorDoesNotFailRun(t *testing.T) {
 	if s.ContextWindow != 0 {
 		t.Errorf("ContextWindow = %d, want 0 (unknown)", s.ContextWindow)
 	}
+	found := false
+	for _, ev := range s.Trace.Snapshot() {
+		if ev.Kind == gantry.KindSpanEnd && ev.Name == "run" && ev.Attrs["context_window.error"] == "lookup failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("run span missing context_window.error attribute")
+	}
+}
+
+func TestContextWindowOptionBeatsCarriedWindow(t *testing.T) {
+	prior := gantry.NewState("hi")
+	prior.Messages = []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}, {Role: gantry.RoleAssistant, Content: "ok"}}
+	prior.ContextWindow = 200000
+	prior.Done = true
+	a, _ := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient(endResp())), gantry.WithContextWindow(8000))
+	s, err := a.RunFrom(context.Background(), prior, "next")
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if s.ContextWindow != 8000 {
+		t.Errorf("ContextWindow = %d, want 8000 (option wins over carried)", s.ContextWindow)
+	}
+}
+
+func TestContextWindowCarriedValueSkipsReporter(t *testing.T) {
+	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: 1000}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+	st := gantry.NewState("hi")
+	st.ContextWindow = 4096
+	s, err := a.Resume(context.Background(), st)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if s.ContextWindow != 4096 || llm.calls != 0 {
+		t.Errorf("ContextWindow = %d calls = %d, want 4096 and 0", s.ContextWindow, llm.calls)
+	}
+}
+
+func TestContextWindowReporterNonPositiveIsUnknown(t *testing.T) {
+	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: -5}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0", s.ContextWindow)
+	}
 }
 
 func TestContextWindowUnknownWithoutReporter(t *testing.T) {

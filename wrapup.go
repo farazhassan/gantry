@@ -139,6 +139,7 @@ func removeTrailingWrapUpPrompt(state *State) {
 	if n := len(state.Messages); n > 0 {
 		if m := state.Messages[n-1]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
 			state.Messages = state.Messages[:n-1]
+			state.ContextUsage = ContextUsage{} // not an append: anchor invalid
 		}
 	}
 }
@@ -159,6 +160,7 @@ func removeInjectedWrapUpPrompt(state *State, idx *int) {
 	for i := len(state.Messages) - 1; i >= start; i-- {
 		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
 			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
+			state.ContextUsage = ContextUsage{} // not an append: anchor invalid
 			return
 		}
 	}

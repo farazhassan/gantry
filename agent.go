@@ -492,16 +492,17 @@ func (a *Agent) resolveInner(phase Phase) Handler {
 	}
 }
 
-// resolveContextWindow fills state.ContextWindow once per run: an already-set
-// value (Resume) is kept, then WithContextWindow, then the client's
-// ContextWindowReporter. A reporter error is recorded on span and leaves the
-// window unknown (0) — it never fails the run.
+// resolveContextWindow fills state.ContextWindow once per run.
+// WithContextWindow always wins; otherwise a window already on the state
+// (Resume, RunFrom) is kept, then the client's ContextWindowReporter is
+// asked. A reporter error is recorded on span and leaves the window unknown
+// (0) — it never fails the run — and a non-positive result counts as unknown.
 func (a *Agent) resolveContextWindow(ctx context.Context, state *State, span Span) {
-	if state.ContextWindow > 0 {
-		return
-	}
 	if a.contextWindow > 0 {
 		state.ContextWindow = a.contextWindow
+		return
+	}
+	if state.ContextWindow > 0 {
 		return
 	}
 	r, ok := a.llm.(ContextWindowReporter)
@@ -513,5 +514,7 @@ func (a *Agent) resolveContextWindow(ctx context.Context, state *State, span Spa
 		span.SetAttr("context_window.error", err.Error())
 		return
 	}
-	state.ContextWindow = n
+	if n > 0 {
+		state.ContextWindow = n
+	}
 }
