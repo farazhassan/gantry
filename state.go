@@ -22,8 +22,9 @@ type State struct {
 	ToolResults      []ToolResult
 
 	// ContextWindow is the model's maximum prompt tokens, resolved once per
-	// run before PhaseStart from WithContextWindow or the client's
-	// ContextWindowReporter. 0 means unknown.
+	// run before PhaseStart: WithContextWindow, else the client's
+	// ContextWindowReporter, else a value carried from a previous turn
+	// (Resume/RunFrom). 0 means unknown.
 	ContextWindow int
 	// ContextUsage anchors the last provider-measured prompt size to the
 	// transcript. See ContextUsage.

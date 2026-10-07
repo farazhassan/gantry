@@ -106,9 +106,10 @@ func WithTemperature(t float64) Option {
 }
 
 // WithContextWindow sets the model's context window (maximum prompt tokens),
-// overriding whatever the LLMClient reports via ContextWindowReporter. It is
+// skipping the LLMClient's ContextWindowReporter lookup entirely. It is
 // copied into State.ContextWindow at the start of each run. Zero (the
-// default) means "ask the client, else unknown".
+// default) means "ask the client, falling back to a window carried on the
+// State, else unknown".
 func WithContextWindow(n int) Option {
 	return func(a *Agent) error {
 		if n < 0 {
@@ -492,29 +493,26 @@ func (a *Agent) resolveInner(phase Phase) Handler {
 	}
 }
 
-// resolveContextWindow fills state.ContextWindow once per run.
-// WithContextWindow always wins; otherwise a window already on the state
-// (Resume, RunFrom) is kept, then the client's ContextWindowReporter is
-// asked. A reporter error is recorded on span and leaves the window unknown
-// (0) — it never fails the run — and a non-positive result counts as unknown.
+// resolveContextWindow fills state.ContextWindow once per run. Precedence:
+// WithContextWindow (>0) wins; otherwise the client's ContextWindowReporter
+// is asked and a positive, error-free result is used; otherwise a window
+// already on the state (carried by Resume/RunFrom) is kept as a fallback;
+// otherwise 0 (unknown). The client is preferred over a carried value because
+// a session can hand off between agents or models; adapters memoize, so
+// asking is cheap. A reporter error is recorded on span as
+// context_window.error and never fails the run.
 func (a *Agent) resolveContextWindow(ctx context.Context, state *State, span Span) {
 	if a.contextWindow > 0 {
 		state.ContextWindow = a.contextWindow
 		return
 	}
-	if state.ContextWindow > 0 {
-		return
-	}
-	r, ok := a.llm.(ContextWindowReporter)
-	if !ok {
-		return
-	}
-	n, err := r.ContextWindow(ctx)
-	if err != nil {
-		span.SetAttr("context_window.error", err.Error())
-		return
-	}
-	if n > 0 {
-		state.ContextWindow = n
+	if r, ok := a.llm.(ContextWindowReporter); ok {
+		n, err := r.ContextWindow(ctx)
+		if err != nil {
+			span.SetAttr("context_window.error", err.Error())
+		} else if n > 0 {
+			state.ContextWindow = n
+			return
+		}
 	}
 }

@@ -133,7 +133,7 @@ func TestContextWindowOptionBeatsCarriedWindow(t *testing.T) {
 	}
 }
 
-func TestContextWindowCarriedValueSkipsReporter(t *testing.T) {
+func TestContextWindowReporterBeatsCarriedWindow(t *testing.T) {
 	llm := &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: 1000}
 	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
 	st := gantry.NewState("hi")
@@ -142,8 +142,29 @@ func TestContextWindowCarriedValueSkipsReporter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if s.ContextWindow != 4096 || llm.calls != 0 {
-		t.Errorf("ContextWindow = %d calls = %d, want 4096 and 0", s.ContextWindow, llm.calls)
+	if s.ContextWindow != 1000 || llm.calls != 1 {
+		t.Errorf("ContextWindow = %d calls = %d, want 1000 and 1", s.ContextWindow, llm.calls)
+	}
+}
+
+func TestContextWindowCarriedValueFallback(t *testing.T) {
+	for name, llm := range map[string]gantry.LLMClient{
+		"reporter error":   &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), err: errors.New("boom")},
+		"reporter unknown": &windowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), window: 0},
+		"no reporter":      eval.NewMockLLMClient(endResp()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+			st := gantry.NewState("hi")
+			st.ContextWindow = 4096
+			s, err := a.Resume(context.Background(), st)
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			if s.ContextWindow != 4096 {
+				t.Errorf("ContextWindow = %d, want carried 4096", s.ContextWindow)
+			}
+		})
 	}
 }
 
