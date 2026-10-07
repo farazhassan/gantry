@@ -247,12 +247,14 @@ func toToolCalls(calls []toolBlock) []gantry.ToolCall {
 
 func stopReason(stopReasonStr string, hasTools bool) gantry.StopReason {
 	switch {
+	// Checked before the tool inference: a tool block cut off at the context
+	// boundary must still report the window, not a tool-use stop.
+	case stopReasonStr == "model_context_window_exceeded":
+		return gantry.StopReasonContextWindow
 	case hasTools || stopReasonStr == "tool_use":
 		return gantry.StopReasonToolUse
 	case stopReasonStr == "max_tokens":
 		return gantry.StopReasonMaxTokens
-	case stopReasonStr == "model_context_window_exceeded":
-		return gantry.StopReasonContextWindow
 	default:
 		return gantry.StopReasonEnd
 	}

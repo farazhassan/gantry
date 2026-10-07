@@ -449,3 +449,70 @@ func TestWrapUpPromptNeverReachesCompactor(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapUpPromptHeldOutWhenNotLast(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(300)}, // wrap-up turn overflows
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	// Installed before the compactor, so it runs inside the overflow retry and
+	// appends after the wrap-up prompt before the call fails.
+	appended := false
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			if n := len(s.Messages); !appended && n > 0 && gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+				appended = true
+				s.Messages = append(s.Messages, gantry.Message{Role: gantry.RoleUser, Content: "late"})
+			}
+			return next(ctx, s)
+		}
+	})
+	rc := &rebuildCompactor{}
+	_ = a.With(compactor.New(rc, compactor.Budget{}))
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, m := range rc.seen {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("compactor received the injected wrap-up prompt: %+v", m)
+		}
+	}
+	reqs := mock.Requests()
+	retry := reqs[len(reqs)-1].Messages
+	if n := len(retry); n < 2 || retry[n-2].Content != gantry.MaxIterationsWrapUpPrompt || retry[n-1].Content != "late" {
+		t.Errorf("retried request tail = %+v, want [wrap-up prompt, late]", retry)
+	}
+}
+
+func TestOverflowFallbackTargetExcludesFixedTokens(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Err: &gantry.ContextLengthError{Err: errors.New("too long")}}, // no Limit, no window
+		{Response: gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 2)
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "big-system", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.System = strings.Repeat("x", 3200) // 800 tokens
+			return next(ctx, s)
+		}
+	})
+	rc := &recordingCompactor{keep: 100, forceKeep: 1}
+	_ = a.With(compactor.New(rc, compactor.Budget{Counter: func(gantry.Message) int { return 100 }}))
+
+	if _, err := a.Run(context.Background(), ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Messages are 2×100 = 200 of a 1000-token prompt; the messages-only budget
+	// must be 75% of the message tokens, not 75% of the whole prompt (750).
+	if got := rc.budgets[len(rc.budgets)-1].MaxTokens; got != 150 {
+		t.Errorf("retry MaxTokens = %d, want 150", got)
+	}
+}

@@ -256,3 +256,17 @@ func TestContextWindowWaiterHonoursContext(t *testing.T) {
 		t.Errorf("first call: %v", err)
 	}
 }
+
+func TestContextWindowStopReasonBeatsToolUse(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"tool_use","id":"t1","name":"search","input":{"q":"x"}}],
+			"stop_reason":"model_context_window_exceeded","usage":{}}`)
+	})
+	resp, err := c.Generate(context.Background(), userReq())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if resp.StopReason != gantry.StopReasonContextWindow {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonContextWindow)
+	}
+}

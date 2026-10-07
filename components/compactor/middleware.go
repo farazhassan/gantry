@@ -13,7 +13,7 @@ import (
 const MetaOverflowRetries = "components/compactor:overflow_retries"
 
 // overflowFallbackPercent is the target, as a percentage of the current
-// prompt estimate, when neither the provider error nor State.ContextWindow
+// message tokens, when neither the provider error nor State.ContextWindow
 // gives a limit.
 const overflowFallbackPercent = 75
 
@@ -29,8 +29,9 @@ type component struct {
 //
 // It also installs a PhaseLLMCall middleware: when the LLM call fails with
 // gantry.ErrContextLengthExceeded, it compacts once more with Budget.Force set
-// and MaxTokens set to the provider-reported limit (else State.ContextWindow,
-// else 75% of EstimatePromptTokens), then retries the call exactly once. If
+// and MaxTokens (a budget for Messages) set to the provider-reported limit,
+// else State.ContextWindow, minus the estimated System and Tools tokens; else
+// 75% of the current message tokens. It then retries the call exactly once. If
 // compaction does not change the transcript (same messages, compared by
 // content, not just length), the original error is returned without a retry.
 //
@@ -43,8 +44,8 @@ type component struct {
 // under Force (Summarizing, or a custom compactor).
 //
 // The max-iterations wrap-up prompt (gantry.IsWrapUpPrompt) is never passed to
-// the Compactor: when it is the last message, the Compactor sees the transcript
-// without it and the prompt is re-appended unchanged afterwards.
+// the Compactor: wherever it sits, the Compactor sees only the messages before
+// it, and the prompt plus anything appended after it are re-appended unchanged.
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
 
 func (comp *component) Install(a *gantry.Agent) error {
@@ -100,29 +101,41 @@ func (comp *component) Install(a *gantry.Agent) error {
 }
 
 // compact runs the Compactor over msgs. On the max-iterations wrap-up turn the
-// last message is the injected wrap-up prompt (gantry.IsWrapUpPrompt); it is
-// held out so the Compactor never sees, rewrites, or drops it, and re-appended
-// unchanged to the result. Change detection compares like with like, because
-// the held-out prompt is identical on both sides.
+// injected wrap-up prompt (gantry.IsWrapUpPrompt) is held out wherever it sits,
+// together with anything appended after it, so the Compactor never sees,
+// rewrites, or drops it; that suffix is re-appended unchanged to the result.
+// Change detection compares like with like, because the held-out suffix is
+// identical on both sides.
 func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
-	n := len(msgs)
-	if n == 0 || !gantry.IsWrapUpPrompt(msgs[n-1]) {
+	i := lastWrapUpPrompt(msgs)
+	if i < 0 {
 		return comp.c.Compact(ctx, msgs, b)
 	}
-	prompt := msgs[n-1]
-	compacted, err := comp.c.Compact(ctx, msgs[:n-1:n-1], b)
+	suffix := msgs[i:]
+	compacted, err := comp.c.Compact(ctx, msgs[:i:i], b)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]gantry.Message, 0, len(compacted)+1)
+	out := make([]gantry.Message, 0, len(compacted)+len(suffix))
 	out = append(out, compacted...)
-	return append(out, prompt), nil
+	return append(out, suffix...), nil
+}
+
+// lastWrapUpPrompt returns the index of the last injected wrap-up prompt in
+// msgs, or -1.
+func lastWrapUpPrompt(msgs []gantry.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if gantry.IsWrapUpPrompt(msgs[i]) {
+			return i
+		}
+	}
+	return -1
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages
 // only): the provider-reported limit, else the run's context window, minus the
-// estimated System and Tools tokens and floored at 1; else a fraction of the
-// current prompt estimate.
+// estimated System and Tools tokens; else a fraction of the current message
+// tokens (the prompt estimate minus System and Tools). Floored at 1.
 func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	var cle *gantry.ContextLengthError
 	limit := 0
@@ -134,7 +147,8 @@ func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	if limit > 0 {
 		return max(limit-estimateFixedTokens(s), 1)
 	}
-	return EstimatePromptTokens(s, comp.b) * overflowFallbackPercent / 100
+	messages := EstimatePromptTokens(s, comp.b) - estimateFixedTokens(s)
+	return max(messages*overflowFallbackPercent/100, 1)
 }
 
 // sameMessages reports whether a and b are the same transcript: equal length
