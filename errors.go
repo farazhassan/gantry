@@ -44,6 +44,11 @@ var (
 // request because the prompt exceeds the model's context window. Limit and
 // Requested are 0 when the provider's error does not report them. It matches
 // ErrContextLengthExceeded via errors.Is and unwraps to the provider error.
+//
+// Limit is whatever limit the provider reported, and its meaning varies:
+// Anthropic reports the input-only maximum, while OpenAI and OpenRouter report
+// the total window including output tokens. Consumers should leave a margin
+// rather than treat Limit as an exact prompt budget.
 type ContextLengthError struct {
 	Limit     int   // the model's maximum prompt tokens, if reported
 	Requested int   // the prompt tokens the request needed, if reported

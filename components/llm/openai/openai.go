@@ -280,28 +280,41 @@ func checkStatus(resp *http.Response) error {
 }
 
 var (
-	maxContextRe = regexp.MustCompile(`maximum context length is (\d+) tokens`)
-	requestedRe  = regexp.MustCompile(`(?:resulted in|requested(?: about)?) (\d+) tokens`)
+	maxContextRe = regexp.MustCompile(`(?i)(?:maximum context length is|limit of) ([\d,]+) tokens`)
+	requestedRe  = regexp.MustCompile(`(?i)(?:resulted in|requested(?: about)?) ([\d,]+) tokens`)
 )
 
+// atoiCommas parses a possibly comma-grouped number ("272,000").
+func atoiCommas(s string) int {
+	n, _ := strconv.Atoi(strings.ReplaceAll(s, ",", ""))
+	return n
+}
+
 // contextLengthError returns a *gantry.ContextLengthError when body is
-// OpenAI's context_length_exceeded error, else nil.
+// OpenAI's context_length_exceeded error, else nil. The error code is
+// preferred; when it is absent, null or non-string the message wording is used.
 func contextLengthError(body []byte, err error) error {
 	var e struct {
 		Error struct {
-			Message string `json:"message"`
-			Code    string `json:"code"`
+			Message string          `json:"message"`
+			Code    json.RawMessage `json:"code"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &e) != nil || e.Error.Code != "context_length_exceeded" {
+	if json.Unmarshal(body, &e) != nil {
+		return nil
+	}
+	var code string
+	_ = json.Unmarshal(e.Error.Code, &code)
+	limit := maxContextRe.FindStringSubmatch(e.Error.Message)
+	if code != "context_length_exceeded" && limit == nil {
 		return nil
 	}
 	cle := &gantry.ContextLengthError{Err: err}
-	if m := maxContextRe.FindStringSubmatch(e.Error.Message); m != nil {
-		cle.Limit, _ = strconv.Atoi(m[1])
+	if limit != nil {
+		cle.Limit = atoiCommas(limit[1])
 	}
 	if m := requestedRe.FindStringSubmatch(e.Error.Message); m != nil {
-		cle.Requested, _ = strconv.Atoi(m[1])
+		cle.Requested = atoiCommas(m[1])
 	}
 	return cle
 }
