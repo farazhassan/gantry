@@ -78,8 +78,22 @@ type respBlock struct {
 }
 
 type usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// toUsage normalizes Anthropic usage to gantry's convention: InputTokens is
+// the whole prompt, so the cached portions (which Anthropic reports
+// separately from input_tokens) are added in.
+func toUsage(u usage) gantry.Usage {
+	return gantry.Usage{
+		InputTokens:      u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheCreationInputTokens,
+	}
 }
 
 // toolBlock is the adapter-internal form of a tool call, shared by the
@@ -216,7 +230,7 @@ func assembleResponse(content string, calls []toolBlock, stopReasonStr string, u
 		Content:    content,
 		ToolCalls:  toToolCalls(calls),
 		StopReason: stopReason(stopReasonStr, len(calls) > 0),
-		Usage:      gantry.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens},
+		Usage:      toUsage(u),
 	}
 }
 
@@ -237,6 +251,8 @@ func stopReason(stopReasonStr string, hasTools bool) gantry.StopReason {
 		return gantry.StopReasonToolUse
 	case stopReasonStr == "max_tokens":
 		return gantry.StopReasonMaxTokens
+	case stopReasonStr == "model_context_window_exceeded":
+		return gantry.StopReasonContextWindow
 	default:
 		return gantry.StopReasonEnd
 	}

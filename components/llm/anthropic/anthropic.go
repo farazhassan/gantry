@@ -25,16 +25,19 @@ const (
 
 // Client is a gantry.StreamingLLMClient backed by Anthropic's /v1/messages
 // endpoint. It is safe for concurrent use: it holds no per-call state and the
-// underlying *http.Client is concurrency-safe.
+// underlying *http.Client is concurrency-safe. The only shared state is the
+// memoized context window, guarded by a mutex.
 type Client struct {
 	model          string
 	baseURL        string
 	apiKey         string
 	thinkingBudget int
 	httpc          *http.Client
+	ctxWindow      windowCache
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
+var _ gantry.ContextWindowReporter = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)
@@ -201,6 +204,8 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		case "message_start":
 			if ev.Message != nil {
 				u.InputTokens = ev.Message.Usage.InputTokens
+				u.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+				u.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
 			}
 		case "content_block_start":
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
@@ -335,5 +340,11 @@ func checkStatus(resp *http.Response) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("anthropic: messages: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	err := fmt.Errorf("anthropic: messages: status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	if resp.StatusCode == http.StatusBadRequest {
+		if cle := contextLengthError(body, err); cle != nil {
+			return cle
+		}
+	}
+	return err
 }
