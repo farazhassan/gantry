@@ -277,3 +277,52 @@ func TestOverflowOnWrapUpTurnDoesNotLeakPrompt(t *testing.T) {
 		}
 	}
 }
+
+// headOnlyOnForce returns msgs unchanged normally, and only the first message
+// when forced.
+type headOnlyOnForce struct{}
+
+func (headOnlyOnForce) Compact(_ context.Context, msgs []gantry.Message, b compactor.Budget) ([]gantry.Message, error) {
+	if b.Force && len(msgs) > 1 {
+		return append([]gantry.Message(nil), msgs[:1]...), nil
+	}
+	return append([]gantry.Message(nil), msgs...), nil
+}
+
+func TestOverflowOnWrapUpTurnKeepsGenuineUserMessageWithSameContent(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(300)}, // wrap-up turn overflows; forced compaction drops the injected prompt
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	seeded := false
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "seed-genuine", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			if !seeded {
+				seeded = true
+				s.Messages = append([]gantry.Message{{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt}}, s.Messages...)
+			}
+			return next(ctx, s)
+		}
+	})
+	_ = a.With(compactor.New(headOnlyOnForce{}, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := false
+	for _, m := range s.Messages {
+		if m.Role == gantry.RoleUser && m.Content == gantry.MaxIterationsWrapUpPrompt {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("genuine user message with wrap-up prompt content was removed: %+v", s.Messages)
+	}
+}
