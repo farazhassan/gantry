@@ -29,7 +29,17 @@ type component struct {
 // It also installs a PhaseLLMCall middleware: when the LLM call fails with
 // gantry.ErrContextLengthExceeded, it compacts once more with Budget.Force set
 // and MaxTokens set to the provider-reported limit (else State.ContextWindow,
-// else 75% of EstimatePromptTokens), then retries the call exactly once.
+// else 75% of EstimatePromptTokens), then retries the call exactly once. If
+// compaction does not shrink the transcript, the original error is returned
+// without a retry.
+//
+// The retry wraps only the PhaseLLMCall middleware installed before the
+// compactor (middleware composes innermost-first): middleware installed after
+// it, such as the limiter or a guardrail, runs once around the whole
+// attempt-and-retry, and a user retry middleware installed before the
+// compactor sees overflows first. The built-in SlidingWindow and HeadTail
+// ignore Budget, so the retry only helps when the strategy shrinks further
+// under Force (Summarizing, or a custom compactor).
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
 
 func (comp *component) Install(a *gantry.Agent) error {
@@ -68,6 +78,10 @@ func (comp *component) Install(a *gantry.Agent) error {
 			if cerr != nil {
 				return errors.Join(err, cerr)
 			}
+			if len(compacted) >= len(s.Messages) {
+				// Nothing shrank, so resending would fail identically.
+				return err
+			}
 			s.Messages = compacted
 			s.ContextUsage = gantry.ContextUsage{}
 			if s.Meta == nil {
@@ -80,16 +94,20 @@ func (comp *component) Install(a *gantry.Agent) error {
 	})
 }
 
-// overflowTarget picks the forced-compaction MaxTokens: the provider-reported
-// limit, else the run's context window, else a fraction of the current
-// prompt estimate.
+// overflowTarget picks the forced-compaction MaxTokens (a budget for Messages
+// only): the provider-reported limit, else the run's context window, minus the
+// estimated System and Tools tokens and floored at 1; else a fraction of the
+// current prompt estimate.
 func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	var cle *gantry.ContextLengthError
+	limit := 0
 	if errors.As(err, &cle) && cle.Limit > 0 {
-		return cle.Limit
+		limit = cle.Limit
+	} else if s.ContextWindow > 0 {
+		limit = s.ContextWindow
 	}
-	if s.ContextWindow > 0 {
-		return s.ContextWindow
+	if limit > 0 {
+		return max(limit-estimateFixedTokens(s), 1)
 	}
 	return EstimatePromptTokens(s, comp.b) * overflowFallbackPercent / 100
 }

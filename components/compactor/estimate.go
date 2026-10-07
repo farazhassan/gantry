@@ -19,12 +19,19 @@ func EstimatePromptTokens(s *gantry.State, b Budget) int {
 		}
 		return total
 	}
+	total := estimateFixedTokens(s)
+	for _, m := range s.Messages {
+		total += b.Count(m)
+	}
+	return total
+}
+
+// estimateFixedTokens estimates the tokens of the prompt parts compaction
+// cannot shrink: System and Tools (name, description, schema).
+func estimateFixedTokens(s *gantry.State) int {
 	total := bytesToTokens(len(s.System))
 	for _, t := range s.Tools {
 		total += bytesToTokens(len(t.Name) + len(t.Description) + len(t.Schema))
-	}
-	for _, m := range s.Messages {
-		total += b.Count(m)
 	}
 	return total
 }

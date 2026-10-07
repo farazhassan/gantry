@@ -3,6 +3,7 @@ package compactor_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -10,17 +11,30 @@ import (
 	"github.com/farazhassan/gantry/eval"
 )
 
-// recordingCompactor keeps the last n messages and records every Budget it saw.
+// recordingCompactor keeps the last keep messages (the last forceKeep when the
+// budget is forced and forceKeep > 0) and records every Budget it saw. err, if
+// set, is returned from forced compactions.
 type recordingCompactor struct {
-	keep    int
-	budgets []compactor.Budget
+	keep      int
+	forceKeep int
+	err       error
+	budgets   []compactor.Budget
 }
 
 func (r *recordingCompactor) Compact(_ context.Context, msgs []gantry.Message, b compactor.Budget) ([]gantry.Message, error) {
 	r.budgets = append(r.budgets, b)
+	keep := r.keep
+	if b.Force {
+		if r.err != nil {
+			return nil, r.err
+		}
+		if r.forceKeep > 0 {
+			keep = r.forceKeep
+		}
+	}
 	start := 0
-	if len(msgs) > r.keep {
-		start = len(msgs) - r.keep
+	if len(msgs) > keep {
+		start = len(msgs) - keep
 	}
 	out := make([]gantry.Message, len(msgs)-start)
 	copy(out, msgs[start:])
@@ -56,7 +70,7 @@ func TestOverflowRetriesOnceAfterForcedCompaction(t *testing.T) {
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	preload(t, a, 6)
-	rc := &recordingCompactor{keep: 100} // assemble pass keeps all 6
+	rc := &recordingCompactor{keep: 100, forceKeep: 2} // assemble pass keeps all 6
 	if err := a.With(compactor.New(rc, compactor.Budget{SoftLimit: 50})); err != nil {
 		t.Fatalf("With: %v", err)
 	}
@@ -67,6 +81,9 @@ func TestOverflowRetriesOnceAfterForcedCompaction(t *testing.T) {
 	}
 	if got := len(mock.Requests()); got != 2 {
 		t.Fatalf("LLM calls = %d, want 2", got)
+	}
+	if got := len(mock.Requests()[1].Messages); got != 2 {
+		t.Errorf("retried request has %d messages, want 2 (compacted)", got)
 	}
 	last := rc.budgets[len(rc.budgets)-1]
 	if !last.Force || last.MaxTokens != 300 || last.SoftLimit != 50 {
@@ -84,7 +101,7 @@ func TestOverflowTargetFallsBackToContextWindow(t *testing.T) {
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithContextWindow(800))
 	preload(t, a, 3)
-	rc := &recordingCompactor{keep: 100}
+	rc := &recordingCompactor{keep: 100, forceKeep: 1}
 	_ = a.With(compactor.New(rc, compactor.Budget{}))
 
 	if _, err := a.Run(context.Background(), ""); err != nil {
@@ -102,7 +119,7 @@ func TestOverflowTargetFallsBackToEstimate(t *testing.T) {
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	preload(t, a, 4)
-	rc := &recordingCompactor{keep: 100}
+	rc := &recordingCompactor{keep: 100, forceKeep: 1}
 	_ = a.With(compactor.New(rc, compactor.Budget{Counter: func(gantry.Message) int { return 100 }}))
 
 	if _, err := a.Run(context.Background(), ""); err != nil {
@@ -121,7 +138,7 @@ func TestOverflowTwiceReturnsTypedError(t *testing.T) {
 	})
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
 	preload(t, a, 3)
-	_ = a.With(compactor.New(&recordingCompactor{keep: 100}, compactor.Budget{}))
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100, forceKeep: 1}, compactor.Budget{}))
 
 	_, err := a.Run(context.Background(), "")
 	if !errors.Is(err, gantry.ErrContextLengthExceeded) {
@@ -171,5 +188,92 @@ func TestAssembleResetsAnchorWhenCompactionShrinks(t *testing.T) {
 	}
 	if seen[0] != (gantry.ContextUsage{}) {
 		t.Errorf("anchor before LLM call = %+v, want reset after shrinking compaction", seen[0])
+	}
+}
+
+func setSystem(a *gantry.Agent, n int) {
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "set-system", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.System = strings.Repeat("x", n)
+			return next(ctx, s)
+		}
+	})
+}
+
+func TestOverflowTargetSubtractsSystemAndTools(t *testing.T) {
+	for _, tc := range []struct{ limit, want int }{{300, 200}, {50, 1}} {
+		mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+			{Err: overflow(tc.limit)},
+			{Response: gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}},
+		})
+		a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+		preload(t, a, 4)
+		setSystem(a, 400) // 100 tokens
+		rc := &recordingCompactor{keep: 100, forceKeep: 1}
+		_ = a.With(compactor.New(rc, compactor.Budget{}))
+		if _, err := a.Run(context.Background(), ""); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := rc.budgets[len(rc.budgets)-1].MaxTokens; got != tc.want {
+			t.Errorf("limit %d: MaxTokens = %d, want %d", tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestOverflowNotRetriedWhenCompactionDoesNotShrink(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Err: overflow(300)}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 3)
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100}, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "")
+	if !errors.Is(err, gantry.ErrContextLengthExceeded) {
+		t.Fatalf("Run err = %v, want ErrContextLengthExceeded", err)
+	}
+	if got := len(mock.Requests()); got != 1 {
+		t.Errorf("LLM calls = %d, want 1", got)
+	}
+	if _, ok := s.Meta[compactor.MetaOverflowRetries]; ok {
+		t.Errorf("Meta[%s] set, want absent", compactor.MetaOverflowRetries)
+	}
+}
+
+func TestOverflowCompactionErrorIsJoined(t *testing.T) {
+	cerr := errors.New("compact failed")
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Err: overflow(300)}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 3)
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100, err: cerr}, compactor.Budget{}))
+
+	_, err := a.Run(context.Background(), "")
+	if !errors.Is(err, gantry.ErrContextLengthExceeded) || !errors.Is(err, cerr) {
+		t.Fatalf("Run err = %v, want both ErrContextLengthExceeded and compaction error", err)
+	}
+}
+
+func TestOverflowOnWrapUpTurnDoesNotLeakPrompt(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(300)}, // wrap-up turn overflows
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100, forceKeep: 3}, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.FinalOutput != "final" {
+		t.Errorf("FinalOutput = %q, want final", s.FinalOutput)
+	}
+	for _, m := range s.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("wrap-up prompt leaked into transcript: %+v", s.Messages)
+		}
 	}
 }

@@ -146,11 +146,13 @@ func removeTrailingWrapUpPrompt(state *State) {
 
 // removeInjectedWrapUpPrompt removes the prompt this pass injected at index
 // *idx: it searches backward from the end for a RoleUser
-// MaxIterationsWrapUpPrompt message but never below *idx, so earlier messages
-// with identical content are never touched, and middleware that appended
-// after the prompt doesn't defeat it. If the slice was shortened below *idx
-// it does nothing. It then sets *idx to -1, so a later call (the deferred
-// cleanup) is a no-op.
+// MaxIterationsWrapUpPrompt message but not below *idx, so earlier messages
+// with identical content are untouched while the prompt is where it was put,
+// and middleware that appended after the prompt doesn't defeat it. If no
+// match exists at or after *idx (middleware such as the compactor's overflow
+// retry shrank the transcript so the prompt moved below *idx) it falls back
+// to the last matching message anywhere. It then sets *idx to -1, so a later
+// call (the deferred cleanup) is a no-op.
 func removeInjectedWrapUpPrompt(state *State, idx *int) {
 	start := *idx
 	if start < 0 {
@@ -161,6 +163,13 @@ func removeInjectedWrapUpPrompt(state *State, idx *int) {
 		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
 			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
 			state.ContextUsage = ContextUsage{} // not an append: anchor invalid
+			return
+		}
+	}
+	for i := min(start, len(state.Messages)) - 1; i >= 0; i-- {
+		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
+			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
+			state.ContextUsage = ContextUsage{}
 			return
 		}
 	}
