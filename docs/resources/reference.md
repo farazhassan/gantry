@@ -33,7 +33,7 @@ you need.
 | **critic** | Self-reviews the last response (pass / reject) | `critic.New(c)` | `NewLLM(client, rubric)` |
 | **guardrail** | Validates inputs (pre-LLM) and outputs (post-LLM) | `guardrail.New(g)` | `NewRegex(pattern, direction)` |
 | **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.New(l)` | `NewBudget(Limits{...})` |
-| **compactor** | Trims history to fit a token budget before the LLM call | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
+| **compactor** | Trims history before the LLM call; on a context-overflow error compacts once more (forced) and retries. `EstimatePromptTokens(state, budget)` gives the provider-measured prompt size plus an estimate for newer messages | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
 | **checkpointer** | Saves & restores state by id for resume / replay; optionally saves mid-run too (see `extraPhases`) | `checkpointer.New(c, id, extraPhases...)` | — |
 | **checkpointer/mem** | `checkpointer.Checkpointer` and `checkpointer.Lease` backed by in-memory stores (tests, examples) | `mem.New()` · `mem.NewLease()` | `NewStore()` |
@@ -48,6 +48,12 @@ retriever, a real guardrail service) by satisfying the component's interface.
 third-party dependency and live in the root module; `checkpointer/redis`,
 `checkpointer/etcd`, and `sqlitevec` do need one, so each lives in its own Go
 module.
+
+### Context window
+
+- `gantry.WithContextWindow(n)` — the model's maximum prompt tokens. Overrides what the LLM client reports; copied to `State.ContextWindow` each run (0 = unknown). The Anthropic and OpenRouter adapters look the window up automatically; OpenAI needs this option; Ollama reports `ollama.WithNumCtx(n)`.
+- `State.ContextUsage` anchors the last provider-measured prompt size (`Usage.InputTokens`, which includes cached tokens on every adapter) to the transcript.
+- `gantry.ErrContextLengthExceeded` — the provider rejected the prompt as longer than the model's context window. Adapters return a `*gantry.ContextLengthError` (with `Limit`/`Requested` when the provider reports them) that matches it via `errors.Is`. The compactor component recovers by compacting and retrying once.
 
 For crash recovery across horizontally-scaled workers, pair a `checkpointer.Lease`
 (`redis.NewLease`/`etcd.New`) with `checkpointer.ResumeLocked`, which wraps
