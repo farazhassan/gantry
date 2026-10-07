@@ -1,6 +1,10 @@
 // Package compactor defines the Compactor interface and reference
 // implementations for trimming/summarizing conversation history before
 // the LLM call.
+//
+// The New middleware also recovers from context overflow: when the LLM call
+// fails with gantry.ErrContextLengthExceeded it compacts once with
+// Budget.Force and retries the call exactly once.
 package compactor
 
 import (
