@@ -103,7 +103,8 @@ func (comp *component) Install(a *gantry.Agent) error {
 // compact runs the Compactor over msgs. On the max-iterations wrap-up turn the
 // injected wrap-up prompt (gantry.IsWrapUpPrompt) is held out wherever it sits,
 // together with anything appended after it, so the Compactor never sees,
-// rewrites, or drops it; that suffix is re-appended unchanged to the result.
+// rewrites, or drops it; that suffix is re-appended unchanged to the result,
+// and its estimated tokens are taken out of a non-zero Budget.MaxTokens first.
 // Change detection compares like with like, because the held-out suffix is
 // identical on both sides.
 func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
@@ -112,6 +113,14 @@ func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Bud
 		return comp.c.Compact(ctx, msgs, b)
 	}
 	suffix := msgs[i:]
+	if b.MaxTokens > 0 {
+		// The held-out suffix is re-sent as-is, so the Compactor's share of
+		// the budget is what remains after it.
+		for _, m := range suffix {
+			b.MaxTokens -= b.Count(m)
+		}
+		b.MaxTokens = max(b.MaxTokens, 1)
+	}
 	compacted, err := comp.c.Compact(ctx, msgs[:i:i], b)
 	if err != nil {
 		return nil, err

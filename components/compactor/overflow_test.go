@@ -516,3 +516,26 @@ func TestOverflowFallbackTargetExcludesFixedTokens(t *testing.T) {
 		t.Errorf("retry MaxTokens = %d, want 150", got)
 	}
 }
+
+func TestWrapUpRetryBudgetExcludesHeldOutSuffix(t *testing.T) {
+	tool := func(id string) gantry.LLMResponse {
+		return gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: id, Name: "noop"}}, StopReason: gantry.StopReasonToolUse}
+	}
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Response: tool("a")},
+		{Response: tool("b")},
+		{Err: overflow(1000)}, // wrap-up turn overflows
+		{Response: gantry.LLMResponse{Content: "final", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithMaxIterations(2))
+	rc := &recordingCompactor{keep: 100, forceKeep: 1}
+	_ = a.With(compactor.New(rc, compactor.Budget{Counter: func(gantry.Message) int { return 100 }}))
+
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// No system/tools: limit 1000 minus the held-out wrap-up prompt (100).
+	if got := rc.budgets[len(rc.budgets)-1].MaxTokens; got != 900 {
+		t.Errorf("retry MaxTokens = %d, want 900", got)
+	}
+}

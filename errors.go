@@ -56,8 +56,14 @@ type ContextLengthError struct {
 }
 
 func (e *ContextLengthError) Error() string {
-	if e.Limit > 0 || e.Requested > 0 {
+	// Zero means "not reported", so only reported values are printed.
+	switch {
+	case e.Limit > 0 && e.Requested > 0:
 		return fmt.Sprintf("%s (requested %d, limit %d): %v", ErrContextLengthExceeded, e.Requested, e.Limit, e.Err)
+	case e.Limit > 0:
+		return fmt.Sprintf("%s (limit %d): %v", ErrContextLengthExceeded, e.Limit, e.Err)
+	case e.Requested > 0:
+		return fmt.Sprintf("%s (requested %d): %v", ErrContextLengthExceeded, e.Requested, e.Err)
 	}
 	return fmt.Sprintf("%s: %v", ErrContextLengthExceeded, e.Err)
 }

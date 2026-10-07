@@ -253,3 +253,13 @@ func TestRunFromCarriesContextUsageAndWindow(t *testing.T) {
 		t.Errorf("next turn saw ContextUsage %+v window %d, want %+v and 4096", seen, seenWindow, prior.ContextUsage)
 	}
 }
+
+func TestContextLengthErrorMessageWithOneValue(t *testing.T) {
+	base := errors.New("boom")
+	if got := (&gantry.ContextLengthError{Limit: 128000, Err: base}).Error(); got != "gantry: context length exceeded (limit 128000): boom" {
+		t.Errorf("limit-only Error() = %q", got)
+	}
+	if got := (&gantry.ContextLengthError{Requested: 130000, Err: base}).Error(); got != "gantry: context length exceeded (requested 130000): boom" {
+		t.Errorf("requested-only Error() = %q", got)
+	}
+}

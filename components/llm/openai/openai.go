@@ -292,7 +292,9 @@ func atoiCommas(s string) int {
 
 // contextLengthError returns a *gantry.ContextLengthError when body is
 // OpenAI's context_length_exceeded error, else nil. The error code is
-// preferred; when it is absent, null or non-string the message wording is used.
+// authoritative when it is a string: context_length_exceeded is overflow and any
+// other string code is not. Only when the code is absent, null or non-string is
+// the message wording used.
 func contextLengthError(body []byte, err error) error {
 	var e struct {
 		Error struct {
@@ -306,7 +308,11 @@ func contextLengthError(body []byte, err error) error {
 	var code string
 	_ = json.Unmarshal(e.Error.Code, &code)
 	limit := maxContextRe.FindStringSubmatch(e.Error.Message)
-	if code != "context_length_exceeded" && limit == nil {
+	switch {
+	case code == "context_length_exceeded":
+	case code != "": // an explicit, different code is not overflow
+		return nil
+	case limit == nil:
 		return nil
 	}
 	cle := &gantry.ContextLengthError{Err: err}

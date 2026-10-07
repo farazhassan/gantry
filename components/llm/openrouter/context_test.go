@@ -292,3 +292,16 @@ func TestContextWindowWaiterHonoursContext(t *testing.T) {
 		t.Errorf("first call: %v", err)
 	}
 }
+
+func TestExplicitNonOverflowErrorTypeWinsOverWording(t *testing.T) {
+	for _, typ := range []string{"max_tokens_exceeded", "token_limit_exceeded"} {
+		c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"This endpoint's maximum context length is 200000 tokens. max_tokens is too large.","code":400,"metadata":{"error_type":"`+typ+`"}}}`)
+		})
+		_, err := c.Generate(context.Background(), userReq())
+		if err == nil || errors.Is(err, gantry.ErrContextLengthExceeded) {
+			t.Errorf("%s: err = %v, want generic error", typ, err)
+		}
+	}
+}

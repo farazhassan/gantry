@@ -35,6 +35,10 @@ func atoiCommas(s string) int {
 	return n
 }
 
+// nonOverflowErrorTypes are OpenRouter error_type values that are never a
+// context-window overflow, whatever the message says.
+var nonOverflowErrorTypes = map[string]bool{"max_tokens_exceeded": true, "token_limit_exceeded": true}
+
 // contextLengthError returns a *gantry.ContextLengthError when body is an
 // overflow error. OpenRouter's error.code is the numeric HTTP status, so
 // classification looks at error.metadata.error_type and at the message text —
@@ -52,6 +56,11 @@ func contextLengthError(body []byte, err error) error {
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &e) != nil {
+		return nil
+	}
+	if nonOverflowErrorTypes[e.Error.Metadata.ErrorType] {
+		// Explicit metadata wins over wording heuristics: these are output
+		// limits that compaction cannot fix.
 		return nil
 	}
 	texts := []string{e.Error.Message}

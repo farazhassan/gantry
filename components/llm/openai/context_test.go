@@ -111,3 +111,14 @@ func TestNumericCodeOtherBadRequestStaysGeneric(t *testing.T) {
 		t.Errorf("err = %v, want generic error", err)
 	}
 }
+
+func TestExplicitOtherCodeIsNotOverflow(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"max_tokens exceeds the limit of 16,384 tokens for this model","type":"invalid_request_error","code":"max_tokens_exceeded"}}`)
+	})
+	_, err := c.Generate(context.Background(), userReq())
+	if err == nil || errors.Is(err, gantry.ErrContextLengthExceeded) {
+		t.Errorf("err = %v, want generic error (explicit non-overflow code wins over wording)", err)
+	}
+}
