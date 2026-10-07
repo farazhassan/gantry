@@ -196,21 +196,46 @@ func newServerClientModel(t *testing.T, model string, handler http.HandlerFunc) 
 	)
 }
 
-func TestContextWindowErrorNotCached(t *testing.T) {
-	calls := 0
+func TestContextWindowFailureCachedForTTL(t *testing.T) {
+	clock := time.Now()
+	openrouter.SetNowForTest(t, func() time.Time { return clock })
+	var calls atomic.Int32
 	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		_, _ = io.WriteString(w, `{"data":[{"id":"test-model","context_length":500}]}`)
 	})
-	if _, err := c.ContextWindow(context.Background()); err == nil {
+	_, err1 := c.ContextWindow(context.Background())
+	if err1 == nil {
 		t.Fatal("first ContextWindow: want error")
 	}
+	if _, err := c.ContextWindow(context.Background()); err == nil || err.Error() != err1.Error() || calls.Load() != 1 {
+		t.Fatalf("second ContextWindow within TTL: err=%v calls=%d; want cached failure and 1 call", err, calls.Load())
+	}
+	clock = clock.Add(6 * time.Minute)
 	if n, err := c.ContextWindow(context.Background()); err != nil || n != 500 {
-		t.Errorf("second ContextWindow = %d, %v; want 500, nil", n, err)
+		t.Errorf("after TTL ContextWindow = %d, %v; want 500, nil", n, err)
+	}
+}
+
+func TestContextWindowCancelledCallerNotCached(t *testing.T) {
+	var calls atomic.Int32
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			<-r.Context().Done()
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":[{"id":"test-model","context_length":500}]}`)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := c.ContextWindow(ctx); err == nil {
+		t.Fatal("cancelled ContextWindow: want error")
+	}
+	if n, err := c.ContextWindow(context.Background()); err != nil || n != 500 {
+		t.Errorf("ContextWindow after caller cancel = %d, %v; want 500, nil (not cached)", n, err)
 	}
 }
 

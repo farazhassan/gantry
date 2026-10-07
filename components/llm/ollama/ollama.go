@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,13 +101,13 @@ func WithNumCtx(n int) Option {
 
 // ContextWindow reports the num_ctx configured with WithNumCtx. Without it
 // the effective window is Ollama's server default, which this client cannot
-// see, so it returns an error (the agent then treats the window as unknown).
+// see, so it returns (0, nil): unknown, not an error.
 // The model's maximum from /api/show is deliberately not used: Ollama's
 // default num_ctx is far smaller, so reporting the maximum would overstate
 // the room available.
 func (c *Client) ContextWindow(ctx context.Context) (int, error) {
 	if c.numCtx <= 0 {
-		return 0, errors.New("ollama: context window unknown: num_ctx not configured (use WithNumCtx)")
+		return 0, nil
 	}
 	return c.numCtx, nil
 }

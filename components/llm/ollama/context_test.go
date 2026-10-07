@@ -36,8 +36,8 @@ func TestWithNumCtxSentAndReported(t *testing.T) {
 
 func TestContextWindowUnknownWithoutNumCtx(t *testing.T) {
 	c := ollama.New("m")
-	if _, err := c.ContextWindow(context.Background()); err == nil {
-		t.Error("ContextWindow without WithNumCtx: want error (unknown)")
+	if n, err := c.ContextWindow(context.Background()); n != 0 || err != nil {
+		t.Errorf("ContextWindow without WithNumCtx = %d, %v; want 0, nil (unknown)", n, err)
 	}
 }
 

@@ -93,32 +93,49 @@ func contextLengthError(body []byte, err error) error {
 // stall every concurrent run waiting on the same client.
 const windowLookupTimeout = 10 * time.Second
 
-// windowCache memoizes a successful context-window lookup. Failures are not
-// cached so a transient error does not stick for the client's lifetime. A
-// 1-buffered channel gates the lookup so waiters can abandon on their own
-// context instead of blocking behind another caller's HTTP request. The zero
-// value is ready to use.
+// windowFailureTTL is how long a failed lookup is remembered, so a persistently
+// failing models endpoint is not hit on every run.
+const windowFailureTTL = 5 * time.Minute
+
+// now is the clock for failure expiry; tests replace it.
+var now = time.Now
+
+// windowCache memoizes a successful context-window lookup, and a failed one
+// for windowFailureTTL (errors caused by the caller's own context are never
+// cached). A 1-buffered channel gates the lookup so waiters can abandon on
+// their own context instead of blocking behind another caller's HTTP request.
+// The zero value is ready to use.
 type windowCache struct {
-	once sync.Once
-	gate chan struct{}
-	mu   sync.Mutex // guards n only; never held across I/O
-	n    int
+	once  sync.Once
+	gate  chan struct{}
+	mu    sync.Mutex // guards the fields below only; never held across I/O
+	n     int
+	err   error
+	errAt time.Time
 }
 
-func (w *windowCache) get() int {
+// get returns a cached window, or a still-fresh cached failure, or zeros.
+func (w *windowCache) get() (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.n
+	if w.n > 0 {
+		return w.n, nil
+	}
+	if w.err != nil && now().Sub(w.errAt) < windowFailureTTL {
+		return 0, w.err
+	}
+	return 0, nil
 }
 
 // ContextWindow returns the model's context_length from OpenRouter's model
-// list (GET /v1/models), cached after the first success. It uses the model's
+// list (GET /v1/models), cached after the first success
+// and a failure for a few minutes. It uses the model's
 // top-level context_length, not top_provider's. A routing suffix such as
 // ":nitro" is stripped if the exact id is not listed.
 func (c *Client) ContextWindow(ctx context.Context) (int, error) {
 	w := &c.ctxWindow
-	if n := w.get(); n > 0 {
-		return n, nil
+	if n, err := w.get(); n > 0 || err != nil {
+		return n, err
 	}
 	w.once.Do(func() { w.gate = make(chan struct{}, 1) })
 	select {
@@ -127,17 +144,22 @@ func (c *Client) ContextWindow(ctx context.Context) (int, error) {
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
-	if n := w.get(); n > 0 { // another caller finished while we waited
-		return n, nil
+	if n, err := w.get(); n > 0 || err != nil { // another caller finished while we waited
+		return n, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, windowLookupTimeout)
+	lctx, cancel := context.WithTimeout(ctx, windowLookupTimeout)
 	defer cancel()
-	n, err := c.fetchContextWindow(ctx)
+	n, err := c.fetchContextWindow(lctx)
 	if err != nil {
+		if ctx.Err() == nil { // the caller's own cancellation says nothing about the endpoint
+			w.mu.Lock()
+			w.err, w.errAt = err, now()
+			w.mu.Unlock()
+		}
 		return 0, err
 	}
 	w.mu.Lock()
-	w.n = n
+	w.n, w.err = n, nil
 	w.mu.Unlock()
 	return n, nil
 }
