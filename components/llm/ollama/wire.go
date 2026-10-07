@@ -25,6 +25,7 @@ type chatRequest struct {
 type chatOptions struct {
 	Temperature float64 `json:"temperature,omitempty"`
 	NumPredict  int     `json:"num_predict,omitempty"`
+	NumCtx      int     `json:"num_ctx,omitempty"`
 }
 
 type chatMessage struct {
@@ -78,7 +79,7 @@ type respMessage struct {
 // the provider default apply); reasoning-capable models (e.g. deepseek-r1)
 // report their reasoning via the response's message.thinking field, decoded
 // in GenerateStream.
-func toChatRequest(model string, req gantry.LLMRequest, stream bool, think *bool) chatRequest {
+func toChatRequest(model string, req gantry.LLMRequest, stream bool, think *bool, numCtx int) chatRequest {
 	var msgs []chatMessage
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: string(gantry.RoleSystem), Content: req.System})
@@ -112,7 +113,7 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool, think *bool
 		Tools:    tools,
 		Stream:   stream,
 		Think:    think,
-		Options:  toChatOptions(req),
+		Options:  toChatOptions(req, numCtx),
 	}
 }
 
@@ -134,13 +135,13 @@ func toChatTools(defs []gantry.ToolDef) []chatTool {
 	return out
 }
 
-// toChatOptions returns nil when neither knob is set so Ollama applies its own
+// toChatOptions returns nil when no knob is set so Ollama applies its own
 // defaults (0 temperature/max-tokens both mean "provider default" in gantry).
-func toChatOptions(req gantry.LLMRequest) *chatOptions {
-	if req.Temperature == 0 && req.MaxTokens == 0 {
+func toChatOptions(req gantry.LLMRequest, numCtx int) *chatOptions {
+	if req.Temperature == 0 && req.MaxTokens == 0 && numCtx == 0 {
 		return nil
 	}
-	return &chatOptions{Temperature: req.Temperature, NumPredict: req.MaxTokens}
+	return &chatOptions{Temperature: req.Temperature, NumPredict: req.MaxTokens, NumCtx: numCtx}
 }
 
 // assembleResponse builds the gantry response from aggregated stream/non-stream
