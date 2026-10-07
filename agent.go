@@ -23,6 +23,7 @@ type Agent struct {
 	maxIterations int
 	temperature   float64
 	contextWindow int
+	overflow      ContextOverflowHandler
 	name          string
 
 	chains      map[Phase][]namedMW
@@ -456,6 +457,9 @@ func (a *Agent) runPhase(ctx context.Context, tracer Tracer, phase Phase, state 
 	}
 	handler := Compose(inner, mws)
 	err := handler(ctx, state)
+	if err != nil && phase == PhaseLLMCall {
+		err = a.retryOnOverflow(ctx, state, span, handler, err)
+	}
 
 	if state.Done {
 		span.SetAttr("done", true)

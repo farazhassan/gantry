@@ -27,21 +27,19 @@ type component struct {
 // PhaseAssembleContext middleware; it runs the inner context-assembly middleware
 // first (via next) and then compacts the fully-assembled transcript.
 //
-// It also installs a PhaseLLMCall middleware: when the LLM call fails with
+// It also registers the agent's gantry.ContextOverflowHandler (so an agent can
+// have only one compactor): when the LLM call fails with
 // gantry.ErrContextLengthExceeded, it compacts once more with Budget.Force set
 // and MaxTokens (a budget for Messages) set to the provider-reported limit,
 // else State.ContextWindow, minus the estimated System and Tools tokens; else
-// 75% of the current message tokens. It then retries the call exactly once. If
-// compaction does not change the transcript (same messages, compared by
-// content, not just length), the original error is returned without a retry.
-//
-// The retry wraps only the PhaseLLMCall middleware installed before the
-// compactor (middleware composes innermost-first): middleware installed after
-// it, such as the limiter or a guardrail, runs once around the whole
-// attempt-and-retry, and a user retry middleware installed before the
-// compactor sees overflows first. The built-in SlidingWindow and HeadTail
-// ignore Budget, so the retry only helps when the strategy shrinks further
-// under Force (Summarizing, or a custom compactor).
+// 75% of the current message tokens. The core loop then re-runs the whole
+// PhaseLLMCall middleware chain exactly once, so input guardrails, the limiter
+// and other LLM-call middleware check the compacted input regardless of
+// install order. If compaction does not change the transcript (same messages,
+// compared by content, not just length), the original error is returned
+// without a retry. The built-in SlidingWindow and HeadTail ignore Budget, so
+// the retry only helps when the strategy shrinks further under Force
+// (Summarizing, or a custom compactor).
 //
 // The max-iterations wrap-up prompt (gantry.IsWrapUpPrompt) is never passed to
 // the Compactor: wherever it sits, the Compactor sees only the messages before
@@ -71,33 +69,32 @@ func (comp *component) Install(a *gantry.Agent) error {
 	}); err != nil {
 		return err
 	}
-	return a.UseNamed(gantry.PhaseLLMCall, "components/compactor:overflow_retry", func(next gantry.Handler) gantry.Handler {
-		return func(ctx context.Context, s *gantry.State) error {
-			err := next(ctx, s)
-			if err == nil || !errors.Is(err, gantry.ErrContextLengthExceeded) {
-				return err
-			}
-			b := comp.b
-			b.Force = true
-			b.MaxTokens = comp.overflowTarget(s, err)
-			compacted, cerr := comp.compact(ctx, s.Messages, b)
-			if cerr != nil {
-				return errors.Join(err, cerr)
-			}
-			if sameMessages(s.Messages, compacted) {
-				// Nothing changed, so resending would fail identically.
-				return err
-			}
-			s.Messages = compacted
-			s.ContextUsage = gantry.ContextUsage{}
-			if s.Meta == nil {
-				s.Meta = map[string]any{}
-			}
-			n, _ := s.Meta[MetaOverflowRetries].(int)
-			s.Meta[MetaOverflowRetries] = n + 1
-			return next(ctx, s)
-		}
-	})
+	return a.OnContextOverflow(comp.onOverflow)
+}
+
+// onOverflow is the agent's gantry.ContextOverflowHandler: it compacts with
+// Budget.Force toward overflowTarget and asks the core loop to re-run the
+// whole PhaseLLMCall chain once. It declines (no retry) when compaction
+// leaves the transcript unchanged, since resending would fail identically.
+func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err error) (bool, error) {
+	b := comp.b
+	b.Force = true
+	b.MaxTokens = comp.overflowTarget(s, err)
+	compacted, cerr := comp.compact(ctx, s.Messages, b)
+	if cerr != nil {
+		return false, cerr
+	}
+	if sameMessages(s.Messages, compacted) {
+		return false, nil
+	}
+	s.Messages = compacted
+	s.ContextUsage = gantry.ContextUsage{}
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	n, _ := s.Meta[MetaOverflowRetries].(int)
+	s.Meta[MetaOverflowRetries] = n + 1
+	return true, nil
 }
 
 // compact runs the Compactor over msgs. On the max-iterations wrap-up turn the

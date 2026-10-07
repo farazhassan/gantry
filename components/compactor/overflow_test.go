@@ -539,3 +539,28 @@ func TestWrapUpRetryBudgetExcludesHeldOutSuffix(t *testing.T) {
 		t.Errorf("retry MaxTokens = %d, want 900", got)
 	}
 }
+
+func TestOverflowRetryRerunsMiddlewareInstalledAfterCompactor(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Err: overflow(300)},
+		{Response: gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 4)
+	_ = a.With(compactor.New(&recordingCompactor{keep: 100, forceKeep: 1}, compactor.Budget{}))
+	// Installed after the compactor, like the documented guardrail order: it
+	// must re-check the compacted input on the retry.
+	var checked []int
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			checked = append(checked, len(s.Messages))
+			return next(ctx, s)
+		}
+	})
+	if _, err := a.Run(context.Background(), ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(checked) != 2 || checked[1] != 1 {
+		t.Errorf("guard saw message counts %v, want [4 1] (re-checked after compaction)", checked)
+	}
+}
