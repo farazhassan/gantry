@@ -30,14 +30,18 @@ type Compactor interface {
 	Compact(ctx context.Context, msgs []gantry.Message, budget Budget) ([]gantry.Message, error)
 }
 
-// Budget describes the constraints the Compactor should honor.
+// Budget describes what the caller asks the Compactor to aim for. It is a
+// request, not a guarantee: strategies decide how much of it they honour.
 //
-// MaxTokens is the hard prompt-size target; SoftLimit is the size below which
-// a strategy may skip compaction. Force means the caller needs the result to
-// be smaller than MaxTokens regardless of SoftLimit (set by the overflow
-// retry after the provider rejected the prompt as too long). Counter is the
-// per-message token estimator; if nil, a default (bytes/4 over content, tool
-// calls and IDs, plus a per-message overhead) is used.
+// MaxTokens is the requested prompt-size target for Messages; SoftLimit is the
+// size below which a strategy may skip compaction. Force asks the strategy to
+// try to compact further than it otherwise would, ignoring SoftLimit (set by
+// the overflow handler after the provider rejected the prompt as too long).
+// The built-in SlidingWindow and HeadTail ignore all three (they trim by
+// message count); Summarizing uses SoftLimit and Force but does not check its
+// result against MaxTokens. Counter is the per-message token estimator; if
+// nil, a default (bytes/4 over content, tool calls and IDs, plus a
+// per-message overhead) is used.
 type Budget struct {
 	MaxTokens int
 	SoftLimit int

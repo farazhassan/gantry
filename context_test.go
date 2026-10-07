@@ -263,3 +263,33 @@ func TestContextLengthErrorMessageWithOneValue(t *testing.T) {
 		t.Errorf("requested-only Error() = %q", got)
 	}
 }
+
+// blockingWindowLLM's ContextWindow blocks until the run's context is cancelled.
+type blockingWindowLLM struct {
+	*eval.MockLLMClient
+	cancel context.CancelFunc
+}
+
+func (b *blockingWindowLLM) ContextWindow(ctx context.Context) (int, error) {
+	b.cancel()
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func TestCancelDuringContextWindowLookupSkipsPhaseStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	llm := &blockingWindowLLM{MockLLMClient: eval.NewMockLLMClient(endResp()), cancel: cancel}
+	a, _ := gantry.NewAgent(gantry.WithLLM(llm))
+	started := false
+	a.Use(gantry.PhaseStart, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error { started = true; return next(ctx, s) }
+	})
+	_, err := a.Run(ctx, "hi")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run err = %v, want context.Canceled", err)
+	}
+	if started {
+		t.Error("PhaseStart ran after the caller cancelled")
+	}
+}

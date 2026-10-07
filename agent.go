@@ -374,6 +374,11 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	state.Tools = nil
 
 	a.resolveContextWindow(ctx, state, runSpan)
+	// A lookup failure is non-fatal, but a caller cancelling while it ran is
+	// terminal: don't let PhaseStart middleware act after cancellation.
+	if err := ctx.Err(); err != nil {
+		return state, wrap(err)
+	}
 
 	// PhaseStart (once).
 	if err := a.runPhase(ctx, tracer, PhaseStart, state); err != nil {
