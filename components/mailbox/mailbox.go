@@ -101,6 +101,9 @@ func (c *component) inject(next gantry.Handler) gantry.Handler {
 			Role:    gantry.RoleSystem,
 			Content: digest(notes),
 		}}, state.Messages...)
+		// Prepending shifts every index, so a carried ContextUsage anchor no
+		// longer points at the same messages.
+		state.ContextUsage = gantry.ContextUsage{}
 		return nil
 	}
 }

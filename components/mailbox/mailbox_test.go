@@ -267,3 +267,26 @@ func TestDigestFormatting(t *testing.T) {
 		t.Errorf("digest =\n%q\nwant\n%q", got, want)
 	}
 }
+
+func TestMailboxPrependClearsContextUsageAnchor(t *testing.T) {
+	store := taskmanager.NewInMemoryNotificationStore()
+	seedNote(t, store, "s1")
+	a := newAgent(t, store, 1)
+	var seen gantry.ContextUsage
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			seen = s.ContextUsage
+			return next(ctx, s)
+		}
+	})
+
+	st := gantry.NewState("hello")
+	st.Meta[gantry.MetaSessionID] = "s1"
+	st.ContextUsage = gantry.ContextUsage{PromptTokens: 100, MessageCount: 1}
+	if _, err := a.Resume(context.Background(), st); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if seen != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage after digest prepend = %+v, want zero", seen)
+	}
+}

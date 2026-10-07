@@ -58,3 +58,30 @@ func TestWithTranscriptAppendsAssistantResponse(t *testing.T) {
 		t.Errorf("got[1] = %+v", got[1])
 	}
 }
+
+func TestWithTranscriptPrependClearsContextUsageAnchor(t *testing.T) {
+	store := transcript.NewInMemoryStore()
+	store.Append(context.Background(), gantry.Message{Role: gantry.RoleUser, Content: "earlier turn"})
+
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	if err := a.With(transcript.New(store)); err != nil {
+		t.Fatalf("install transcript: %v", err)
+	}
+	var seen gantry.ContextUsage
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			seen = s.ContextUsage
+			return next(ctx, s)
+		}
+	})
+
+	st := gantry.NewState("now")
+	st.ContextUsage = gantry.ContextUsage{PromptTokens: 100, MessageCount: 1}
+	if _, err := a.Resume(context.Background(), st); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if seen != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage after history prepend = %+v, want zero", seen)
+	}
+}
