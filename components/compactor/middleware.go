@@ -1,6 +1,7 @@
 package compactor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -30,8 +31,8 @@ type component struct {
 // gantry.ErrContextLengthExceeded, it compacts once more with Budget.Force set
 // and MaxTokens set to the provider-reported limit (else State.ContextWindow,
 // else 75% of EstimatePromptTokens), then retries the call exactly once. If
-// compaction does not shrink the transcript, the original error is returned
-// without a retry.
+// compaction does not change the transcript (same messages, compared by
+// content, not just length), the original error is returned without a retry.
 //
 // The retry wraps only the PhaseLLMCall middleware installed before the
 // compactor (middleware composes innermost-first): middleware installed after
@@ -50,13 +51,13 @@ func (comp *component) Install(a *gantry.Agent) error {
 			if err := next(ctx, s); err != nil {
 				return err
 			}
-			before := len(s.Messages)
+			before := s.Messages // Compact must not alias its input
 			compacted, err := comp.c.Compact(ctx, s.Messages, comp.b)
 			if err != nil {
 				return err
 			}
 			s.Messages = compacted
-			if len(compacted) != before {
+			if !sameMessages(before, compacted) {
 				// The measured anchor no longer describes Messages.
 				s.ContextUsage = gantry.ContextUsage{}
 			}
@@ -78,8 +79,8 @@ func (comp *component) Install(a *gantry.Agent) error {
 			if cerr != nil {
 				return errors.Join(err, cerr)
 			}
-			if len(compacted) >= len(s.Messages) {
-				// Nothing shrank, so resending would fail identically.
+			if sameMessages(s.Messages, compacted) {
+				// Nothing changed, so resending would fail identically.
 				return err
 			}
 			s.Messages = compacted
@@ -110,4 +111,27 @@ func (comp *component) overflowTarget(s *gantry.State, err error) int {
 		return max(limit-estimateFixedTokens(s), 1)
 	}
 	return EstimatePromptTokens(s, comp.b) * overflowFallbackPercent / 100
+}
+
+// sameMessages reports whether a and b are the same transcript: equal length
+// and, per message, equal Role, Content, ToolCallID, Name and ToolCalls. Length
+// alone misses same-length rewrites such as a summary replacing one message.
+func sameMessages(a, b []gantry.Message) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x.Role != y.Role || x.Content != y.Content || x.ToolCallID != y.ToolCallID ||
+			x.Name != y.Name || len(x.ToolCalls) != len(y.ToolCalls) {
+			return false
+		}
+		for j := range x.ToolCalls {
+			p, q := x.ToolCalls[j], y.ToolCalls[j]
+			if p.ID != q.ID || p.Name != q.Name || !bytes.Equal(p.Input, q.Input) {
+				return false
+			}
+		}
+	}
+	return true
 }

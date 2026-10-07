@@ -326,3 +326,73 @@ func TestOverflowOnWrapUpTurnKeepsGenuineUserMessageWithSameContent(t *testing.T
 		t.Errorf("genuine user message with wrap-up prompt content was removed: %+v", s.Messages)
 	}
 }
+
+// rewriteCompactor returns a same-length copy whose first message is replaced
+// by a summary, as a Summarizing compactor does when head+tail+1 == len(msgs).
+type rewriteCompactor struct{}
+
+func (rewriteCompactor) Compact(_ context.Context, msgs []gantry.Message, _ compactor.Budget) ([]gantry.Message, error) {
+	out := append([]gantry.Message(nil), msgs...)
+	if len(out) > 0 {
+		out[0] = gantry.Message{Role: gantry.RoleUser, Content: "summary"}
+	}
+	return out, nil
+}
+
+func TestAssembleResetsAnchorOnSameLengthRewrite(t *testing.T) {
+	var seen []gantry.ContextUsage
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 5)
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "seed-anchor", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.ContextUsage = gantry.ContextUsage{PromptTokens: 900, MessageCount: 4}
+			return next(ctx, s)
+		}
+	})
+	_ = a.With(compactor.New(rewriteCompactor{}, compactor.Budget{}))
+	a.Use(gantry.PhaseLLMCall, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			seen = append(seen, s.ContextUsage)
+			return next(ctx, s)
+		}
+	})
+	if _, err := a.Run(context.Background(), ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if seen[0] != (gantry.ContextUsage{}) {
+		t.Errorf("anchor before LLM call = %+v, want reset after same-length rewrite", seen[0])
+	}
+}
+
+// forcedRewrite leaves the transcript alone normally and rewrites one message
+// (same length) when forced.
+type forcedRewrite struct{}
+
+func (forcedRewrite) Compact(ctx context.Context, msgs []gantry.Message, b compactor.Budget) ([]gantry.Message, error) {
+	if b.Force {
+		return rewriteCompactor{}.Compact(ctx, msgs, b)
+	}
+	return append([]gantry.Message(nil), msgs...), nil
+}
+
+func TestOverflowRetriesOnSameLengthRewrite(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{
+		{Err: overflow(300)},
+		{Response: gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd}},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 3)
+	_ = a.With(compactor.New(forcedRewrite{}, compactor.Budget{}))
+
+	s, err := a.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := len(mock.Requests()); got != 2 {
+		t.Errorf("LLM calls = %d, want 2", got)
+	}
+	if n, _ := s.Meta[compactor.MetaOverflowRetries].(int); n != 1 {
+		t.Errorf("Meta[%s] = %d, want 1", compactor.MetaOverflowRetries, n)
+	}
+}
