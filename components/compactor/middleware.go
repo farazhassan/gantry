@@ -9,7 +9,9 @@ import (
 )
 
 // MetaOverflowRetries is the State.Meta key holding how many times the
-// overflow retry compacted and re-sent a request this run (an int).
+// overflow retry compacted and re-sent a request this run (an int). It is
+// cleared at PhaseStart, so it counts per Run, RunFrom or Resume call even
+// though RunFrom carries Meta across turns.
 const MetaOverflowRetries = "components/compactor:overflow_retries"
 
 // overflowFallbackPercent is the target, as a percentage of the current
@@ -47,6 +49,20 @@ type component struct {
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
 
 func (comp *component) Install(a *gantry.Agent) error {
+	// Register the overflow handler first: it is the registration most likely
+	// to conflict (an agent has only one), and failing here leaves nothing
+	// half-installed.
+	if err := a.OnContextOverflow(comp.onOverflow); err != nil {
+		return err
+	}
+	if err := a.UseNamed(gantry.PhaseStart, "components/compactor:reset_retries", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			delete(s.Meta, MetaOverflowRetries) // per-run count; Meta is carried by RunFrom
+			return next(ctx, s)
+		}
+	}); err != nil {
+		return err
+	}
 	if err := a.UseNamed(gantry.PhaseAssembleContext, "components/compactor:compact", func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			// Let inner context-assembly middleware populate s.Messages first,
@@ -69,7 +85,7 @@ func (comp *component) Install(a *gantry.Agent) error {
 	}); err != nil {
 		return err
 	}
-	return a.OnContextOverflow(comp.onOverflow)
+	return nil
 }
 
 // onOverflow is the agent's gantry.ContextOverflowHandler: it compacts with

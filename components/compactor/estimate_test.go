@@ -98,3 +98,15 @@ func TestSummarizingForceIgnoresSoftLimit(t *testing.T) {
 		t.Errorf("Compact = %+v, want head + summary + tail", got)
 	}
 }
+
+func TestEstimatePromptTokensZeroMessageAnchor(t *testing.T) {
+	// A measured request that sent no transcript messages (e.g. system only).
+	s := &gantry.State{
+		System:       "abcdefgh",
+		Messages:     []gantry.Message{{Role: gantry.RoleAssistant, Content: "reply"}},
+		ContextUsage: gantry.ContextUsage{PromptTokens: 300, MessageCount: 0},
+	}
+	if got := compactor.EstimatePromptTokens(s, fixedCounter(10)); got != 310 {
+		t.Errorf("EstimatePromptTokens = %d, want 310 (300 measured + reply)", got)
+	}
+}

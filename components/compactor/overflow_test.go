@@ -564,3 +564,37 @@ func TestOverflowRetryRerunsMiddlewareInstalledAfterCompactor(t *testing.T) {
 		t.Errorf("guard saw message counts %v, want [4 1] (re-checked after compaction)", checked)
 	}
 }
+
+func TestInstallFailsAtomicallyWhenOverflowHandlerTaken(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	preload(t, a, 4)
+	_ = a.OnContextOverflow(func(context.Context, *gantry.State, error) (bool, error) { return false, nil })
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(1), compactor.Budget{})); err == nil {
+		t.Fatal("With: want error when an overflow handler is already registered")
+	}
+	if _, err := a.Run(context.Background(), ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := len(mock.Requests()[0].Messages); got != 4 {
+		t.Errorf("LLM saw %d messages, want 4: failed install must not leave compaction middleware behind", got)
+	}
+}
+
+func TestOverflowRetryCountResetsEachRun(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	_ = a.With(compactor.New(compactor.NewSlidingWindow(10), compactor.Budget{}))
+	prior := gantry.NewState("hi")
+	prior.Messages = []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}, {Role: gantry.RoleAssistant, Content: "ok"}}
+	prior.Meta[compactor.MetaOverflowRetries] = 1
+	prior.Done = true
+
+	s, err := a.RunFrom(context.Background(), prior, "next")
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	if v, ok := s.Meta[compactor.MetaOverflowRetries]; ok {
+		t.Errorf("Meta[%s] = %v on a turn with no overflow, want absent", compactor.MetaOverflowRetries, v)
+	}
+}

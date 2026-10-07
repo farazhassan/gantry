@@ -49,8 +49,9 @@ type State struct {
 // PromptTokens is the provider-reported input size of the request that sent
 // System, Tools and Messages[:MessageCount]. The assistant reply that followed
 // is not included: providers count hidden reasoning in output tokens, so
-// later messages, the reply among them, are estimated. MessageCount == 0
-// means no valid measurement. Middleware that rewrites Messages other than by
+// later messages, the reply among them, are estimated. PromptTokens == 0
+// means no valid measurement; MessageCount may be 0 for a measured request
+// that sent no transcript messages. Middleware that rewrites Messages other than by
 // appending must reset it to the zero value. The anchor also assumes System
 // and Tools are unchanged since the measurement; components such as retriever
 // or memory may rebuild System per turn, so an anchor carried across turns is

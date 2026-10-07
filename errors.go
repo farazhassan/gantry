@@ -50,8 +50,8 @@ var (
 // the total window including output tokens. Consumers should leave a margin
 // rather than treat Limit as an exact prompt budget.
 type ContextLengthError struct {
-	Limit     int   // the model's maximum prompt tokens, if reported
-	Requested int   // the prompt tokens the request needed, if reported
+	Limit     int   // the provider-reported limit, if any (see above for what it covers)
+	Requested int   // the provider-reported size of the request, if any (may include output)
 	Err       error // the underlying provider error
 }
 
