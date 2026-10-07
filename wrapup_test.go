@@ -809,3 +809,47 @@ func TestIsWrapUpPrompt(t *testing.T) {
 		t.Error("IsWrapUpPrompt(plain message with same content) = true, want false")
 	}
 }
+
+func TestWrapUpResumedCheckpointRemovesNonTrailingPrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(
+		toolTurn("a"),
+		gantry.LLMResponse{Content: "first wrap", StopReason: gantry.StopReasonEnd},
+		gantry.LLMResponse{Content: "resumed wrap", StopReason: gantry.StopReasonEnd},
+	)
+	a := newCappedAgent(t, mock, 1)
+	ctx := context.Background()
+
+	st, err := a.Run(ctx, "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// A checkpoint taken mid-wrap-up after middleware appended past the
+	// prompt: JSON drops the marker, so the prompt comes back unmarked and
+	// not last.
+	st.Done = false
+	st.DoneReason = ""
+	st.Messages = append(st.Messages,
+		gantry.Message{Role: gantry.RoleUser, Content: gantry.MaxIterationsWrapUpPrompt},
+		gantry.Message{Role: gantry.RoleUser, Content: "late"},
+	)
+
+	final, err := a.Resume(ctx, st)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	reqs := mock.Requests()
+	count := 0
+	for _, m := range reqs[len(reqs)-1].Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("resumed wrap-up request has %d wrap-up prompts, want 1", count)
+	}
+	for _, m := range final.Messages {
+		if m.Content == gantry.MaxIterationsWrapUpPrompt {
+			t.Errorf("wrap-up prompt left in transcript: %+v", final.Messages)
+		}
+	}
+}

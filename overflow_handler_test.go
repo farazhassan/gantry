@@ -98,3 +98,50 @@ func TestOnContextOverflowRejectsNilAndSecondHandler(t *testing.T) {
 		t.Error("second handler: want error")
 	}
 }
+
+func cutOffToolResp() gantry.LLMResponse {
+	return gantry.LLMResponse{
+		ToolCalls:  []gantry.ToolCall{{ID: "t1", Name: "noop", Input: []byte(`{"q":`)}},
+		StopReason: gantry.StopReasonContextWindow,
+		Usage:      gantry.Usage{InputTokens: 90, OutputTokens: 10},
+	}
+}
+
+func TestContextWindowStopWithToolCallsIsOverflow(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Response: cutOffToolResp()}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	s, err := a.Run(context.Background(), "hi")
+	if !errors.Is(err, gantry.ErrContextLengthExceeded) {
+		t.Fatalf("Run err = %v, want ErrContextLengthExceeded", err)
+	}
+	if len(s.PendingToolCalls) != 0 || s.LastResponse != nil {
+		t.Errorf("cut-off tool call reached the loop: pending=%v last=%v", s.PendingToolCalls, s.LastResponse)
+	}
+	if s.Usage.InputTokens != 90 || s.Usage.OutputTokens != 10 {
+		t.Errorf("Usage = %+v, want the spent tokens recorded", s.Usage)
+	}
+}
+
+func TestContextWindowStopWithToolCallsRetriesViaHandler(t *testing.T) {
+	mock := eval.NewMockLLMClientFromScript([]eval.MockTurn{{Response: cutOffToolResp()}, {Response: okResp()}})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	_ = a.OnContextOverflow(func(context.Context, *gantry.State, error) (bool, error) { return true, nil })
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil || s.FinalOutput != "ok" {
+		t.Errorf("Run = %q, %v; want ok after one retry", s.FinalOutput, err)
+	}
+	for _, m := range s.Messages {
+		if len(m.ToolCalls) > 0 || m.Role == gantry.RoleTool {
+			t.Errorf("cut-off tool call reached the transcript: %+v", s.Messages)
+		}
+	}
+}
+
+func TestContextWindowStopWithoutToolCallsIsNormal(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "partial", StopReason: gantry.StopReasonContextWindow})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	s, err := a.Run(context.Background(), "hi")
+	if err != nil || s.FinalOutput != "partial" {
+		t.Errorf("Run = %q, %v; want partial, nil", s.FinalOutput, err)
+	}
+}

@@ -2,6 +2,7 @@ package gantry
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
 
@@ -38,6 +39,14 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 		}
 		genCtx, gen := startGeneration(ctx, req)
 		resp, err := invokeLLM(genCtx, client, state, req)
+		if err == nil && resp.StopReason == StopReasonContextWindow && len(resp.ToolCalls) > 0 {
+			// The window filled mid tool call, so its input may be cut off:
+			// never run it. Report an overflow instead, so a
+			// ContextOverflowHandler can shrink the prompt and retry. The
+			// tokens were still spent.
+			state.Usage = state.Usage.Add(resp.Usage)
+			err = &ContextLengthError{Err: errors.New("context window filled during a tool call")}
+		}
 		gen.end(resp, err)
 		if err != nil {
 			return err
