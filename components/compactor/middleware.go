@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/farazhassan/gantry"
 )
@@ -13,6 +14,12 @@ import (
 // cleared at PhaseStart, so it counts per Run, RunFrom or Resume call even
 // though RunFrom carries Meta across turns.
 const MetaOverflowRetries = "components/compactor:overflow_retries"
+
+// Middleware names this component registers.
+const (
+	compactName      = "components/compactor:compact"
+	resetRetriesName = "components/compactor:reset_retries"
+)
 
 // overflowFallbackPercent is the target, as a percentage of the current
 // message tokens, when neither the provider error nor State.ContextWindow
@@ -49,13 +56,23 @@ type component struct {
 func New(c Compactor, b Budget) gantry.Component { return &component{c: c, b: b} }
 
 func (comp *component) Install(a *gantry.Agent) error {
-	// Register the overflow handler first: it is the registration most likely
-	// to conflict (an agent has only one), and failing here leaves nothing
-	// half-installed.
+	// Install atomically: check both middleware names, then claim the single
+	// overflow-handler slot; only then register anything, so a failure
+	// leaves the agent untouched.
+	for _, mw := range []struct {
+		phase gantry.Phase
+		name  string
+	}{{gantry.PhaseStart, resetRetriesName}, {gantry.PhaseAssembleContext, compactName}} {
+		for _, n := range a.MiddlewareNames(mw.phase) {
+			if n == mw.name {
+				return fmt.Errorf("compactor: middleware %q already registered on phase %q", mw.name, mw.phase)
+			}
+		}
+	}
 	if err := a.OnContextOverflow(comp.onOverflow); err != nil {
 		return err
 	}
-	if err := a.UseNamed(gantry.PhaseStart, "components/compactor:reset_retries", func(next gantry.Handler) gantry.Handler {
+	if err := a.UseNamed(gantry.PhaseStart, resetRetriesName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			delete(s.Meta, MetaOverflowRetries) // per-run count; Meta is carried by RunFrom
 			return next(ctx, s)
@@ -63,7 +80,7 @@ func (comp *component) Install(a *gantry.Agent) error {
 	}); err != nil {
 		return err
 	}
-	if err := a.UseNamed(gantry.PhaseAssembleContext, "components/compactor:compact", func(next gantry.Handler) gantry.Handler {
+	if err := a.UseNamed(gantry.PhaseAssembleContext, compactName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			// Let inner context-assembly middleware populate s.Messages first,
 			// then compact the result.

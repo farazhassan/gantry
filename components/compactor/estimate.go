@@ -5,7 +5,7 @@ import "github.com/farazhassan/gantry"
 // EstimatePromptTokens returns the prompt size the next LLM call will send.
 //
 // When s.ContextUsage holds a valid anchor (PromptTokens > 0 and
-// MessageCount <= len(Messages); MessageCount may be 0 for a request that sent
+// 0 <= MessageCount <= len(Messages); MessageCount may be 0 for a request that sent
 // no transcript messages)
 // it returns the provider-measured PromptTokens plus b.Count for each message
 // after the measured request — Messages[MessageCount:], starting with the
@@ -15,7 +15,7 @@ import "github.com/farazhassan/gantry"
 // System, Tools (name, description, schema) and every message.
 func EstimatePromptTokens(s *gantry.State, b Budget) int {
 	cu := s.ContextUsage
-	if cu.PromptTokens > 0 && cu.MessageCount <= len(s.Messages) {
+	if cu.PromptTokens > 0 && cu.MessageCount >= 0 && cu.MessageCount <= len(s.Messages) {
 		total := cu.PromptTokens
 		for i := cu.MessageCount; i < len(s.Messages); i++ {
 			total += b.Count(s.Messages[i])

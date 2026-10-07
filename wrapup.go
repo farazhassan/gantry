@@ -46,10 +46,10 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 	// A state checkpointed mid-wrap-up still carries the prompt; drop it so a
 	// resumed pass doesn't send it twice.
 	removeTrailingWrapUpPrompt(state)
-	// promptIdx is where this pass injected the prompt, or -1 while there is
-	// nothing (left) to remove.
-	promptIdx := -1
-	defer func() { removeInjectedWrapUpPrompt(state, &promptIdx) }()
+	// inj records where this pass injected the prompt (idx -1 while there is
+	// nothing (left) to remove) and how many identical messages preceded it.
+	inj := wrapUpInjection{idx: -1}
+	defer func() { removeInjectedWrapUpPrompt(state, &inj) }()
 	ctx = withWrapUp(withToolChoice(ctx, &ToolChoice{Mode: ToolChoiceNone}))
 
 	prompted := false
@@ -65,7 +65,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		}
 		if ph == PhaseLLMCall && !prompted {
 			prompted = true
-			promptIdx = len(state.Messages)
+			inj = wrapUpInjection{idx: len(state.Messages), prior: countWrapUpText(state.Messages)}
 			state.Messages = append(state.Messages, Message{Role: RoleUser, Content: MaxIterationsWrapUpPrompt, wrapUp: true})
 		}
 		prev := state.LastResponse
@@ -75,7 +75,7 @@ func (a *Agent) wrapUp(ctx context.Context, tracer Tracer, state *State) error {
 		if ph == PhaseLLMCall {
 			// The model has consumed the prompt; drop it now so PostLLM
 			// middleware (e.g. a checkpointer) never sees or saves it.
-			removeInjectedWrapUpPrompt(state, &promptIdx)
+			removeInjectedWrapUpPrompt(state, &inj)
 			// Only a response produced by this pass is stripped: if
 			// middleware ended the pass without calling the LLM,
 			// LastResponse is still the capped turn's, whose tool calls
@@ -150,33 +150,66 @@ func removeTrailingWrapUpPrompt(state *State) {
 	}
 }
 
-// removeInjectedWrapUpPrompt removes the prompt this pass injected at index
-// *idx. It first removes the last message carrying the wrapUp marker, wherever
-// it now sits (middleware such as the compactor may have reordered or shrunk
-// the transcript, or appended after it). If no marked message remains —
-// middleware rebuilt the messages field-by-field and dropped the marker — it
-// falls back to the last RoleUser MaxIterationsWrapUpPrompt message at or
-// after *idx, never below it, so a genuine earlier message with identical
-// content is untouched. It then sets *idx to -1, so a later call (the deferred
-// cleanup) is a no-op.
-func removeInjectedWrapUpPrompt(state *State, idx *int) {
-	start := *idx
+// wrapUpInjection identifies the prompt a wrap-up pass injected: idx is where
+// it was appended (-1 once removed or never injected) and prior is how many
+// user messages with the prompt's text the transcript held just before.
+type wrapUpInjection struct {
+	idx, prior int
+}
+
+// removeInjectedWrapUpPrompt removes the prompt this pass injected. In order:
+//  1. the last message carrying the wrapUp marker, wherever it now sits
+//     (middleware such as the compactor may have reordered or shrunk the
+//     transcript, or appended after it);
+//  2. if middleware rebuilt messages field-by-field (dropping the marker), the
+//     last RoleUser MaxIterationsWrapUpPrompt message at or after the
+//     injection index;
+//  3. if middleware also trimmed earlier messages so the prompt moved below
+//     that index, the last such message — but only when there are more of
+//     them than before injection, so a genuine message with identical content
+//     is never removed in place of a prompt that was dropped.
+//
+// It then sets idx to -1, so a later call (the deferred cleanup) is a no-op.
+func removeInjectedWrapUpPrompt(state *State, inj *wrapUpInjection) {
+	start := inj.idx
 	if start < 0 {
 		return
 	}
-	*idx = -1
+	inj.idx = -1
+	remove := func(i int) {
+		state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
+		state.ContextUsage = ContextUsage{} // not an append: anchor invalid
+	}
 	for i := len(state.Messages) - 1; i >= 0; i-- {
 		if state.Messages[i].wrapUp {
-			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
-			state.ContextUsage = ContextUsage{} // not an append: anchor invalid
+			remove(i)
 			return
 		}
 	}
-	for i := len(state.Messages) - 1; i >= start; i-- {
-		if m := state.Messages[i]; m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt {
-			state.Messages = append(state.Messages[:i:i], state.Messages[i+1:]...)
-			state.ContextUsage = ContextUsage{}
-			return
+	last := -1
+	for i := len(state.Messages) - 1; i >= 0; i-- {
+		if isWrapUpText(state.Messages[i]) {
+			last = i
+			break
 		}
 	}
+	if last >= 0 && (last >= start || countWrapUpText(state.Messages) > inj.prior) {
+		remove(last)
+	}
+}
+
+// isWrapUpText reports whether m has the wrap-up prompt's role and text.
+func isWrapUpText(m Message) bool {
+	return m.Role == RoleUser && m.Content == MaxIterationsWrapUpPrompt
+}
+
+// countWrapUpText counts messages with the wrap-up prompt's role and text.
+func countWrapUpText(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		if isWrapUpText(m) {
+			n++
+		}
+	}
+	return n
 }

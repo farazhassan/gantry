@@ -598,3 +598,19 @@ func TestOverflowRetryCountResetsEachRun(t *testing.T) {
 		t.Errorf("Meta[%s] = %v on a turn with no overflow, want absent", compactor.MetaOverflowRetries, v)
 	}
 }
+
+func TestInstallPreflightsMiddlewareNames(t *testing.T) {
+	a, _ := gantry.NewAgent(gantry.WithLLM(eval.NewMockLLMClient()))
+	_ = a.UseNamed(gantry.PhaseStart, "components/compactor:reset_retries", func(next gantry.Handler) gantry.Handler { return next })
+	if err := a.With(compactor.New(compactor.NewSlidingWindow(1), compactor.Budget{})); err == nil {
+		t.Fatal("With: want error for a taken middleware name")
+	}
+	if err := a.OnContextOverflow(func(context.Context, *gantry.State, error) (bool, error) { return false, nil }); err != nil {
+		t.Errorf("overflow handler slot left occupied by the failed install: %v", err)
+	}
+	for _, n := range a.MiddlewareNames(gantry.PhaseAssembleContext) {
+		if n == "components/compactor:compact" {
+			t.Error("failed install left the compaction middleware registered")
+		}
+	}
+}

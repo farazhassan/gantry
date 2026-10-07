@@ -110,3 +110,13 @@ func TestEstimatePromptTokensZeroMessageAnchor(t *testing.T) {
 		t.Errorf("EstimatePromptTokens = %d, want 310 (300 measured + reply)", got)
 	}
 }
+
+func TestEstimatePromptTokensNegativeAnchorFallsBack(t *testing.T) {
+	s := &gantry.State{
+		Messages:     []gantry.Message{{Content: "a"}},
+		ContextUsage: gantry.ContextUsage{PromptTokens: 500, MessageCount: -1},
+	}
+	if got := compactor.EstimatePromptTokens(s, fixedCounter(10)); got != 10 {
+		t.Errorf("EstimatePromptTokens = %d, want 10 (full estimate)", got)
+	}
+}

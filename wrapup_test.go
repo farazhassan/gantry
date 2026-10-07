@@ -853,3 +853,24 @@ func TestWrapUpResumedCheckpointRemovesNonTrailingPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapUpRebuiltAndTrimmedMessagesStillRemovePrompt(t *testing.T) {
+	a := newCappedAgent(t, wrapUpMock(), 1)
+	useLLMCallPre(t, a, func(s *gantry.State) {
+		if n := len(s.Messages); n < 2 || !gantry.IsWrapUpPrompt(s.Messages[n-1]) {
+			return
+		}
+		// Trim the oldest message and rebuild the rest: the marker is lost and
+		// the prompt moves below its injection index.
+		out := make([]gantry.Message, 0, len(s.Messages)-1)
+		for _, m := range s.Messages[1:] {
+			out = append(out, gantry.Message{Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name})
+		}
+		s.Messages = out
+	})
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertNoWrapUpPrompt(t, state)
+}
