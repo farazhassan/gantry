@@ -49,7 +49,10 @@ type State struct {
 // PromptTokens covers System, Tools and Messages[:MessageCount] as sent, plus
 // the assistant reply that followed (its output tokens). MessageCount == 0
 // means no valid measurement. Middleware that rewrites Messages other than by
-// appending must reset it to the zero value.
+// appending must reset it to the zero value. The anchor also assumes System
+// and Tools are unchanged since the measurement; components such as retriever
+// or memory may rebuild System per turn, so an anchor carried across turns is
+// approximate.
 type ContextUsage struct {
 	PromptTokens int
 	MessageCount int
