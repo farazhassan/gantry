@@ -33,7 +33,7 @@ you need.
 | **critic** | Self-reviews the last response (pass / reject) | `critic.New(c)` | `NewLLM(client, rubric)` |
 | **guardrail** | Validates inputs (pre-LLM) and outputs (post-LLM) | `guardrail.New(g)` | `NewRegex(pattern, direction)` |
 | **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.New(l)` | `NewBudget(Limits{...})` |
-| **compactor** | Trims history before the LLM call; on a context-overflow error compacts once more (forced) and retries. `EstimatePromptTokens(state, budget)` gives the provider-measured prompt size plus an estimate for newer messages | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
+| **compactor** | Trims history before the LLM call; on a context-overflow error compacts once more (forced) and retries. `EstimatePromptTokens(state, budget)` gives the provider-measured prompt size plus an estimate for newer messages | `compactor.New(c, budget)` | `NewPolicy(p)` with steps `ClearToolResults(keepResults)` · `TruncateMessages(maxTokens)` · `SummarizeTurns(client, keepTurns)` · `DropTurns(keepTurns, pinFirst)`; `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
 | **checkpointer** | Saves & restores state by id for resume / replay; optionally saves mid-run too (see `extraPhases`) | `checkpointer.New(c, id, extraPhases...)` | — |
 | **checkpointer/mem** | `checkpointer.Checkpointer` and `checkpointer.Lease` backed by in-memory stores (tests, examples) | `mem.New()` · `mem.NewLease()` | `NewStore()` |

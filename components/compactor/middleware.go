@@ -48,7 +48,7 @@ type component struct {
 // compared by content, not just length), the original error is returned
 // without a retry. The built-in SlidingWindow and HeadTail ignore Budget, so
 // the retry only helps when the strategy shrinks further under Force
-// (Summarizing, or a custom compactor).
+// (NewPolicy, Summarizing, or a custom compactor).
 //
 // The max-iterations wrap-up prompt (gantry.WrapUpPromptIndex) is never passed to
 // the Compactor: wherever it sits, the Compactor sees only the messages before

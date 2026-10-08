@@ -60,6 +60,13 @@ func TestDropTurnsPinFirst(t *testing.T) {
 	equalContents(t, got, "rules", "q1", "r1", "q4", "r4")
 }
 
+func TestDropTurnsPinFirstStopsAtMaxTokens(t *testing.T) {
+	b := lenBudget
+	b.MaxTokens = 17
+	got, _ := compactor.DropTurns(1, true).Compact(context.Background(), fourTurns(), b)
+	equalContents(t, got, "rules", "q1", "r1", "q3", "r3", "q4", "r4")
+}
+
 func TestDropTurnsKeepsSummary(t *testing.T) {
 	msgs := []gantry.Message{user(summaryPrefix + "s"), user("q1"), assistant("r1"), user("q2")}
 	got, _ := compactor.DropTurns(1, false).Compact(context.Background(), msgs, lenBudget)

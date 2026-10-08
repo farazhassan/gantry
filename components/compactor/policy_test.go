@@ -142,6 +142,17 @@ func TestPolicyCalibratesCounter(t *testing.T) {
 	}
 }
 
+func TestPolicyCalibrationLowerClamp(t *testing.T) {
+	f := &fakeStep{}
+	b := policyBudget(100, 100) // 0.1× the 1000-token raw estimate
+	b.Force, b.MaxTokens = true, 10
+	_, _ = compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}}).
+		Compact(context.Background(), userTurns(10, 100), b)
+	if got := f.budgets[0].Count(gantry.Message{Content: "abc"}); got != 2 {
+		t.Errorf("calibrated Count = %d, want 2 (3 × 0.5 rounded up)", got)
+	}
+}
+
 func TestNewPolicyValidates(t *testing.T) {
 	step := []compactor.Compactor{compactor.DropTurns(0, false)}
 	for name, p := range map[string]compactor.Policy{

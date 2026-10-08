@@ -56,12 +56,16 @@ type policy struct{ p Policy }
 // prompt size), scales Budget.Count by the measured/estimated ratio (clamped
 // to [0.5, 2]) so steps work in provider tokens, and passes each step
 // MaxTokens = target minus Budget.FixedTokens (under Force, at most
-// Budget.MaxTokens). If the steps cannot reach the target the best result is
-// returned without error. Tool results whose call was removed by a step are
-// dropped, as are tool calls left without a result (and an assistant message
-// left with neither calls nor content). It panics unless 0 < Target < Trigger <= 1 (after defaults), the
-// token values are both unset or 0 < TargetTokens < TriggerTokens, and Steps
-// is non-empty with no nil step.
+// Budget.MaxTokens). The message target floors to 1: if FixedTokens (System
+// and Tools) is at or above the target, every triggered pass compacts as far
+// as the steps allow. Under Force with neither a target nor Budget.MaxTokens,
+// steps run with MaxTokens 0, so each compacts everything it may. If the
+// steps cannot reach the target the best result is returned without error.
+// Tool results whose call was removed by a step are dropped, as are tool
+// calls left without a result (and an assistant message left with neither
+// calls nor content). It panics unless 0 < Target < Trigger <= 1 (after
+// defaults), the token values are both unset or 0 < TargetTokens <
+// TriggerTokens, and Steps is non-empty with no nil step.
 func NewPolicy(p Policy) Compactor {
 	if p.Trigger == 0 {
 		p.Trigger = defaultTrigger
