@@ -262,3 +262,15 @@ func TestPolicyCalibratesFixedTokens(t *testing.T) {
 		}
 	})
 }
+
+func TestNestedPolicySeesPromptAndFixedTokens(t *testing.T) {
+	f := &fakeStep{}
+	inner := compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}})
+	b := policyBudget(1000, 900)
+	b.FixedTokens = 200 // 200 fixed + 700 messages = 900 ≥ 800 trigger
+	_, _ = compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{inner}}).
+		Compact(context.Background(), userTurns(7, 100), b)
+	if len(f.budgets) != 1 || f.budgets[0].MaxTokens != 300 {
+		t.Errorf("inner step budgets = %+v, want one call with MaxTokens 300", f.budgets)
+	}
+}

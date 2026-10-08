@@ -118,9 +118,10 @@ func (pc *policy) Compact(ctx context.Context, msgs []gantry.Message, b Budget) 
 	// Targets are in provider tokens but FixedTokens is the raw estimate, so
 	// calibrate it before subtracting. A forced MaxTokens (set by the overflow
 	// handler) is already a calibrated messages budget.
+	fixed := calibrate(b.FixedTokens, ratio)
 	msgTarget := 0
 	if target > 0 {
-		msgTarget = target - calibrate(b.FixedTokens, ratio)
+		msgTarget = target - fixed
 	}
 	if b.Force && b.MaxTokens > 0 && (target == 0 || b.MaxTokens < msgTarget) {
 		msgTarget = b.MaxTokens
@@ -136,7 +137,11 @@ func (pc *policy) Compact(ctx context.Context, msgs []gantry.Message, b Budget) 
 		if msgTarget > 0 && before <= msgTarget {
 			break
 		}
-		next, err := step.Compact(ctx, cur, Budget{MaxTokens: msgTarget, Force: b.Force, Counter: counter, ContextWindow: b.ContextWindow})
+		next, err := step.Compact(ctx, cur, Budget{
+			MaxTokens: msgTarget, Force: b.Force, Counter: counter, ContextWindow: b.ContextWindow,
+			// In provider tokens, so a nested Policy sees the same request.
+			FixedTokens: fixed, PromptTokens: fixed + before,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("compactor: policy step %d (%s): %w", i, stepName(step), err)
 		}
