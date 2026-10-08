@@ -53,6 +53,25 @@ func TestTruncateMessagesSkipsSummaries(t *testing.T) {
 	}
 }
 
+func TestTruncateMessagesLeavesToolCallInputAlone(t *testing.T) {
+	big := gantry.Message{Role: gantry.RoleAssistant, Content: "I'll write the file now.",
+		ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "write", Input: []byte(xs(100_000))}}}
+	msgs := []gantry.Message{user("q"), big, result("c1", "ok"), user("q2")}
+	got, _ := compactor.TruncateMessages(8000).Compact(context.Background(), msgs, compactor.Budget{})
+	if got[1].Content != big.Content || len(got[1].ToolCalls[0].Input) != 100_000 {
+		t.Errorf("message changed: content %q, input %d bytes", got[1].Content, len(got[1].ToolCalls[0].Input))
+	}
+}
+
+func TestTruncateMessagesShrinksSlightOverflow(t *testing.T) {
+	msgs := []gantry.Message{user("q"), call("c1"), result("c1", xs(32000))}
+	var b compactor.Budget
+	got, _ := compactor.TruncateMessages(8000).Compact(context.Background(), msgs, b)
+	if before, after := b.Count(msgs[2]), b.Count(got[2]); after >= before {
+		t.Errorf("Count %d → %d, want a strict decrease", before, after)
+	}
+}
+
 func TestTruncateMessagesPanicsOnNonPositiveMax(t *testing.T) {
 	defer func() {
 		if recover() == nil {
