@@ -41,8 +41,10 @@ func WithSummaryMaxTokens(n int) SummarizeOption {
 // SummarizeTurns returns a step that replaces the fewest oldest turns (all
 // but the newest keepTurns, never the preamble) needed to fit
 // Budget.MaxTokens with one LLM-written RoleUser summary placed after the
-// preamble; with MaxTokens 0 every older turn is summarized. An existing
-// summary is fed into the new one and replaced, so there is at most one. Each
+// preamble; with MaxTokens 0 every older turn is summarized, and if the
+// messages already fit MaxTokens the LLM is not called. Any existing summary
+// among the older turns is fed into the new one and replaced, so there is at
+// most one; with no other older turn to add, nothing changes. Each
 // message is capped at 2,000 bytes in the summarizer prompt. An LLM error is
 // returned; an empty summary leaves the input unchanged. It panics if c is nil
 // or keepTurns < 0.
@@ -69,22 +71,31 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		return cloneMessages(msgs), nil
 	}
 	total := totalTokens(msgs, b)
-	removed, n := 0, 0
-	if isSummary(msgs[turns[0].start]) {
-		// A prior summary is always rolled into the new one.
-		removed += totalTokens(msgs[turns[0].start:turns[0].end], b)
-		n = 1
-	}
-	if n >= older {
+	if b.MaxTokens > 0 && total <= b.MaxTokens {
 		return cloneMessages(msgs), nil
 	}
+	// A prior summary among the candidates is always rolled into the new one,
+	// so the selection extends at least past the last one.
+	lastSummary := -1
+	for i := range older {
+		if isSummary(msgs[turns[i].start]) {
+			lastSummary = i
+		}
+	}
+	removed, n, plain := 0, 0, 0
 	for n < older {
 		t := turns[n]
 		removed += totalTokens(msgs[t.start:t.end], b)
+		if !isSummary(msgs[t.start]) {
+			plain++
+		}
 		n++
-		if b.MaxTokens > 0 && total-removed+s.maxTokens <= b.MaxTokens {
+		if n > lastSummary && plain > 0 && b.MaxTokens > 0 && total-removed+s.maxTokens <= b.MaxTokens {
 			break
 		}
+	}
+	if plain == 0 {
+		return cloneMessages(msgs), nil
 	}
 	selected := msgs[turns[0].start:turns[n-1].end]
 

@@ -63,6 +63,48 @@ func TestSummarizeTurnsRollsPriorSummary(t *testing.T) {
 	}
 }
 
+func TestSummarizeTurnsSkipsLLMWhenAlreadyFits(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user("q1"), assistant("r1"), user("q2"), assistant("r2"), user("q3")}
+	b := lenBudget
+	b.MaxTokens = 100000
+	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, b)
+	equalContents(t, got, "q1", "r1", "q2", "r2", "q3")
+	if n := len(mock.Requests()); n != 0 {
+		t.Errorf("LLM calls = %d, want 0", n)
+	}
+}
+
+func TestSummarizeTurnsRollsPriorSummaryAfterOtherTurns(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("NEW"))
+	msgs := []gantry.Message{user(xs(100)), user(summaryPrefix + "OLD"), user("q1"), assistant("a"), user("q2")}
+	b := lenBudget
+	b.MaxTokens = 60 // the first turn alone would fit: 143 − 100 + 10
+	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(10)).Compact(context.Background(), msgs, b)
+	summaries := 0
+	for _, m := range got {
+		if strings.HasPrefix(m.Content, summaryPrefix) {
+			summaries++
+		}
+	}
+	if summaries != 1 {
+		t.Errorf("got %q, want exactly one summary", contents(got))
+	}
+	if !strings.Contains(mock.Requests()[0].Messages[0].Content, "OLD") {
+		t.Error("prior summary not passed to the summarizer")
+	}
+}
+
+func TestSummarizeTurnsOnlySummaryCandidateSkipsLLM(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("NEW"))
+	msgs := []gantry.Message{user(summaryPrefix + "OLD"), user("q2"), assistant("r2")}
+	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	equalContents(t, got, summaryPrefix+"OLD", "q2", "r2")
+	if n := len(mock.Requests()); n != 0 {
+		t.Errorf("LLM calls = %d, want 0", n)
+	}
+}
+
 func TestSummarizeTurnsCapsEachMessageInPrompt(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("S"))
 	msgs := []gantry.Message{user(xs(5000)), assistant("r1"), user("q2")}
