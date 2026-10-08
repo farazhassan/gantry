@@ -119,24 +119,26 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	return append(out, rest...), nil
 }
 
-// summaryPrompt renders the messages to summarize, each capped, with tool
-// calls as name(input preview).
+// summaryPrompt renders the messages to summarize, with tool calls as
+// name(input preview). Each rendered message, content and call previews
+// together, is capped at summaryMessageCap bytes.
 func summaryPrompt(msgs []gantry.Message) string {
 	var sb strings.Builder
 	sb.WriteString(summaryInstruction)
 	for _, m := range msgs {
+		var line strings.Builder
 		if isSummary(m) {
-			sb.WriteString("previous summary: ")
-			sb.WriteString(capBytes(strings.TrimPrefix(m.Content, summaryPrefix), summaryMessageCap))
-			sb.WriteString("\n")
-			continue
+			line.WriteString("previous summary: ")
+			line.WriteString(strings.TrimPrefix(m.Content, summaryPrefix))
+		} else {
+			line.WriteString(string(m.Role))
+			line.WriteString(": ")
+			line.WriteString(m.Content)
+			for _, tc := range m.ToolCalls {
+				fmt.Fprintf(&line, " [call %s(%s)]", tc.Name, capBytes(string(tc.Input), summaryInputPreviewCap))
+			}
 		}
-		sb.WriteString(string(m.Role))
-		sb.WriteString(": ")
-		sb.WriteString(capBytes(m.Content, summaryMessageCap))
-		for _, tc := range m.ToolCalls {
-			fmt.Fprintf(&sb, " [call %s(%s)]", tc.Name, capBytes(string(tc.Input), summaryInputPreviewCap))
-		}
+		sb.WriteString(capBytes(line.String(), summaryMessageCap))
 		sb.WriteString("\n")
 	}
 	return sb.String()

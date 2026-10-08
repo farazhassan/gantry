@@ -3,6 +3,7 @@ package compactor_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -110,7 +111,8 @@ func TestSummarizeTurnsCapsEachMessageInPrompt(t *testing.T) {
 	msgs := []gantry.Message{user(xs(5000)), assistant("r1"), user("q2")}
 	_, _ = compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
 	p := mock.Requests()[0].Messages[0].Content
-	if strings.Contains(p, xs(2001)) || !strings.Contains(p, xs(2000)) {
+	// The rendered line "user: " + content is capped at 2,000 bytes.
+	if !strings.Contains(p, "user: "+xs(2000-len("user: "))+"…") || strings.Contains(p, xs(2000-len("user: ")+1)) {
 		t.Errorf("prompt not capped at 2000 bytes per message (len %d)", len(p))
 	}
 }
@@ -180,4 +182,18 @@ func TestSummarizeTurnsReservesSummaryPrefix(t *testing.T) {
 	b.MaxTokens = 220 // one turn would leave 404 − 200 + 10 + 34 = 248
 	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(10)).Compact(context.Background(), msgs, b)
 	equalContents(t, got, summaryPrefix+"S", "q3", "r3")
+}
+
+func TestSummarizeTurnsCapsWholeRenderedMessage(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	many := gantry.Message{Role: gantry.RoleAssistant}
+	for i := range 50 {
+		many.ToolCalls = append(many.ToolCalls, gantry.ToolCall{ID: fmt.Sprint(i), Name: "t", Input: []byte(`"` + xs(300) + `"`)})
+	}
+	msgs := []gantry.Message{user("q1"), many, user("q2")}
+	_, _ = compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	p := mock.Requests()[0].Messages[0].Content
+	if len(p) > 2*2000+500 { // two messages, each capped at 2,000 bytes, plus the instruction
+		t.Errorf("summarizer prompt is %d bytes; tool-call previews are not capped per message", len(p))
+	}
 }
