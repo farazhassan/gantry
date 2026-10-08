@@ -118,7 +118,7 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		lo = lastSummary + 2
 	}
 	for n > lo {
-		if _, complete := summaryPrompt(msgs[turns[0].start:turns[n-1].end]); complete {
+		if prompt, complete := summaryPrompt(msgs[turns[0].start:turns[n-1].end]); s.fitsWindow(prompt, complete, b) {
 			break
 		}
 		n--
@@ -127,8 +127,8 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	}
 	selected := msgs[turns[0].start:turns[n-1].end]
 	prompt, complete := summaryPrompt(selected)
-	if !complete {
-		// Even the smallest selection does not fit the summarizer prompt;
+	if !s.fitsWindow(prompt, complete, b) {
+		// Even the smallest selection does not fit the summarizer request;
 		// replacing it would lose unread messages, so leave it to a later step.
 		return cloneMessages(msgs), nil
 	}
@@ -197,4 +197,16 @@ func summaryPrompt(msgs []gantry.Message) (prompt string, complete bool) {
 		sb.WriteString(rendered)
 	}
 	return sb.String(), true
+}
+
+// fitsWindow reports whether a summarizer request with prompt (complete
+// reports whether every selected message was rendered) fits: the prompt cap
+// was not hit and, when Budget.ContextWindow is known, the prompt plus the
+// maximum summary length fit the window. It assumes the summarizer's window
+// is at least the agent's.
+func (s *summarizeTurns) fitsWindow(prompt string, complete bool, b Budget) bool {
+	if !complete {
+		return false
+	}
+	return b.ContextWindow <= 0 || b.Count(gantry.Message{Role: gantry.RoleUser, Content: prompt})+s.maxTokens <= b.ContextWindow
 }

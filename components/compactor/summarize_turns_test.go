@@ -267,3 +267,32 @@ func TestSummarizeTurnsLeavesTurnTooLargeForPrompt(t *testing.T) {
 		t.Errorf("got %d msgs and %d LLM calls; want input unchanged and no call", len(got), len(mock.Requests()))
 	}
 }
+
+func TestSummarizeTurnsFitsRequestInContextWindow(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	var msgs []gantry.Message
+	for range 5 {
+		msgs = append(msgs, user(xs(100)), assistant(xs(100)))
+	}
+	msgs = append(msgs, user("q"))
+	b := lenBudget
+	b.ContextWindow = 1000
+	_, _ = compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(100)).Compact(context.Background(), msgs, b)
+	if len(mock.Requests()) != 1 {
+		t.Fatalf("LLM calls = %d, want 1", len(mock.Requests()))
+	}
+	if p := mock.Requests()[0].Messages[0].Content; len(p)+100 > 1000 {
+		t.Errorf("summarizer request = %d prompt + 100 output tokens, over the 1000-token window", len(p))
+	}
+}
+
+func TestSummarizeTurnsSkipsWhenRequestCannotFitWindow(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user(xs(100)), assistant(xs(100)), user("q")}
+	b := lenBudget
+	b.ContextWindow = 150 // the 100-token summary plus any prompt cannot fit
+	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(100)).Compact(context.Background(), msgs, b)
+	if len(got) != 3 || len(mock.Requests()) != 0 {
+		t.Errorf("got %d msgs and %d LLM calls; want input unchanged and no call", len(got), len(mock.Requests()))
+	}
+}
