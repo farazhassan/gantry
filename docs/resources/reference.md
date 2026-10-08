@@ -67,6 +67,27 @@ built-in backend; `sqlitevec` is a durable one. Verify a backend with
 - `gantry.ErrContextLengthExceeded` — the provider rejected the prompt as longer than the model's context window. Adapters return a `*gantry.ContextLengthError` (with `Limit`/`Requested` when the provider reports them) that matches it via `errors.Is`. The compactor component recovers by compacting and retrying once.
 - `a.OnContextOverflow(h)` — registers the agent's single `ContextOverflowHandler`, which the compactor component installs. On an overflow error it may shrink the state and ask for one retry; the core loop then re-runs the whole `PhaseLLMCall` middleware chain, so guardrails and the limiter check the shrunk input. A `StopReasonContextWindow` response that contains tool calls (the window filled mid tool call) is treated as an overflow, so the possibly cut-off calls never run.
 
+### Compaction policies
+
+`compactor.NewPolicy` compacts only when it is needed, using the provider's numbers:
+
+```go
+a.With(compactor.New(compactor.NewPolicy(compactor.Policy{
+	// Trigger: 0.8, Target: 0.5 are the defaults (fractions of State.ContextWindow).
+	Steps: []compactor.Compactor{
+		compactor.ClearToolResults(3),     // old tool output → placeholder
+		compactor.TruncateMessages(8000),  // cap any single huge message
+		compactor.SummarizeTurns(llm, 4),  // oldest turns → one rolling summary
+		compactor.DropTurns(2, true),      // last resort; keeps the first turn
+	},
+}), compactor.Budget{}))
+```
+
+- **Trigger and target.** Nothing changes until the prompt (`State.ContextUsage` plus an estimate of newer messages) reaches `Trigger × ContextWindow`; then steps run in order until the messages fit `Target × ContextWindow` minus System and Tools. The gap means compaction runs rarely, so the provider's prompt cache keeps its prefix in between. Without a known window, `TriggerTokens`/`TargetTokens` apply; with neither, the policy compacts only when the provider rejects a prompt (`ErrContextLengthExceeded`), toward the reported limit.
+- **Calibration.** The bytes/4 estimate is scaled by the ratio of measured to estimated prompt tokens (clamped to 0.5–2×), so steps cut in provider tokens.
+- **Turn-aware steps.** A turn is a user message plus the assistant and tool messages after it. Steps remove whole turns or rewrite message content, so a tool call is never separated from its result; any `Compactor` can be a step, and tool results orphaned by one are dropped.
+- **Report.** `State.Meta[compactor.MetaLastCompaction]` holds a `*compactor.Report` (before/after/target tokens, forced, and each step that ran) for the latest compaction.
+
 ### Putting it together
 
 `examples/e2e` wires the core components onto a single agent and runs a scripted

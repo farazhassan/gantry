@@ -2,6 +2,13 @@
 // implementations for trimming/summarizing conversation history before
 // the LLM call.
 //
+// NewPolicy is the recommended Compactor: it compacts only once the
+// provider-measured prompt reaches a fraction of the context window
+// (Policy.Trigger) and then runs a ladder of turn-aware steps —
+// ClearToolResults, TruncateMessages, SummarizeTurns, DropTurns, or any
+// Compactor — until it is back under Policy.Target. SlidingWindow, HeadTail
+// and Summarizing are simple count-based strategies.
+//
 // The New middleware also recovers from context overflow: when the LLM call
 // fails with gantry.ErrContextLengthExceeded it compacts once with
 // Budget.Force and retries the call exactly once.
