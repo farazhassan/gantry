@@ -35,7 +35,8 @@ type buildConfig struct {
 	MaxIterations int
 	MaxTokens     int
 	// KeepTurns is how many of the newest turns the summarize and drop steps
-	// keep; tool-result clearing and truncation may still shorten them.
+	// keep (the drop step also pins the first turn); tool-result clearing and
+	// truncation may still shorten them.
 	KeepTurns int
 }
 

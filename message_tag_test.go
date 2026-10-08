@@ -16,9 +16,14 @@ func TestMessageTagIsPrivate(t *testing.T) {
 	if gantry.Tag(copied) != "t" {
 		t.Error("tag lost on copy")
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var back gantry.Message
-	_ = json.Unmarshal(b, &back)
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
 	if gantry.Tag(back) != "" {
 		t.Errorf("tag survived JSON: %s", b)
 	}
