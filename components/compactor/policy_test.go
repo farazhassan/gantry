@@ -235,3 +235,29 @@ func TestPolicyRepairKeepsAnsweredCallsOfPartialMessage(t *testing.T) {
 		t.Errorf("input ToolCalls mutated: %+v", msgs[1].ToolCalls)
 	}
 }
+
+func TestPolicyCalibratesFixedTokens(t *testing.T) {
+	// raw = 100 fixed + 400 messages = 500; measured 1000 → ratio 2, so the
+	// fixed part is 200 provider tokens.
+	t.Run("target", func(t *testing.T) {
+		f := &fakeStep{}
+		b := policyBudget(1000, 1000)
+		b.FixedTokens = 100
+		_, _ = compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}}).
+			Compact(context.Background(), userTurns(4, 100), b)
+		if len(f.budgets) != 1 || f.budgets[0].MaxTokens != 300 {
+			t.Errorf("step budgets = %+v, want MaxTokens 300 (500 − 200)", f.budgets)
+		}
+	})
+	t.Run("forced", func(t *testing.T) {
+		f := &fakeStep{}
+		b := policyBudget(0, 1000)
+		b.FixedTokens = 100
+		b.Force, b.MaxTokens = true, 400 // limit 500 − 100 uncalibrated fixed
+		_, _ = compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}}).
+			Compact(context.Background(), userTurns(4, 100), b)
+		if len(f.budgets) != 1 || f.budgets[0].MaxTokens != 300 {
+			t.Errorf("step budgets = %+v, want MaxTokens 300 (500 − 200)", f.budgets)
+		}
+	})
+}

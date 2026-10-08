@@ -121,12 +121,19 @@ func (pc *policy) Compact(ctx context.Context, msgs []gantry.Message, b Budget) 
 	counter := func(m gantry.Message) int { return int(math.Ceil(float64(b.Count(m)) * ratio)) }
 	est := Budget{Counter: counter}
 
+	// Targets are in provider tokens, but FixedTokens (and the overflow
+	// handler's MaxTokens, which already has the uncalibrated FixedTokens taken
+	// out) use the raw estimate: calibrate the fixed part before subtracting.
+	fixed := int(math.Ceil(float64(b.FixedTokens) * ratio))
 	msgTarget := 0
 	if target > 0 {
-		msgTarget = target - b.FixedTokens
+		msgTarget = target - fixed
 	}
-	if b.Force && b.MaxTokens > 0 && (target == 0 || b.MaxTokens < msgTarget) {
-		msgTarget = b.MaxTokens
+	if b.Force && b.MaxTokens > 0 {
+		forced := b.MaxTokens - (fixed - b.FixedTokens)
+		if target == 0 || forced < msgTarget {
+			msgTarget = forced
+		}
 	}
 	if target > 0 || (b.Force && b.MaxTokens > 0) {
 		msgTarget = max(msgTarget, 1)
