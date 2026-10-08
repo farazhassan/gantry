@@ -75,7 +75,7 @@ built-in backend; `sqlitevec` is a durable one. Verify a backend with
 a.With(compactor.New(compactor.NewPolicy(compactor.Policy{
 	// Trigger: 0.8, Target: 0.5 are the defaults (fractions of State.ContextWindow).
 	Steps: []compactor.Compactor{
-		compactor.ClearToolResults(3),     // old tool output → placeholder
+		compactor.ClearToolResults(5),     // old tool output beyond the newest 5 results → placeholder
 		compactor.TruncateMessages(8000),  // cap any single huge message
 		compactor.SummarizeTurns(llm, 4),  // oldest turns → one rolling summary
 		compactor.DropTurns(2, true),      // last resort; keeps the first turn

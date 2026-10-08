@@ -30,7 +30,7 @@ func TestPolicyCompactsProactivelyAtTrigger(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("ok"))
 	a, _ := gantry.NewAgent(gantry.WithLLM(mock), gantry.WithContextWindow(1000))
 	seed(t, a, []gantry.Message{user("q1"), call("c1"), result("c1", xs(900)), assistant("done1"), user("q2")}) // 909 ≥ 800
-	p := compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{compactor.ClearToolResults(1)}})
+	p := compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{compactor.ClearToolResults(0)}})
 	_ = a.With(compactor.New(p, compactor.Budget{Counter: lenCount}))
 
 	s, err := a.Run(context.Background(), "")

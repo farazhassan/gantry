@@ -92,7 +92,7 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	// rejects a prompt as too long.
 	if err := agent.With(compactor.New(
 		compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{
-			compactor.ClearToolResults(cfg.KeepTurns),
+			compactor.ClearToolResults(5),
 			compactor.TruncateMessages(8000),
 			compactor.SummarizeTurns(cfg.LLM, cfg.KeepTurns),
 			compactor.DropTurns(cfg.KeepTurns, true),

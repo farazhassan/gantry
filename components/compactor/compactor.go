@@ -7,7 +7,14 @@
 // (Policy.Trigger) and then runs a ladder of turn-aware steps —
 // ClearToolResults, TruncateMessages, SummarizeTurns, DropTurns, or any
 // Compactor — until it is back under Policy.Target. SlidingWindow, HeadTail
-// and Summarizing are simple count-based strategies.
+// and Summarizing are simple count-based strategies. A recommended ladder:
+//
+//	compactor.New(compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{
+//		compactor.ClearToolResults(5),    // old tool output beyond the newest 5 results → placeholder
+//		compactor.TruncateMessages(8000), // cap any single huge message
+//		compactor.SummarizeTurns(llm, 4), // oldest turns → one rolling summary
+//		compactor.DropTurns(2, true),     // last resort; keeps the first turn
+//	}}), compactor.Budget{})
 //
 // The New middleware also recovers from context overflow: when the LLM call
 // fails with gantry.ErrContextLengthExceeded it compacts once with
