@@ -1,6 +1,10 @@
 package compactor
 
-import "github.com/farazhassan/gantry"
+import (
+	"math"
+
+	"github.com/farazhassan/gantry"
+)
 
 // EstimatePromptTokens returns the prompt size the next LLM call will send.
 //
@@ -37,4 +41,39 @@ func estimateFixedTokens(s *gantry.State) int {
 		total += bytesToTokens(len(t.Name) + len(t.Description) + len(t.Schema))
 	}
 	return total
+}
+
+// Calibration bounds: the measured/estimated ratio is clamped so one bad
+// measurement cannot distort targets wildly.
+const (
+	minCalibration = 0.5
+	maxCalibration = 2.0
+)
+
+// calibration returns how many provider tokens one estimated token is worth:
+// the measured (or estimated) prompt size over its raw estimate, clamped to
+// [minCalibration, maxCalibration]; 1 when either is unknown.
+func calibration(prompt, raw int) float64 {
+	if prompt <= 0 || raw <= 0 {
+		return 1
+	}
+	return min(max(float64(prompt)/float64(raw), minCalibration), maxCalibration)
+}
+
+// calibrate converts n estimated tokens to provider tokens, rounding up.
+func calibrate(n int, ratio float64) int { return int(math.Ceil(float64(n) * ratio)) }
+
+// calibratedPromptTokens is EstimatePromptTokens in provider tokens
+// throughout: messages after the measured anchor are scaled by the anchor's
+// measured/estimated ratio instead of counted raw, so a large reply or tool
+// result appended since the measurement is not undercounted. Without a valid
+// anchor it is the raw estimate.
+func calibratedPromptTokens(s *gantry.State, b Budget) int {
+	cu := s.ContextUsage
+	if cu.PromptTokens <= 0 || cu.MessageCount < 0 || cu.MessageCount > len(s.Messages) {
+		return EstimatePromptTokens(s, b)
+	}
+	anchored := estimateFixedTokens(s) + totalTokens(s.Messages[:cu.MessageCount], b)
+	ratio := calibration(cu.PromptTokens, anchored)
+	return cu.PromptTokens + calibrate(totalTokens(s.Messages[cu.MessageCount:], b), ratio)
 }

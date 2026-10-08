@@ -48,7 +48,7 @@ type component struct {
 // compared by content, not just length), the original error is returned
 // without a retry. The built-in SlidingWindow and HeadTail ignore Budget, so
 // the retry only helps when the strategy shrinks further under Force
-// (Summarizing, or a custom compactor).
+// (NewPolicy, Summarizing, or a custom compactor).
 //
 // The max-iterations wrap-up prompt (gantry.WrapUpPromptIndex) is never passed to
 // the Compactor: wherever it sits, the Compactor sees only the messages before
@@ -88,11 +88,12 @@ func (comp *component) Install(a *gantry.Agent) error {
 				return err
 			}
 			before := s.Messages // Compact must not alias its input
-			compacted, err := comp.compact(ctx, s.Messages, comp.b)
+			compacted, rep, err := comp.compact(ctx, s, comp.b)
 			if err != nil {
 				return err
 			}
 			s.Messages = compacted
+			recordReport(s, rep)
 			if !sameMessages(before, compacted) {
 				// The measured anchor no longer describes Messages.
 				s.ContextUsage = gantry.ContextUsage{}
@@ -113,10 +114,11 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 	b := comp.b
 	b.Force = true
 	b.MaxTokens = comp.overflowTarget(s, err)
-	compacted, cerr := comp.compact(ctx, s.Messages, b)
+	compacted, rep, cerr := comp.compact(ctx, s, b)
 	if cerr != nil {
 		return false, cerr
 	}
+	recordReport(s, rep)
 	if sameMessages(s.Messages, compacted) {
 		return false, nil
 	}
@@ -130,40 +132,80 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 	return true, nil
 }
 
-// compact runs the Compactor over msgs. On the max-iterations wrap-up turn the
-// injected wrap-up prompt (gantry.WrapUpPromptIndex) is held out wherever it sits,
-// together with anything appended after it, so the Compactor never sees,
-// rewrites, or drops it; that suffix is re-appended unchanged to the result,
-// and its estimated tokens are taken out of a non-zero Budget.MaxTokens first.
-// Change detection compares like with like, because the held-out suffix is
-// identical on both sides.
-func (comp *component) compact(ctx context.Context, msgs []gantry.Message, b Budget) ([]gantry.Message, error) {
+// compact runs the Compactor over s.Messages. It first fills b's
+// ContextWindow, PromptTokens and FixedTokens from s. On the max-iterations
+// wrap-up turn the injected wrap-up prompt (gantry.WrapUpPromptIndex) is held
+// out wherever it sits, together with anything appended after it, so the
+// Compactor never sees, rewrites, or drops it; that suffix is re-appended
+// unchanged to the result, its estimated tokens are added to FixedTokens and
+// taken out of a non-zero Budget.MaxTokens first. Change detection compares
+// like with like, because the held-out suffix is identical on both sides.
+// It returns the Report a Policy filled in, or nil. Usage spent by the
+// Compactor's own LLM calls is added to s.Usage and the Report.
+func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
+	// LLM calls the steps make (summaries) are charged to the run, so
+	// State.Usage and the limiter see them.
+	var spent gantry.Usage
+	out, rep, err := comp.compactInner(withUsageSink(ctx, &spent), s, b)
+	s.Usage = s.Usage.Add(spent)
+	if rep != nil {
+		rep.Usage = spent
+	}
+	return out, rep, err
+}
+
+// compactInner is compact without the usage accounting.
+func (comp *component) compactInner(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
+	msgs := s.Messages
+	b.ContextWindow = s.ContextWindow
+	b.PromptTokens = calibratedPromptTokens(s, b)
+	b.FixedTokens = estimateFixedTokens(s)
+	slot := &reportSlot{}
+	ctx = withReportSlot(ctx, slot)
 	i := gantry.WrapUpPromptIndex(ctx, msgs)
 	if i < 0 {
-		return comp.c.Compact(ctx, msgs, b)
+		out, err := comp.c.Compact(ctx, msgs, b)
+		return out, slot.r, err
 	}
 	suffix := msgs[i:]
+	held := 0
+	for _, m := range suffix {
+		held += b.Count(m)
+	}
 	if b.MaxTokens > 0 {
 		// The held-out suffix is re-sent as-is, so the Compactor's share of
-		// the budget is what remains after it.
-		for _, m := range suffix {
-			b.MaxTokens -= b.Count(m)
-		}
-		b.MaxTokens = max(b.MaxTokens, 1)
+		// the budget is what remains after it (in calibrated tokens, like a
+		// forced MaxTokens).
+		ratio := calibration(b.PromptTokens, b.FixedTokens+totalTokens(msgs, b))
+		b.MaxTokens = max(b.MaxTokens-calibrate(held, ratio), 1)
 	}
+	b.FixedTokens += held
 	compacted, err := comp.c.Compact(ctx, msgs[:i:i], b)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]gantry.Message, 0, len(compacted)+len(suffix))
 	out = append(out, compacted...)
-	return append(out, suffix...), nil
+	return append(out, suffix...), slot.r, nil
+}
+
+// recordReport stores r (if any) in s.Meta[MetaLastCompaction].
+func recordReport(s *gantry.State, r *Report) {
+	if r == nil {
+		return
+	}
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	s.Meta[MetaLastCompaction] = r
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages
-// only): the provider-reported limit, else the run's context window, minus the
-// estimated System and Tools tokens; else a fraction of the current message
-// tokens (the prompt estimate minus System and Tools). Floored at 1.
+// only, in provider tokens): the provider-reported limit, else the run's
+// context window, minus the System and Tools tokens; else a fraction of the
+// current message tokens (the prompt size minus System and Tools). The System
+// and Tools estimate is calibrated by the measured/estimated prompt ratio, so
+// both terms are in the same units. Floored at 1.
 func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	var cle *gantry.ContextLengthError
 	limit := 0
@@ -172,10 +214,13 @@ func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	} else if s.ContextWindow > 0 {
 		limit = s.ContextWindow
 	}
+	prompt := calibratedPromptTokens(s, comp.b)
+	fixed := estimateFixedTokens(s)
+	fixed = calibrate(fixed, calibration(prompt, fixed+totalTokens(s.Messages, comp.b)))
 	if limit > 0 {
-		return max(limit-estimateFixedTokens(s), 1)
+		return max(limit-fixed, 1)
 	}
-	messages := EstimatePromptTokens(s, comp.b) - estimateFixedTokens(s)
+	messages := prompt - fixed
 	return max(messages*overflowFallbackPercent/100, 1)
 }
 

@@ -109,3 +109,14 @@ func TestBuildAgent_PersonaReachesModel(t *testing.T) {
 		t.Fatalf("want System %q to reach the model, got %q", defaultPersona, reqs[0].System)
 	}
 }
+
+func TestOllamaLLMReportsNumCtx(t *testing.T) {
+	c := newOllamaLLM("m", "", 4096)
+	r, ok := c.(gantry.ContextWindowReporter)
+	if !ok {
+		t.Fatal("ollama client does not report its context window")
+	}
+	if n, err := r.ContextWindow(context.Background()); err != nil || n != 4096 {
+		t.Errorf("ContextWindow = %d, %v; want 4096 so compaction can trigger", n, err)
+	}
+}

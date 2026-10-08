@@ -1,0 +1,105 @@
+package compactor
+
+import (
+	"unicode/utf8"
+
+	"github.com/farazhassan/gantry"
+)
+
+// summaryPrefix starts every message SummarizeTurns writes, so the model can
+// tell the summary from user input.
+const summaryPrefix = "[Summary of earlier conversation]\n"
+
+// summaryTag marks a message as a summary written by SummarizeTurns. It is a
+// private gantry.WithTag marker, which no client input or stored transcript
+// can carry, so neither content nor Message.Name can forge a summary.
+const summaryTag = "components/compactor:summary"
+
+// isSummary reports whether m is a summary written by SummarizeTurns: a user
+// message carrying the summaryTag marker (the content prefix and Message.Name
+// are not trusted, since client input can set them).
+func isSummary(m gantry.Message) bool {
+	return m.Role == gantry.RoleUser && gantry.Tag(m) == summaryTag
+}
+
+// span is the half-open message range [start, end).
+type span struct{ start, end int }
+
+// segment splits msgs into a preamble (messages before the first RoleUser
+// message, possibly empty) and turns: each turn is a RoleUser message plus
+// every following non-user message (assistant replies, tool results) up to the
+// next RoleUser message. Steps that only remove whole turns, or rewrite
+// Content in place, never separate a tool call from its result.
+func segment(msgs []gantry.Message) (preamble span, turns []span) {
+	i := 0
+	for i < len(msgs) && msgs[i].Role != gantry.RoleUser {
+		i++
+	}
+	preamble = span{0, i}
+	for i < len(msgs) {
+		start := i
+		i++
+		for i < len(msgs) && msgs[i].Role != gantry.RoleUser {
+			i++
+		}
+		turns = append(turns, span{start, i})
+	}
+	return preamble, turns
+}
+
+// olderTurns returns the turns a step may touch: all but the newest keep.
+func olderTurns(turns []span, keep int) []span {
+	if len(turns) <= keep {
+		return nil
+	}
+	return turns[:len(turns)-keep]
+}
+
+// cloneMessages returns a slice-level copy of msgs (the Compactor contract).
+func cloneMessages(msgs []gantry.Message) []gantry.Message {
+	out := make([]gantry.Message, len(msgs))
+	copy(out, msgs)
+	return out
+}
+
+// totalTokens sums b.Count over msgs.
+func totalTokens(msgs []gantry.Message, b Budget) int {
+	n := 0
+	for _, m := range msgs {
+		n += b.Count(m)
+	}
+	return n
+}
+
+// runeStartAtOrBefore returns the largest i <= n (clamped to len(s)) that
+// starts a rune in s.
+func runeStartAtOrBefore(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+// runeStartAtOrAfter returns the smallest i >= n that starts a rune in s, or
+// len(s).
+func runeStartAtOrAfter(s string, n int) int {
+	if n < 0 {
+		n = 0
+	}
+	for n < len(s) && !utf8.RuneStart(s[n]) {
+		n++
+	}
+	return n
+}
+
+// capBytes returns s cut to at most n bytes on a rune boundary, with "…"
+// appended when it was cut.
+func capBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:runeStartAtOrBefore(s, n)] + "…"
+}
