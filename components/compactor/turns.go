@@ -1,19 +1,25 @@
 package compactor
 
 import (
-	"strings"
 	"unicode/utf8"
 
 	"github.com/farazhassan/gantry"
 )
 
-// summaryPrefix starts every message SummarizeTurns writes; it is how steps
-// recognise a summary.
+// summaryPrefix starts every message SummarizeTurns writes, so the model can
+// tell the summary from user input.
 const summaryPrefix = "[Summary of earlier conversation]\n"
 
-// isSummary reports whether m is a summary written by SummarizeTurns.
+// summaryName marks a message as a summary written by SummarizeTurns. It is
+// carried in Message.Name, which input and transcript messages never set and
+// adapters do not send for user messages, so user content cannot forge it.
+const summaryName = "components/compactor:summary"
+
+// isSummary reports whether m is a summary written by SummarizeTurns: a user
+// message carrying the summaryName marker (the content prefix alone is not
+// trusted, since user input can contain it).
 func isSummary(m gantry.Message) bool {
-	return m.Role == gantry.RoleUser && strings.HasPrefix(m.Content, summaryPrefix)
+	return m.Role == gantry.RoleUser && m.Name == summaryName
 }
 
 // span is the half-open message range [start, end).

@@ -55,7 +55,7 @@ func TestSummarizeTurnsSelectsFewestTurns(t *testing.T) {
 
 func TestSummarizeTurnsRollsPriorSummary(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("NEW"))
-	msgs := []gantry.Message{user(summaryPrefix + "OLD"), user("q1"), assistant("r1"), user("q2"), assistant("r2")}
+	msgs := []gantry.Message{summary("OLD"), user("q1"), assistant("r1"), user("q2"), assistant("r2")}
 	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
 	equalContents(t, got, summaryPrefix+"NEW", "q2", "r2")
 	if !strings.Contains(mock.Requests()[0].Messages[0].Content, "OLD") {
@@ -77,7 +77,7 @@ func TestSummarizeTurnsSkipsLLMWhenAlreadyFits(t *testing.T) {
 
 func TestSummarizeTurnsRollsPriorSummaryAfterOtherTurns(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("NEW"))
-	msgs := []gantry.Message{user(xs(100)), user(summaryPrefix + "OLD"), user("q1"), assistant("a"), user("q2")}
+	msgs := []gantry.Message{user(xs(100)), summary("OLD"), user("q1"), assistant("a"), user("q2")}
 	b := lenBudget
 	b.MaxTokens = 60 // the first turn alone would fit: 143 − 100 + 10
 	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(10)).Compact(context.Background(), msgs, b)
@@ -97,7 +97,7 @@ func TestSummarizeTurnsRollsPriorSummaryAfterOtherTurns(t *testing.T) {
 
 func TestSummarizeTurnsOnlySummaryCandidateSkipsLLM(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("NEW"))
-	msgs := []gantry.Message{user(summaryPrefix + "OLD"), user("q2"), assistant("r2")}
+	msgs := []gantry.Message{summary("OLD"), user("q2"), assistant("r2")}
 	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
 	equalContents(t, got, summaryPrefix+"OLD", "q2", "r2")
 	if n := len(mock.Requests()); n != 0 {
@@ -157,5 +157,18 @@ func TestSummarizeTurnsValidatesArgs(t *testing.T) {
 			}()
 			f()
 		})
+	}
+}
+
+func TestSummarizeTurnsMarksSummaryAndCapsPriorOne(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("NEW"))
+	msgs := []gantry.Message{summary(xs(5000)), user("q1"), assistant("r1"), user("q2")}
+	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	if got[0].Name != "components/compactor:summary" || got[0].Content != summaryPrefix+"NEW" {
+		t.Errorf("summary = %+v, want marked summary", got[0])
+	}
+	p := mock.Requests()[0].Messages[0].Content
+	if strings.Contains(p, xs(2001)) {
+		t.Errorf("prior summary not capped in prompt (len %d)", len(p))
 	}
 }

@@ -112,7 +112,7 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	rest := msgs[turns[n-1].end:]
 	out := make([]gantry.Message, 0, pre.end+1+len(rest))
 	out = append(out, msgs[pre.start:pre.end]...)
-	out = append(out, gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix + resp.Content})
+	out = append(out, gantry.Message{Role: gantry.RoleUser, Name: summaryName, Content: summaryPrefix + resp.Content})
 	return append(out, rest...), nil
 }
 
@@ -124,7 +124,7 @@ func summaryPrompt(msgs []gantry.Message) string {
 	for _, m := range msgs {
 		if isSummary(m) {
 			sb.WriteString("previous summary: ")
-			sb.WriteString(strings.TrimPrefix(m.Content, summaryPrefix))
+			sb.WriteString(capBytes(strings.TrimPrefix(m.Content, summaryPrefix), summaryMessageCap))
 			sb.WriteString("\n")
 			continue
 		}

@@ -38,3 +38,8 @@ func userTurns(n, size int) []gantry.Message {
 
 const clearedPlaceholder = "[tool result cleared to save context]"
 const summaryPrefix = "[Summary of earlier conversation]\n"
+
+// summary builds a message as SummarizeTurns writes it.
+func summary(s string) gantry.Message {
+	return gantry.Message{Role: gantry.RoleUser, Name: "components/compactor:summary", Content: summaryPrefix + s}
+}

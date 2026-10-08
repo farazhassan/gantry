@@ -46,7 +46,7 @@ func TestTruncateMessagesIsUTF8Safe(t *testing.T) {
 
 func TestTruncateMessagesSkipsSummaries(t *testing.T) {
 	s := summaryPrefix + xs(1000)
-	msgs := []gantry.Message{user(s), user("q")}
+	msgs := []gantry.Message{summary(xs(1000)), user("q")}
 	got, _ := compactor.TruncateMessages(100).Compact(context.Background(), msgs, lenBudget)
 	if got[0].Content != s {
 		t.Error("summary was truncated")
