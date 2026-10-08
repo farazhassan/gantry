@@ -77,3 +77,17 @@ func TestClearToolResultsPanicsOnNegativeKeep(t *testing.T) {
 	}()
 	compactor.ClearToolResults(-1)
 }
+
+func TestClearToolResultsSkipsPlaceholderCountedLarger(t *testing.T) {
+	b := compactor.Budget{Counter: func(m gantry.Message) int {
+		if m.Content == clearedPlaceholder {
+			return 1000
+		}
+		return 1
+	}}
+	msgs := []gantry.Message{user("q1"), call("c1"), result("c1", xs(100)), user("q2")}
+	got, _ := compactor.ClearToolResults(0).Compact(context.Background(), msgs, b)
+	if got[2].Content != xs(100) {
+		t.Errorf("result was replaced although the placeholder counts as more tokens")
+	}
+}

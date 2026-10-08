@@ -17,7 +17,8 @@ type clearToolResults struct{ keep int }
 // of turns, so a long tool loop in the newest turn is shrunk too) and, oldest
 // first, replaces each older result's Content with a short placeholder,
 // keeping ToolCallID and Name so the call/result pairing stays valid. Results
-// already no longer than the placeholder are skipped, and tool-call Input is
+// already no longer than the placeholder, or that the placeholder would not
+// make smaller under Budget.Count, are skipped, and tool-call Input is
 // never touched. With Budget.MaxTokens > 0 it stops once the messages fit. It
 // panics if keepResults < 0.
 func ClearToolResults(keepResults int) Compactor {
@@ -53,7 +54,11 @@ func (c *clearToolResults) Compact(_ context.Context, msgs []gantry.Message, b B
 		}
 		before := b.Count(m)
 		m.Content = clearedPlaceholder
-		total += b.Count(m) - before
+		after := b.Count(m)
+		if after >= before {
+			continue // the placeholder would not save tokens under this counter
+		}
+		total += after - before
 		out[i] = m
 	}
 	return out, nil
