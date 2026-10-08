@@ -34,7 +34,8 @@ type buildConfig struct {
 	// Tuning knobs with sensible zero-value defaults applied in buildAgent.
 	MaxIterations int
 	MaxTokens     int
-	// KeepTurns is how many of the newest turns compaction never touches.
+	// KeepTurns is how many of the newest turns the summarize and drop steps
+	// keep; tool-result clearing and truncation may still shorten them.
 	KeepTurns int
 }
 
