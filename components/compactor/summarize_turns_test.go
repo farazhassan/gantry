@@ -20,7 +20,7 @@ func TestSummarizeTurnsReplacesOlderTurns(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("S"))
 	msgs := []gantry.Message{
 		{Role: gantry.RoleSystem, Content: "rules"},
-		user("q1"), assistant("r1"), user("q2"), assistant("r2"), user("q3"), assistant("r3"),
+		user("q1" + xs(40)), assistant("r1" + xs(40)), user("q2" + xs(40)), assistant("r2" + xs(40)), user("q3"), assistant("r3"),
 	}
 	got, err := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
 	if err != nil {
@@ -207,4 +207,14 @@ func TestSummarizeTurnsBoundsSummaryByRemainingBudget(t *testing.T) {
 	if got := mock.Requests()[0].MaxTokens; got != 112 {
 		t.Errorf("summary MaxTokens = %d, want 112 (remaining budget)", got)
 	}
+}
+
+func TestSummarizeTurnsRejectsSummaryThatDoesNotShrink(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply(xs(1000)))
+	msgs := []gantry.Message{user("q1"), assistant("r1"), user("q2"), assistant("r2"), user("q3")}
+	got, err := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equalContents(t, got, "q1", "r1", "q2", "r2", "q3")
 }

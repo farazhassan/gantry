@@ -50,7 +50,8 @@ func WithSummaryMaxTokens(n int) SummarizeOption {
 // among the older turns is fed into the new one and replaced, so there is at
 // most one; with no other older turn to add, nothing changes. Each
 // message is capped at 2,000 bytes in the summarizer prompt. An LLM error is
-// returned; an empty summary leaves the input unchanged. It panics if c is nil
+// returned; an empty summary, or one that would not shrink the messages,
+// leaves the input unchanged. It panics if c is nil
 // or keepTurns < 0.
 func SummarizeTurns(c gantry.LLMClient, keepTurns int, opts ...SummarizeOption) Compactor {
 	if c == nil {
@@ -129,7 +130,13 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	out := make([]gantry.Message, 0, pre.end+1+len(rest))
 	out = append(out, msgs[pre.start:pre.end]...)
 	out = append(out, gantry.WithTag(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix + resp.Content}, summaryTag))
-	return append(out, rest...), nil
+	out = append(out, rest...)
+	if totalTokens(out, b) >= total {
+		// A summary no smaller than what it replaces would grow the prompt,
+		// and later steps never drop a summary: keep the turns instead.
+		return cloneMessages(msgs), nil
+	}
+	return out, nil
 }
 
 // summaryPrompt renders the messages to summarize, with tool calls as
