@@ -34,9 +34,9 @@ type buildConfig struct {
 	// Tuning knobs with sensible zero-value defaults applied in buildAgent.
 	MaxIterations int
 	MaxTokens     int
-	// KeepTurns is how many of the newest turns the summarize and drop steps
-	// keep (the drop step also pins the first turn); tool-result clearing and
-	// truncation may still shorten them.
+	// KeepTurns is how many of the newest turns the summarize step keeps; the
+	// last-resort drop step keeps half as many (at least one) and pins the
+	// first turn. Tool-result clearing and truncation may still shorten them.
 	KeepTurns int
 }
 
@@ -97,7 +97,7 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 			compactor.ClearToolResults(5),
 			compactor.TruncateMessages(8000),
 			compactor.SummarizeTurns(cfg.LLM, cfg.KeepTurns),
-			compactor.DropTurns(cfg.KeepTurns, true),
+			compactor.DropTurns(max(cfg.KeepTurns/2, 1), true),
 		}}),
 		// MaxTokens here would be a prompt-size target; cfg.MaxTokens is the
 		// run's cumulative spend cap (see limiter above), so leave it unset.
