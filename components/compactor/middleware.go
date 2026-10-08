@@ -158,12 +158,14 @@ func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) (
 	for _, m := range suffix {
 		held += b.Count(m)
 	}
-	b.FixedTokens += held
 	if b.MaxTokens > 0 {
 		// The held-out suffix is re-sent as-is, so the Compactor's share of
-		// the budget is what remains after it.
-		b.MaxTokens = max(b.MaxTokens-held, 1)
+		// the budget is what remains after it (in calibrated tokens, like a
+		// forced MaxTokens).
+		ratio := calibration(b.PromptTokens, b.FixedTokens+totalTokens(msgs, b))
+		b.MaxTokens = max(b.MaxTokens-calibrate(held, ratio), 1)
 	}
+	b.FixedTokens += held
 	compacted, err := comp.c.Compact(ctx, msgs[:i:i], b)
 	if err != nil {
 		return nil, nil, err
@@ -185,9 +187,11 @@ func recordReport(s *gantry.State, r *Report) {
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages
-// only): the provider-reported limit, else the run's context window, minus the
-// estimated System and Tools tokens; else a fraction of the current message
-// tokens (the prompt estimate minus System and Tools). Floored at 1.
+// only, in provider tokens): the provider-reported limit, else the run's
+// context window, minus the System and Tools tokens; else a fraction of the
+// current message tokens (the prompt size minus System and Tools). The System
+// and Tools estimate is calibrated by the measured/estimated prompt ratio, so
+// both terms are in the same units. Floored at 1.
 func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	var cle *gantry.ContextLengthError
 	limit := 0
@@ -196,10 +200,13 @@ func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	} else if s.ContextWindow > 0 {
 		limit = s.ContextWindow
 	}
+	prompt := EstimatePromptTokens(s, comp.b)
+	fixed := estimateFixedTokens(s)
+	fixed = calibrate(fixed, calibration(prompt, fixed+totalTokens(s.Messages, comp.b)))
 	if limit > 0 {
-		return max(limit-estimateFixedTokens(s), 1)
+		return max(limit-fixed, 1)
 	}
-	messages := EstimatePromptTokens(s, comp.b) - estimateFixedTokens(s)
+	messages := prompt - fixed
 	return max(messages*overflowFallbackPercent/100, 1)
 }
 

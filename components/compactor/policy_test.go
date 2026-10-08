@@ -249,15 +249,16 @@ func TestPolicyCalibratesFixedTokens(t *testing.T) {
 			t.Errorf("step budgets = %+v, want MaxTokens 300 (500 − 200)", f.budgets)
 		}
 	})
-	t.Run("forced", func(t *testing.T) {
+	t.Run("forced MaxTokens used as-is", func(t *testing.T) {
+		// The overflow handler already calibrates its messages budget.
 		f := &fakeStep{}
 		b := policyBudget(0, 1000)
 		b.FixedTokens = 100
-		b.Force, b.MaxTokens = true, 400 // limit 500 − 100 uncalibrated fixed
+		b.Force, b.MaxTokens = true, 300
 		_, _ = compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}}).
 			Compact(context.Background(), userTurns(4, 100), b)
 		if len(f.budgets) != 1 || f.budgets[0].MaxTokens != 300 {
-			t.Errorf("step budgets = %+v, want MaxTokens 300 (500 − 200)", f.budgets)
+			t.Errorf("step budgets = %+v, want MaxTokens 300", f.budgets)
 		}
 	})
 }

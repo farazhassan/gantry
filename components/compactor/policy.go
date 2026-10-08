@@ -3,7 +3,6 @@ package compactor
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/farazhassan/gantry"
@@ -17,8 +16,6 @@ const MetaLastCompaction = "components/compactor:last_compaction"
 const (
 	defaultTrigger = 0.8
 	defaultTarget  = 0.5
-	minCalibration = 0.5
-	maxCalibration = 2.0
 )
 
 // Policy configures NewPolicy. Trigger and Target are fractions of the
@@ -114,26 +111,19 @@ func (pc *policy) Compact(ctx context.Context, msgs []gantry.Message, b Budget) 
 		return cloneMessages(msgs), nil
 	}
 
-	ratio := 1.0
-	if raw > 0 {
-		ratio = min(max(float64(size)/float64(raw), minCalibration), maxCalibration)
-	}
-	counter := func(m gantry.Message) int { return int(math.Ceil(float64(b.Count(m)) * ratio)) }
+	ratio := calibration(size, raw)
+	counter := func(m gantry.Message) int { return calibrate(b.Count(m), ratio) }
 	est := Budget{Counter: counter}
 
-	// Targets are in provider tokens, but FixedTokens (and the overflow
-	// handler's MaxTokens, which already has the uncalibrated FixedTokens taken
-	// out) use the raw estimate: calibrate the fixed part before subtracting.
-	fixed := int(math.Ceil(float64(b.FixedTokens) * ratio))
+	// Targets are in provider tokens but FixedTokens is the raw estimate, so
+	// calibrate it before subtracting. A forced MaxTokens (set by the overflow
+	// handler) is already a calibrated messages budget.
 	msgTarget := 0
 	if target > 0 {
-		msgTarget = target - fixed
+		msgTarget = target - calibrate(b.FixedTokens, ratio)
 	}
-	if b.Force && b.MaxTokens > 0 {
-		forced := b.MaxTokens - (fixed - b.FixedTokens)
-		if target == 0 || forced < msgTarget {
-			msgTarget = forced
-		}
+	if b.Force && b.MaxTokens > 0 && (target == 0 || b.MaxTokens < msgTarget) {
+		msgTarget = b.MaxTokens
 	}
 	if target > 0 || (b.Force && b.MaxTokens > 0) {
 		msgTarget = max(msgTarget, 1)
