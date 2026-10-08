@@ -218,3 +218,35 @@ func TestSummarizeTurnsRejectsSummaryThatDoesNotShrink(t *testing.T) {
 	}
 	equalContents(t, got, "q1", "r1", "q2", "r2", "q3")
 }
+
+func TestSummarizeTurnsSkipsWhenNoRoomForSummary(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user(xs(100)), assistant(xs(100)), user("q3"), assistant("r3")}
+	b := lenBudget
+	b.MaxTokens = 30 // kept 4 + 34-token prefix already exceed it
+	got, err := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || len(mock.Requests()) != 0 {
+		t.Errorf("got %d msgs and %d LLM calls; want input unchanged and no call", len(got), len(mock.Requests()))
+	}
+}
+
+func TestSummarizeTurnsCapsWholePrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	var msgs []gantry.Message
+	for range 100 {
+		msgs = append(msgs, user(xs(1000)), assistant(xs(1000)))
+	}
+	msgs = append(msgs, user("q"))
+	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	p := mock.Requests()[0].Messages[0].Content
+	if len(p) > 32_000 || strings.Contains(p, "omitted") {
+		t.Errorf("summarizer prompt is %d bytes (omitted: %v); want ≤ 32,000 with whole turns only", len(p), strings.Contains(p, "omitted"))
+	}
+	// Only the turns that fit in the prompt are replaced; the rest are kept.
+	if len(got) < 100 {
+		t.Errorf("got %d messages; turns left out of the prompt must not be replaced", len(got))
+	}
+}

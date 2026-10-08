@@ -10,9 +10,12 @@ import (
 
 const (
 	defaultSummaryMaxTokens = 1024
-	// minSummaryTokens is the smallest summary length requested when the
-	// budget leaves less room.
+	// minSummaryTokens is the smallest summary worth requesting; with less
+	// room the step leaves the turns unchanged.
 	minSummaryTokens = 32
+	// summaryPromptCap bounds the whole summarizer prompt; messages past it
+	// are left out.
+	summaryPromptCap = 32_000
 	// summaryMessageCap bounds each message in the summarizer prompt, so the
 	// summarizer's own request cannot overflow.
 	summaryMessageCap = 2000
@@ -34,7 +37,8 @@ type SummarizeOption func(*summarizeTurns)
 
 // WithSummaryMaxTokens caps the summary's length (LLMRequest.MaxTokens); the
 // default is 1024. When Budget.MaxTokens leaves less room, a shorter summary
-// is requested (at least 32 tokens). It panics if n < 1.
+// is requested; with room for fewer than 32 tokens the turns are left
+// unchanged. It panics if n < 1.
 func WithSummaryMaxTokens(n int) SummarizeOption {
 	if n < 1 {
 		panic(fmt.Sprintf("compactor: WithSummaryMaxTokens requires n >= 1, got %d", n))
@@ -49,7 +53,8 @@ func WithSummaryMaxTokens(n int) SummarizeOption {
 // messages already fit MaxTokens the LLM is not called. Any existing summary
 // among the older turns is fed into the new one and replaced, so there is at
 // most one; with no other older turn to add, nothing changes. Each
-// message is capped at 2,000 bytes in the summarizer prompt. An LLM error is
+// message is capped at 2,000 bytes and the whole summarizer prompt at 32,000
+// bytes; turns that do not fit are kept for a later pass. An LLM error is
 // returned; an empty summary, or one that would not shrink the messages,
 // leaves the input unchanged. It panics if c is nil
 // or keepTurns < 0.
@@ -106,18 +111,38 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	if plain == 0 {
 		return cloneMessages(msgs), nil
 	}
+	// Summarize only whole turns that fit in the summarizer prompt; turns left
+	// out stay for a later pass rather than being replaced unread.
+	lo := 1
+	if lastSummary >= 0 {
+		lo = lastSummary + 2
+	}
+	for n > lo {
+		if _, complete := summaryPrompt(msgs[turns[0].start:turns[n-1].end]); complete {
+			break
+		}
+		n--
+		t := turns[n]
+		removed -= totalTokens(msgs[t.start:t.end], b)
+	}
 	selected := msgs[turns[0].start:turns[n-1].end]
 	// Never ask for a longer summary than the budget has room for: a summary
 	// is kept by every later step, so an oversized one could not be undone.
 	outMax := s.maxTokens
 	if b.MaxTokens > 0 {
 		if room := b.MaxTokens - (total - removed) - wrapper; room < outMax {
-			outMax = max(room, minSummaryTokens)
+			if room < minSummaryTokens {
+				// Not even a minimal summary fits; leave the turns for a later
+				// step (e.g. DropTurns) that can still remove them.
+				return cloneMessages(msgs), nil
+			}
+			outMax = room
 		}
 	}
 
+	prompt, _ := summaryPrompt(selected)
 	resp, err := s.client.Generate(ctx, gantry.LLMRequest{
-		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: summaryPrompt(selected)}},
+		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: prompt}},
 		MaxTokens: outMax,
 	})
 	if err != nil {
@@ -141,11 +166,12 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 
 // summaryPrompt renders the messages to summarize, with tool calls as
 // name(input preview). Each rendered message, content and call previews
-// together, is capped at summaryMessageCap bytes.
-func summaryPrompt(msgs []gantry.Message) string {
+// together, is capped at summaryMessageCap bytes, and the prompt at
+// summaryPromptCap; complete reports whether every message fit.
+func summaryPrompt(msgs []gantry.Message) (prompt string, complete bool) {
 	var sb strings.Builder
 	sb.WriteString(summaryInstruction)
-	for _, m := range msgs {
+	for i, m := range msgs {
 		var line strings.Builder
 		if isSummary(m) {
 			line.WriteString("previous summary: ")
@@ -158,8 +184,12 @@ func summaryPrompt(msgs []gantry.Message) string {
 				fmt.Fprintf(&line, " [call %s(%s)]", tc.Name, capBytes(string(tc.Input), summaryInputPreviewCap))
 			}
 		}
-		sb.WriteString(capBytes(line.String(), summaryMessageCap))
-		sb.WriteString("\n")
+		rendered := capBytes(line.String(), summaryMessageCap) + "\n"
+		if sb.Len()+len(rendered) > summaryPromptCap {
+			fmt.Fprintf(&sb, "[… %d more messages omitted …]\n", len(msgs)-i)
+			return sb.String(), false
+		}
+		sb.WriteString(rendered)
 	}
-	return sb.String()
+	return sb.String(), true
 }
