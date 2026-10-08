@@ -10,6 +10,9 @@ import (
 
 const (
 	defaultSummaryMaxTokens = 1024
+	// minSummaryTokens is the smallest summary length requested when the
+	// budget leaves less room.
+	minSummaryTokens = 32
 	// summaryMessageCap bounds each message in the summarizer prompt, so the
 	// summarizer's own request cannot overflow.
 	summaryMessageCap = 2000
@@ -30,7 +33,8 @@ type summarizeTurns struct {
 type SummarizeOption func(*summarizeTurns)
 
 // WithSummaryMaxTokens caps the summary's length (LLMRequest.MaxTokens); the
-// default is 1024. It panics if n < 1.
+// default is 1024. When Budget.MaxTokens leaves less room, a shorter summary
+// is requested (at least 32 tokens). It panics if n < 1.
 func WithSummaryMaxTokens(n int) SummarizeOption {
 	if n < 1 {
 		panic(fmt.Sprintf("compactor: WithSummaryMaxTokens requires n >= 1, got %d", n))
@@ -84,7 +88,8 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	}
 	// The inserted summary costs its generated text plus the prefix and
 	// per-message framing.
-	reserve := s.maxTokens + b.Count(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix})
+	wrapper := b.Count(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix})
+	reserve := s.maxTokens + wrapper
 	removed, n, plain := 0, 0, 0
 	for n < older {
 		t := turns[n]
@@ -101,10 +106,18 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		return cloneMessages(msgs), nil
 	}
 	selected := msgs[turns[0].start:turns[n-1].end]
+	// Never ask for a longer summary than the budget has room for: a summary
+	// is kept by every later step, so an oversized one could not be undone.
+	outMax := s.maxTokens
+	if b.MaxTokens > 0 {
+		if room := b.MaxTokens - (total - removed) - wrapper; room < outMax {
+			outMax = max(room, minSummaryTokens)
+		}
+	}
 
 	resp, err := s.client.Generate(ctx, gantry.LLMRequest{
 		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: summaryPrompt(selected)}},
-		MaxTokens: s.maxTokens,
+		MaxTokens: outMax,
 	})
 	if err != nil {
 		return nil, err

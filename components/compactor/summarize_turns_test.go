@@ -197,3 +197,14 @@ func TestSummarizeTurnsCapsWholeRenderedMessage(t *testing.T) {
 		t.Errorf("summarizer prompt is %d bytes; tool-call previews are not capped per message", len(p))
 	}
 }
+
+func TestSummarizeTurnsBoundsSummaryByRemainingBudget(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user(xs(100)), assistant(xs(100)), user(xs(100)), assistant(xs(100)), user("q3"), assistant("r3")}
+	b := lenBudget
+	b.MaxTokens = 150 // after both older turns: 150 − 4 kept − 34 prefix = 112 left
+	_, _ = compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, b)
+	if got := mock.Requests()[0].MaxTokens; got != 112 {
+		t.Errorf("summary MaxTokens = %d, want 112 (remaining budget)", got)
+	}
+}
