@@ -126,6 +126,12 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		removed -= totalTokens(msgs[t.start:t.end], b)
 	}
 	selected := msgs[turns[0].start:turns[n-1].end]
+	prompt, complete := summaryPrompt(selected)
+	if !complete {
+		// Even the smallest selection does not fit the summarizer prompt;
+		// replacing it would lose unread messages, so leave it to a later step.
+		return cloneMessages(msgs), nil
+	}
 	// Never ask for a longer summary than the budget has room for: a summary
 	// is kept by every later step, so an oversized one could not be undone.
 	outMax := s.maxTokens
@@ -140,7 +146,6 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		}
 	}
 
-	prompt, _ := summaryPrompt(selected)
 	resp, err := s.client.Generate(ctx, gantry.LLMRequest{
 		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: prompt}},
 		MaxTokens: outMax,

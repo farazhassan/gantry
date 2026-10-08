@@ -250,3 +250,20 @@ func TestSummarizeTurnsCapsWholePrompt(t *testing.T) {
 		t.Errorf("got %d messages; turns left out of the prompt must not be replaced", len(got))
 	}
 }
+
+func TestSummarizeTurnsLeavesTurnTooLargeForPrompt(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user("q1")}
+	for i := range 30 { // one turn rendering to ~45 KB, over the prompt cap
+		id := fmt.Sprint(i)
+		msgs = append(msgs, call(id), result(id, xs(1500)))
+	}
+	msgs = append(msgs, user("q2"))
+	got, err := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(msgs) || len(mock.Requests()) != 0 {
+		t.Errorf("got %d msgs and %d LLM calls; want input unchanged and no call", len(got), len(mock.Requests()))
+	}
+}
