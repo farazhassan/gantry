@@ -82,6 +82,9 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 			lastSummary = i
 		}
 	}
+	// The inserted summary costs its generated text plus the prefix and
+	// per-message framing.
+	reserve := s.maxTokens + b.Count(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix})
 	removed, n, plain := 0, 0, 0
 	for n < older {
 		t := turns[n]
@@ -90,7 +93,7 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 			plain++
 		}
 		n++
-		if n > lastSummary && plain > 0 && b.MaxTokens > 0 && total-removed+s.maxTokens <= b.MaxTokens {
+		if n > lastSummary && plain > 0 && b.MaxTokens > 0 && total-removed+reserve <= b.MaxTokens {
 			break
 		}
 	}
@@ -112,7 +115,7 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 	rest := msgs[turns[n-1].end:]
 	out := make([]gantry.Message, 0, pre.end+1+len(rest))
 	out = append(out, msgs[pre.start:pre.end]...)
-	out = append(out, gantry.Message{Role: gantry.RoleUser, Name: summaryName, Content: summaryPrefix + resp.Content})
+	out = append(out, gantry.WithTag(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix + resp.Content}, summaryTag))
 	return append(out, rest...), nil
 }
 

@@ -43,7 +43,7 @@ func TestSummarizeTurnsSelectsFewestTurns(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("S"))
 	msgs := []gantry.Message{user(xs(100)), assistant(xs(100)), user(xs(100)), assistant(xs(100)), user("q3"), assistant("r3")}
 	b := lenBudget
-	b.MaxTokens = 220 // 404 − 200 + 10 = 214 after one turn
+	b.MaxTokens = 260 // 404 − 200 + (10 + 34 prefix) = 248 after one turn
 	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(10)).Compact(context.Background(), msgs, b)
 	if len(got) != 5 || got[0].Content != summaryPrefix+"S" {
 		t.Errorf("got %q, want summary + 4 kept messages", contents(got))
@@ -164,11 +164,20 @@ func TestSummarizeTurnsMarksSummaryAndCapsPriorOne(t *testing.T) {
 	mock := eval.NewMockLLMClient(reply("NEW"))
 	msgs := []gantry.Message{summary(xs(5000)), user("q1"), assistant("r1"), user("q2")}
 	got, _ := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget)
-	if got[0].Name != "components/compactor:summary" || got[0].Content != summaryPrefix+"NEW" {
+	if gantry.Tag(got[0]) != "components/compactor:summary" || got[0].Content != summaryPrefix+"NEW" {
 		t.Errorf("summary = %+v, want marked summary", got[0])
 	}
 	p := mock.Requests()[0].Messages[0].Content
 	if strings.Contains(p, xs(2001)) {
 		t.Errorf("prior summary not capped in prompt (len %d)", len(p))
 	}
+}
+
+func TestSummarizeTurnsReservesSummaryPrefix(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{user(xs(100)), assistant(xs(100)), user(xs(100)), assistant(xs(100)), user("q3"), assistant("r3")}
+	b := lenBudget
+	b.MaxTokens = 220 // one turn would leave 404 − 200 + 10 + 34 = 248
+	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(10)).Compact(context.Background(), msgs, b)
+	equalContents(t, got, summaryPrefix+"S", "q3", "r3")
 }

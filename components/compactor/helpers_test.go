@@ -41,5 +41,5 @@ const summaryPrefix = "[Summary of earlier conversation]\n"
 
 // summary builds a message as SummarizeTurns writes it.
 func summary(s string) gantry.Message {
-	return gantry.Message{Role: gantry.RoleUser, Name: "components/compactor:summary", Content: summaryPrefix + s}
+	return gantry.WithTag(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix + s}, "components/compactor:summary")
 }

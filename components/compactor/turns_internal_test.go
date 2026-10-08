@@ -13,10 +13,10 @@ func TestSegmentSplitsPreambleAndTurns(t *testing.T) {
 		{Role: gantry.RoleSystem, Content: "rules"}, // 0 preamble
 		{Role: gantry.RoleUser, Content: "q1"},      // 1 turn 0
 		{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{{ID: "c1"}}},
-		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "r"},                  // 3
-		{Role: gantry.RoleUser, Name: summaryName, Content: summaryPrefix + "s"}, // 4 turn 1 (summary)
-		{Role: gantry.RoleUser, Content: "q2"},                                   // 5 turn 2
-		{Role: gantry.RoleAssistant, Content: "a2"},                              // 6
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "r"},                                         // 3
+		gantry.WithTag(gantry.Message{Role: gantry.RoleUser, Content: summaryPrefix + "s"}, summaryTag), // 4 turn 1 (summary)
+		{Role: gantry.RoleUser, Content: "q2"},                                                          // 5 turn 2
+		{Role: gantry.RoleAssistant, Content: "a2"},                                                     // 6
 	}
 	pre, turns := segment(msgs)
 	if pre != (span{0, 1}) {

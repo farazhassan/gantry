@@ -10,16 +10,16 @@ import (
 // tell the summary from user input.
 const summaryPrefix = "[Summary of earlier conversation]\n"
 
-// summaryName marks a message as a summary written by SummarizeTurns. It is
-// carried in Message.Name, which input and transcript messages never set and
-// adapters do not send for user messages, so user content cannot forge it.
-const summaryName = "components/compactor:summary"
+// summaryTag marks a message as a summary written by SummarizeTurns. It is a
+// private gantry.WithTag marker, which no client input or stored transcript
+// can carry, so neither content nor Message.Name can forge a summary.
+const summaryTag = "components/compactor:summary"
 
 // isSummary reports whether m is a summary written by SummarizeTurns: a user
-// message carrying the summaryName marker (the content prefix alone is not
-// trusted, since user input can contain it).
+// message carrying the summaryTag marker (the content prefix and Message.Name
+// are not trusted, since client input can set them).
 func isSummary(m gantry.Message) bool {
-	return m.Role == gantry.RoleUser && m.Name == summaryName
+	return m.Role == gantry.RoleUser && gantry.Tag(m) == summaryTag
 }
 
 // span is the half-open message range [start, end).

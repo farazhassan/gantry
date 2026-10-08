@@ -17,11 +17,11 @@ const (
 // ToolCallID is set only on tool-role messages and links back to the
 // ToolCall.ID it is responding to.
 //
-// Message has one unexported marker field (wrapUp) that identifies the prompt
-// injected by the max-iterations wrap-up turn (see IsWrapUpPrompt). It survives
-// code that copies Message values, but is dropped by code that rebuilds
-// messages field-by-field; the run then falls back to locating the prompt by
-// position and content.
+// Message has two unexported fields. wrapUp identifies the prompt injected by
+// the max-iterations wrap-up turn (see IsWrapUpPrompt); tag is a private
+// marker set with WithTag. Both survive code that copies Message values, but
+// are dropped by code that rebuilds messages field-by-field and by JSON, so
+// clients and stored transcripts can never set them.
 type Message struct {
 	Role       Role
 	Content    string
@@ -29,8 +29,23 @@ type Message struct {
 	ToolCallID string
 	Name       string // optional speaker name
 
-	wrapUp bool // set only on the prompt injected by the max-iterations wrap-up turn
+	wrapUp bool   // set only on the prompt injected by the max-iterations wrap-up turn
+	tag    string // private marker; see WithTag
 }
+
+// WithTag returns a copy of m carrying tag, a private marker components use to
+// recognise messages they created (e.g. components/compactor's summaries).
+// Unlike Name, a tag cannot come from untrusted input: JSON never carries it
+// and adapters never send it. It is lost when a message is rebuilt
+// field-by-field or round-tripped through JSON (e.g. checkpoint resume), after
+// which the message is an ordinary one.
+func WithTag(m Message, tag string) Message {
+	m.tag = tag
+	return m
+}
+
+// Tag returns the private marker set with WithTag, or "".
+func Tag(m Message) string { return m.tag }
 
 // IsWrapUpPrompt reports whether m is the prompt injected by the current
 // max-iterations wrap-up turn (MaxIterationsWrapUpPrompt). It is meant for
