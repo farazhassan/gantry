@@ -85,7 +85,7 @@ a.With(compactor.New(compactor.NewPolicy(compactor.Policy{
 
 - **Trigger and target.** Nothing changes until the prompt (`State.ContextUsage` plus an estimate of newer messages) reaches `Trigger × ContextWindow`; then steps run in order until the messages fit `Target × ContextWindow` minus System and Tools. The gap means compaction runs rarely, so the provider's prompt cache keeps its prefix in between. Without a known window, `TriggerTokens`/`TargetTokens` apply; with neither, the policy compacts only when the provider rejects a prompt (`ErrContextLengthExceeded`), toward the reported limit.
 - **Calibration.** The bytes/4 estimate is scaled by the ratio of measured to estimated prompt tokens (clamped to 0.5–2×), so steps cut in provider tokens.
-- **Turn-aware steps.** A turn is a user message plus the assistant and tool messages after it. Steps remove whole turns or rewrite message content, so a tool call is never separated from its result; any `Compactor` can be a step, and tool results orphaned by one are dropped.
+- **Turn-aware steps.** A turn is a user message plus the assistant and tool messages after it. Steps remove whole turns or rewrite message content, so a tool call is never separated from its result; any `Compactor` can be a step, and tool results orphaned by one are dropped, as are tool calls it left without a result.
 - **Report.** `State.Meta[compactor.MetaLastCompaction]` holds a `*compactor.Report` (before/after/target tokens, forced, and each step that ran) for the latest compaction.
 
 ### Putting it together

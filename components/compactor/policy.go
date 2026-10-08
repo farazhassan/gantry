@@ -58,7 +58,8 @@ type policy struct{ p Policy }
 // MaxTokens = target minus Budget.FixedTokens (under Force, at most
 // Budget.MaxTokens). If the steps cannot reach the target the best result is
 // returned without error. Tool results whose call was removed by a step are
-// dropped. It panics unless 0 < Target < Trigger <= 1 (after defaults), the
+// dropped, as are tool calls left without a result (and an assistant message
+// left with neither calls nor content). It panics unless 0 < Target < Trigger <= 1 (after defaults), the
 // token values are both unset or 0 < TargetTokens < TriggerTokens, and Steps
 // is non-empty with no nil step.
 func NewPolicy(p Policy) Compactor {
@@ -158,8 +159,10 @@ func stepName(s Compactor) string {
 }
 
 // repairOrphans drops tool results whose ToolCallID matches no tool call in
-// an earlier message (providers reject them). msgs is owned by the caller and
-// is filtered in place.
+// an earlier message, and tool calls with no later result (providers reject
+// both). An assistant message left with no calls and no content is dropped.
+// msgs is owned by the caller and is filtered in place; ToolCalls slices may
+// be shared with the caller's input, so they are rebuilt, never mutated.
 func repairOrphans(msgs []gantry.Message) []gantry.Message {
 	calls := map[string]bool{}
 	out := msgs[:0]
@@ -172,7 +175,39 @@ func repairOrphans(msgs []gantry.Message) []gantry.Message {
 		}
 		out = append(out, m)
 	}
-	return out
+
+	answered := map[string]bool{}
+	keep := make([]bool, len(out))
+	for i := len(out) - 1; i >= 0; i-- {
+		m := out[i]
+		if m.Role == gantry.RoleTool && m.ToolCallID != "" {
+			answered[m.ToolCallID] = true
+		}
+		keep[i] = true
+		if len(m.ToolCalls) == 0 {
+			continue
+		}
+		var kept []gantry.ToolCall
+		for _, tc := range m.ToolCalls {
+			if answered[tc.ID] {
+				kept = append(kept, tc)
+			}
+		}
+		if len(kept) == len(m.ToolCalls) {
+			continue
+		}
+		m.ToolCalls = kept
+		out[i] = m
+		keep[i] = len(kept) > 0 || m.Content != ""
+	}
+	n := 0
+	for i, m := range out {
+		if keep[i] {
+			out[n] = m
+			n++
+		}
+	}
+	return out[:n]
 }
 
 // reportSlot receives the Report of a Policy compaction run under New.

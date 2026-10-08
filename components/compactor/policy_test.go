@@ -190,3 +190,37 @@ func TestMiddlewareStoresReportOnlyWhenTriggered(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyRepairsUnansweredToolCalls(t *testing.T) {
+	msgs := []gantry.Message{user("q1"), call("c1"), result("c1", "r"), assistant("done"), user("q2"), assistant("a2")}
+	p := compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{compactor.NewHeadTail(2, 2)}})
+	got, err := p.Compact(context.Background(), msgs, policyBudget(10, 11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range got {
+		if m.Role == gantry.RoleAssistant && len(m.ToolCalls) > 0 {
+			t.Errorf("unanswered tool call kept: %+v", got)
+		}
+	}
+	equalContents(t, got, "q1", "q2", "a2")
+	if len(msgs[1].ToolCalls) != 1 || msgs[1].ToolCalls[0].ID != "c1" {
+		t.Errorf("input ToolCalls mutated: %+v", msgs[1].ToolCalls)
+	}
+}
+
+func TestPolicyRepairKeepsAnsweredCallsOfPartialMessage(t *testing.T) {
+	two := gantry.Message{Role: gantry.RoleAssistant, Content: "two calls",
+		ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "t"}, {ID: "c2", Name: "t"}}}
+	msgs := []gantry.Message{user(xs(20)), two, result("c2", "r"), user("q2")}
+	// c1 has no result: repair must drop that call but keep c2 and the content.
+	f := &fakeStep{}
+	got, _ := compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{f}}).
+		Compact(context.Background(), msgs, policyBudget(10, 40))
+	if len(got) != 4 || len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].ID != "c2" || got[1].Content != "two calls" {
+		t.Errorf("got %+v, want c1 dropped and c2 kept", got)
+	}
+	if len(msgs[1].ToolCalls) != 2 {
+		t.Errorf("input ToolCalls mutated: %+v", msgs[1].ToolCalls)
+	}
+}
