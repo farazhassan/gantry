@@ -62,6 +62,7 @@ func (s *Summarizing) Compact(ctx context.Context, msgs []gantry.Message, b Budg
 		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: b2.String()}},
 	}
 	resp, err := s.client.Generate(ctx, req)
+	addUsage(ctx, resp.Usage)
 	if err != nil {
 		return nil, err
 	}

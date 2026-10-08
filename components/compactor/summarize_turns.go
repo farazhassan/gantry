@@ -150,6 +150,7 @@ func (s *summarizeTurns) Compact(ctx context.Context, msgs []gantry.Message, b B
 		Messages:  []gantry.Message{{Role: gantry.RoleUser, Content: prompt}},
 		MaxTokens: outMax,
 	})
+	addUsage(ctx, resp.Usage)
 	if err != nil {
 		return nil, err
 	}

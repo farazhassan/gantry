@@ -140,8 +140,22 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 // unchanged to the result, its estimated tokens are added to FixedTokens and
 // taken out of a non-zero Budget.MaxTokens first. Change detection compares
 // like with like, because the held-out suffix is identical on both sides.
-// It returns the Report a Policy filled in, or nil.
+// It returns the Report a Policy filled in, or nil. Usage spent by the
+// Compactor's own LLM calls is added to s.Usage and the Report.
 func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
+	// LLM calls the steps make (summaries) are charged to the run, so
+	// State.Usage and the limiter see them.
+	var spent gantry.Usage
+	out, rep, err := comp.compactInner(withUsageSink(ctx, &spent), s, b)
+	s.Usage = s.Usage.Add(spent)
+	if rep != nil {
+		rep.Usage = spent
+	}
+	return out, rep, err
+}
+
+// compactInner is compact without the usage accounting.
+func (comp *component) compactInner(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
 	msgs := s.Messages
 	b.ContextWindow = s.ContextWindow
 	b.PromptTokens = calibratedPromptTokens(s, b)

@@ -32,11 +32,13 @@ type Policy struct {
 }
 
 // Report describes one compaction a Policy performed. Token values are
-// calibrated estimates for Messages only.
+// calibrated estimates for Messages only. Usage is what the steps' own LLM
+// calls (e.g. SummarizeTurns) spent; New also adds it to State.Usage.
 type Report struct {
 	Forced                                  bool
 	BeforeTokens, AfterTokens, TargetTokens int
 	Steps                                   []StepReport
+	Usage                                   gantry.Usage
 }
 
 // StepReport describes one step that ran. Name is the step's Name() if it
@@ -214,6 +216,21 @@ func repairOrphans(msgs []gantry.Message) []gantry.Message {
 		}
 	}
 	return out[:n]
+}
+
+// usageKey carries a *gantry.Usage that steps add their own LLM usage to, so
+// New can charge it to the run.
+type usageKey struct{}
+
+func withUsageSink(ctx context.Context, u *gantry.Usage) context.Context {
+	return context.WithValue(ctx, usageKey{}, u)
+}
+
+// addUsage charges u to the run's compaction usage, if New is collecting it.
+func addUsage(ctx context.Context, u gantry.Usage) {
+	if sink, ok := ctx.Value(usageKey{}).(*gantry.Usage); ok {
+		*sink = sink.Add(u)
+	}
 }
 
 // reportSlot receives the Report of a Policy compaction run under New.
