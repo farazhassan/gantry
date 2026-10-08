@@ -88,11 +88,12 @@ func (comp *component) Install(a *gantry.Agent) error {
 				return err
 			}
 			before := s.Messages // Compact must not alias its input
-			compacted, err := comp.compact(ctx, s, comp.b)
+			compacted, rep, err := comp.compact(ctx, s, comp.b)
 			if err != nil {
 				return err
 			}
 			s.Messages = compacted
+			recordReport(s, rep)
 			if !sameMessages(before, compacted) {
 				// The measured anchor no longer describes Messages.
 				s.ContextUsage = gantry.ContextUsage{}
@@ -113,10 +114,11 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 	b := comp.b
 	b.Force = true
 	b.MaxTokens = comp.overflowTarget(s, err)
-	compacted, cerr := comp.compact(ctx, s, b)
+	compacted, rep, cerr := comp.compact(ctx, s, b)
 	if cerr != nil {
 		return false, cerr
 	}
+	recordReport(s, rep)
 	if sameMessages(s.Messages, compacted) {
 		return false, nil
 	}
@@ -138,14 +140,18 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 // unchanged to the result, its estimated tokens are added to FixedTokens and
 // taken out of a non-zero Budget.MaxTokens first. Change detection compares
 // like with like, because the held-out suffix is identical on both sides.
-func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, error) {
+// It returns the Report a Policy filled in, or nil.
+func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
 	msgs := s.Messages
 	b.ContextWindow = s.ContextWindow
 	b.PromptTokens = EstimatePromptTokens(s, b)
 	b.FixedTokens = estimateFixedTokens(s)
+	slot := &reportSlot{}
+	ctx = withReportSlot(ctx, slot)
 	i := gantry.WrapUpPromptIndex(ctx, msgs)
 	if i < 0 {
-		return comp.c.Compact(ctx, msgs, b)
+		out, err := comp.c.Compact(ctx, msgs, b)
+		return out, slot.r, err
 	}
 	suffix := msgs[i:]
 	held := 0
@@ -160,11 +166,22 @@ func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) (
 	}
 	compacted, err := comp.c.Compact(ctx, msgs[:i:i], b)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]gantry.Message, 0, len(compacted)+len(suffix))
 	out = append(out, compacted...)
-	return append(out, suffix...), nil
+	return append(out, suffix...), slot.r, nil
+}
+
+// recordReport stores r (if any) in s.Meta[MetaLastCompaction].
+func recordReport(s *gantry.State, r *Report) {
+	if r == nil {
+		return
+	}
+	if s.Meta == nil {
+		s.Meta = map[string]any{}
+	}
+	s.Meta[MetaLastCompaction] = r
 }
 
 // overflowTarget picks the forced-compaction MaxTokens (a budget for Messages
