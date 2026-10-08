@@ -11,10 +11,12 @@ import (
 )
 
 // newOllamaLLM is the LLM seam: it returns a gantry.LLMClient for the given
-// model and endpoint. Swapping in openai/anthropic later is a one-line change
-// here.
-func newOllamaLLM(model, baseURL string) gantry.LLMClient {
-	opts := []ollama.Option{}
+// model and endpoint. numCtx (> 0) sets Ollama's context window and reports it
+// to compaction; Ollama silently truncates longer prompts rather than
+// rejecting them, so without it compaction never sees the limit. Swapping in
+// openai/anthropic later is a one-line change here.
+func newOllamaLLM(model, baseURL string, numCtx int) gantry.LLMClient {
+	opts := []ollama.Option{ollama.WithNumCtx(numCtx)}
 	if baseURL != "" {
 		opts = append(opts, ollama.WithBaseURL(baseURL))
 	}
@@ -89,9 +91,8 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	// History compaction: once the prompt reaches 80% of the context window,
 	// clear old tool output, truncate huge messages, summarize old turns and,
 	// as a last resort, drop them, until it is back to 50%. Every step keeps
-	// tool calls with their results. Ollama reports a window only with
-	// ollama.WithNumCtx; without one, compaction runs only when the provider
-	// rejects a prompt as too long.
+	// tool calls with their results. With Ollama the window comes from
+	// --num-ctx (see newOllamaLLM).
 	if err := agent.With(compactor.New(
 		compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{
 			compactor.ClearToolResults(5),
