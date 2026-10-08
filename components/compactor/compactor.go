@@ -42,11 +42,24 @@ type Compactor interface {
 // result against MaxTokens. Counter is the per-message token estimator; if
 // nil, a default (bytes/4 over content, tool calls and IDs, plus a
 // per-message overhead) is used.
+//
+// ContextWindow, PromptTokens and FixedTokens describe the request the
+// compacted Messages will be part of. The New middleware fills them from
+// State before every Compact call; they are zero when Compact is called
+// directly. ContextWindow is State.ContextWindow (0 = unknown). PromptTokens
+// is EstimatePromptTokens: the provider-measured prompt size plus an estimate
+// of messages added since, for the whole prompt. FixedTokens estimates the
+// part Compact cannot shrink: System, Tools and any messages held out of
+// Compact (the max-iterations wrap-up prompt and what follows it).
 type Budget struct {
 	MaxTokens int
 	SoftLimit int
 	Force     bool
 	Counter   func(gantry.Message) int
+
+	ContextWindow int
+	PromptTokens  int
+	FixedTokens   int
 }
 
 // perMessageOverhead approximates the role/framing tokens providers add to
