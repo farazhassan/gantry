@@ -62,3 +62,18 @@ func calibration(prompt, raw int) float64 {
 
 // calibrate converts n estimated tokens to provider tokens, rounding up.
 func calibrate(n int, ratio float64) int { return int(math.Ceil(float64(n) * ratio)) }
+
+// calibratedPromptTokens is EstimatePromptTokens in provider tokens
+// throughout: messages after the measured anchor are scaled by the anchor's
+// measured/estimated ratio instead of counted raw, so a large reply or tool
+// result appended since the measurement is not undercounted. Without a valid
+// anchor it is the raw estimate.
+func calibratedPromptTokens(s *gantry.State, b Budget) int {
+	cu := s.ContextUsage
+	if cu.PromptTokens <= 0 || cu.MessageCount < 0 || cu.MessageCount > len(s.Messages) {
+		return EstimatePromptTokens(s, b)
+	}
+	anchored := estimateFixedTokens(s) + totalTokens(s.Messages[:cu.MessageCount], b)
+	ratio := calibration(cu.PromptTokens, anchored)
+	return cu.PromptTokens + calibrate(totalTokens(s.Messages[cu.MessageCount:], b), ratio)
+}

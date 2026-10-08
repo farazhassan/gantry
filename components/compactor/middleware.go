@@ -144,7 +144,7 @@ func (comp *component) onOverflow(ctx context.Context, s *gantry.State, err erro
 func (comp *component) compact(ctx context.Context, s *gantry.State, b Budget) ([]gantry.Message, *Report, error) {
 	msgs := s.Messages
 	b.ContextWindow = s.ContextWindow
-	b.PromptTokens = EstimatePromptTokens(s, b)
+	b.PromptTokens = calibratedPromptTokens(s, b)
 	b.FixedTokens = estimateFixedTokens(s)
 	slot := &reportSlot{}
 	ctx = withReportSlot(ctx, slot)
@@ -200,7 +200,7 @@ func (comp *component) overflowTarget(s *gantry.State, err error) int {
 	} else if s.ContextWindow > 0 {
 		limit = s.ContextWindow
 	}
-	prompt := EstimatePromptTokens(s, comp.b)
+	prompt := calibratedPromptTokens(s, comp.b)
 	fixed := estimateFixedTokens(s)
 	fixed = calibrate(fixed, calibration(prompt, fixed+totalTokens(s.Messages, comp.b)))
 	if limit > 0 {

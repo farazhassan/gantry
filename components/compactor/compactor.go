@@ -61,8 +61,8 @@ type Compactor interface {
 // compacted Messages will be part of. The New middleware fills them from
 // State before every Compact call; they are zero when Compact is called
 // directly. ContextWindow is State.ContextWindow (0 = unknown). PromptTokens
-// is EstimatePromptTokens: the provider-measured prompt size plus an estimate
-// of messages added since, for the whole prompt. FixedTokens estimates the
+// is the whole prompt in provider tokens: the provider-measured size plus an
+// estimate of messages added since, scaled by the measured/estimated ratio. FixedTokens estimates the
 // part Compact cannot shrink: System, Tools and any messages held out of
 // Compact (the max-iterations wrap-up prompt and what follows it).
 type Budget struct {

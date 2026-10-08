@@ -94,3 +94,25 @@ func TestOverflowTargetIsCalibrated(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptTokensCalibratesMessagesAfterAnchor(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "ok", StopReason: gantry.StopReasonEnd})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mock))
+	// The first 2 messages (200 estimated) were measured at 400: ratio 2, so
+	// the 2 newer messages (200 estimated) count as 400.
+	_ = a.UseNamed(gantry.PhaseAssembleContext, "anchor", func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			s.ContextUsage = gantry.ContextUsage{PromptTokens: 400, MessageCount: 2}
+			return next(ctx, s)
+		}
+	})
+	preload(t, a, 4)
+	rc := &recordingCompactor{keep: 100}
+	_ = a.With(compactor.New(rc, compactor.Budget{Counter: func(gantry.Message) int { return 100 }}))
+	if _, err := a.Run(context.Background(), ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := rc.budgets[0].PromptTokens; got != 800 {
+		t.Errorf("PromptTokens = %d, want 800 (400 measured + 200 newer × 2)", got)
+	}
+}
