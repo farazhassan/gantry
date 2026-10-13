@@ -11,10 +11,12 @@ import (
 )
 
 // newOllamaLLM is the LLM seam: it returns a gantry.LLMClient for the given
-// model and endpoint. Swapping in openai/anthropic later is a one-line change
-// here.
-func newOllamaLLM(model, baseURL string) gantry.LLMClient {
-	opts := []ollama.Option{}
+// model and endpoint. numCtx (> 0) sets Ollama's context window and reports it
+// to compaction; Ollama silently truncates longer prompts rather than
+// rejecting them, so without it compaction never sees the limit. Swapping in
+// openai/anthropic later is a one-line change here.
+func newOllamaLLM(model, baseURL string, numCtx int) gantry.LLMClient {
+	opts := []ollama.Option{ollama.WithNumCtx(numCtx)}
 	if baseURL != "" {
 		opts = append(opts, ollama.WithBaseURL(baseURL))
 	}
@@ -34,8 +36,10 @@ type buildConfig struct {
 	// Tuning knobs with sensible zero-value defaults applied in buildAgent.
 	MaxIterations int
 	MaxTokens     int
-	HistoryHead   int
-	HistoryTail   int
+	// KeepTurns is how many of the newest turns the summarize step keeps; the
+	// last-resort drop step keeps half as many (at least one) and pins the
+	// first turn. Tool-result clearing and truncation may still shorten them.
+	KeepTurns int
 }
 
 // buildAgent assembles the gantry.Agent with the full middleware stack:
@@ -50,11 +54,8 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = 100_000
 	}
-	if cfg.HistoryHead == 0 {
-		cfg.HistoryHead = 4
-	}
-	if cfg.HistoryTail == 0 {
-		cfg.HistoryTail = 30
+	if cfg.KeepTurns == 0 {
+		cfg.KeepTurns = 4
 	}
 
 	agent, err := gantry.NewAgent(
@@ -87,15 +88,18 @@ func buildAgent(cfg buildConfig) (*gantry.Agent, error) {
 		return nil, err
 	}
 
-	// History compaction keeps the first HistoryHead and last HistoryTail
-	// messages, dropping the middle. NOTE: HeadTail is a simple strategy — in a
-	// very long tool-calling exchange it can drop an assistant message bearing a
-	// ToolCall while keeping its ToolResult (or vice-versa), producing a
-	// transcript some providers reject. The generous tail makes this unlikely in
-	// normal interactive use; a boundary-aware compactor would be the fix if it
-	// becomes a problem in practice.
+	// History compaction: once the prompt reaches 80% of the context window,
+	// clear old tool output, truncate huge messages, summarize old turns and,
+	// as a last resort, drop them, until it is back to 50%. Every step keeps
+	// tool calls with their results. With Ollama the window comes from
+	// --num-ctx (see newOllamaLLM).
 	if err := agent.With(compactor.New(
-		compactor.NewHeadTail(cfg.HistoryHead, cfg.HistoryTail),
+		compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{
+			compactor.ClearToolResults(5),
+			compactor.TruncateMessages(8000),
+			compactor.SummarizeTurns(cfg.LLM, cfg.KeepTurns),
+			compactor.DropTurns(max(cfg.KeepTurns/2, 1), true),
+		}}),
 		// MaxTokens here would be a prompt-size target; cfg.MaxTokens is the
 		// run's cumulative spend cap (see limiter above), so leave it unset.
 		compactor.Budget{},

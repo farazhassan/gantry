@@ -77,6 +77,23 @@ func TestSlidingCompactorConformance(t *testing.T) {
 	})
 }
 
+func TestPolicyStepsConformance(t *testing.T) {
+	for name, factory := range map[string]func() compactor.Compactor{
+		"clear_tool_results": func() compactor.Compactor { return compactor.ClearToolResults(1) },
+		"truncate_messages":  func() compactor.Compactor { return compactor.TruncateMessages(1) },
+		"drop_turns":         func() compactor.Compactor { return compactor.DropTurns(1, false) },
+		"summarize_turns": func() compactor.Compactor {
+			return compactor.SummarizeTurns(eval.NewMockLLMClient(gantry.LLMResponse{Content: "s"}), 1)
+		},
+		"policy": func() compactor.Compactor {
+			return compactor.NewPolicy(compactor.Policy{TriggerTokens: 2, TargetTokens: 1,
+				Steps: []compactor.Compactor{compactor.DropTurns(1, false)}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) { conformance.CompactorSuite(t, factory) })
+	}
+}
+
 func TestBudgetLimiterConformance(t *testing.T) {
 	conformance.LimiterSuite(t, func() limiter.Limiter {
 		return limiter.NewBudget(limiter.Limits{MaxTokens: 100})

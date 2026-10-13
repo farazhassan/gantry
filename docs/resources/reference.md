@@ -33,7 +33,7 @@ you need.
 | **critic** | Self-reviews the last response (pass / reject) | `critic.New(c)` | `NewLLM(client, rubric)` |
 | **guardrail** | Validates inputs (pre-LLM) and outputs (post-LLM) | `guardrail.New(g)` | `NewRegex(pattern, direction)` |
 | **limiter** | Caps tokens, cost, and iterations; stops the run when exceeded | `limiter.New(l)` | `NewBudget(Limits{...})` |
-| **compactor** | Trims history before the LLM call; on a context-overflow error compacts once more (forced) and retries. `EstimatePromptTokens(state, budget)` gives the provider-measured prompt size plus an estimate for newer messages | `compactor.New(c, budget)` | `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
+| **compactor** | Trims history before the LLM call; on a context-overflow error compacts once more (forced) and retries. `EstimatePromptTokens(state, budget)` gives the provider-measured prompt size plus an estimate for newer messages | `compactor.New(c, budget)` | `NewPolicy(p)` with steps `ClearToolResults(keepResults)` · `TruncateMessages(maxTokens)` · `SummarizeTurns(client, keepTurns)` · `DropTurns(keepTurns, pinFirst)`; `NewSlidingWindow(n)` · `NewHeadTail(head, tail)` · `NewSummarizing(client, head, tail)` |
 | **humanloop** | Pauses for human approval before tool execution | `humanloop.New(h)` | `NewAutoApprover()` · `NewAutoDenier(reason)` |
 | **checkpointer** | Saves & restores state by id for resume / replay; optionally saves mid-run too (see `extraPhases`) | `checkpointer.New(c, id, extraPhases...)` | — |
 | **checkpointer/mem** | `checkpointer.Checkpointer` and `checkpointer.Lease` backed by in-memory stores (tests, examples) | `mem.New()` · `mem.NewLease()` | `NewStore()` |
@@ -66,6 +66,28 @@ built-in backend; `sqlitevec` is a durable one. Verify a backend with
 - `State.ContextUsage` anchors the last provider-measured prompt size (`Usage.InputTokens`, which includes cached tokens on every adapter) to the transcript.
 - `gantry.ErrContextLengthExceeded` — the provider rejected the prompt as longer than the model's context window. Adapters return a `*gantry.ContextLengthError` (with `Limit`/`Requested` when the provider reports them) that matches it via `errors.Is`. The compactor component recovers by compacting and retrying once.
 - `a.OnContextOverflow(h)` — registers the agent's single `ContextOverflowHandler`, which the compactor component installs. On an overflow error it may shrink the state and ask for one retry; the core loop then re-runs the whole `PhaseLLMCall` middleware chain, so guardrails and the limiter check the shrunk input. A `StopReasonContextWindow` response that contains tool calls (the window filled mid tool call) is treated as an overflow, so the possibly cut-off calls never run.
+
+### Compaction policies
+
+`compactor.NewPolicy` compacts only when it is needed, using the provider's numbers:
+
+```go
+a.With(compactor.New(compactor.NewPolicy(compactor.Policy{
+	// Trigger: 0.8, Target: 0.5 are the defaults (fractions of State.ContextWindow).
+	Steps: []compactor.Compactor{
+		compactor.ClearToolResults(5),     // old tool output beyond the newest 5 results → placeholder
+		compactor.TruncateMessages(8000),  // cap any single huge message
+		compactor.SummarizeTurns(llm, 4),  // oldest turns → one rolling summary
+		compactor.DropTurns(2, true),      // last resort; keeps the first turn
+	},
+}), compactor.Budget{}))
+```
+
+- **Trigger and target.** Nothing changes until the prompt (`State.ContextUsage` plus an estimate of newer messages) reaches `Trigger × ContextWindow`; then steps run in order until the messages fit `Target × ContextWindow` minus System and Tools. The gap means compaction runs rarely, so the provider's prompt cache keeps its prefix in between. Without a known window, `TriggerTokens`/`TargetTokens` apply; with neither, the policy compacts only when the provider rejects a prompt (`ErrContextLengthExceeded`), toward the reported limit.
+- **Calibration.** The bytes/4 estimate is scaled by the ratio of measured to estimated prompt tokens (clamped to 0.5–2×), so steps cut in provider tokens.
+- **Turn-aware steps.** A turn is a user message plus the assistant and tool messages after it. Steps remove whole turns or rewrite message content, so a tool call is never separated from its result; any `Compactor` can be a step, and tool results orphaned by one are dropped, as are tool calls it left without a result.
+- **Report.** `State.Meta[compactor.MetaLastCompaction]` holds a `*compactor.Report` (before/after/target tokens, forced, each step that ran, and the `Usage` its summarizer calls spent) for the latest compaction.
+- **Usage accounting.** Tokens spent by summarizer calls (`SummarizeTurns`, `Summarizing`) are added to `State.Usage`, and the limiter records them at its next check, so they count toward its `MaxTokens` cap.
 
 ### Putting it together
 

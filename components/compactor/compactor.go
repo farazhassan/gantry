@@ -2,6 +2,20 @@
 // implementations for trimming/summarizing conversation history before
 // the LLM call.
 //
+// NewPolicy is the recommended Compactor: it compacts only once the
+// provider-measured prompt reaches a fraction of the context window
+// (Policy.Trigger) and then runs a ladder of turn-aware steps —
+// ClearToolResults, TruncateMessages, SummarizeTurns, DropTurns, or any
+// Compactor — until it is back under Policy.Target. SlidingWindow, HeadTail
+// and Summarizing are simple count-based strategies. A recommended ladder:
+//
+//	compactor.New(compactor.NewPolicy(compactor.Policy{Steps: []compactor.Compactor{
+//		compactor.ClearToolResults(5),    // old tool output beyond the newest 5 results → placeholder
+//		compactor.TruncateMessages(8000), // cap any single huge message
+//		compactor.SummarizeTurns(llm, 4), // oldest turns → one rolling summary
+//		compactor.DropTurns(2, true),     // last resort; keeps the first turn
+//	}}), compactor.Budget{})
+//
 // The New middleware also recovers from context overflow: when the LLM call
 // fails with gantry.ErrContextLengthExceeded it compacts once with
 // Budget.Force and retries the call exactly once.
@@ -42,11 +56,24 @@ type Compactor interface {
 // result against MaxTokens. Counter is the per-message token estimator; if
 // nil, a default (bytes/4 over content, tool calls and IDs, plus a
 // per-message overhead) is used.
+//
+// ContextWindow, PromptTokens and FixedTokens describe the request the
+// compacted Messages will be part of. The New middleware fills them from
+// State before every Compact call; they are zero when Compact is called
+// directly. ContextWindow is State.ContextWindow (0 = unknown). PromptTokens
+// is the whole prompt in provider tokens: the provider-measured size plus an
+// estimate of messages added since, scaled by the measured/estimated ratio. FixedTokens estimates the
+// part Compact cannot shrink: System, Tools and any messages held out of
+// Compact (the max-iterations wrap-up prompt and what follows it).
 type Budget struct {
 	MaxTokens int
 	SoftLimit int
 	Force     bool
 	Counter   func(gantry.Message) int
+
+	ContextWindow int
+	PromptTokens  int
+	FixedTokens   int
 }
 
 // perMessageOverhead approximates the role/framing tokens providers add to
