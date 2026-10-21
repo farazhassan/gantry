@@ -1,6 +1,9 @@
 package gantry
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors returned by middleware and inspected by the loop and by
 // downstream code via errors.Is / errors.As.
@@ -31,7 +34,44 @@ var (
 	// earlier failure in the same dispatch batch set BatchFailureMode to a
 	// stopping mode (see components/tool.Policy).
 	ErrToolSkipped = errors.New("gantry: tool call skipped due to policy")
+	// ErrContextLengthExceeded is matched (via errors.Is) by every
+	// *ContextLengthError an LLM adapter returns when the provider rejects a
+	// request because the prompt exceeds the model's context window.
+	ErrContextLengthExceeded = errors.New("gantry: context length exceeded")
 )
+
+// ContextLengthError is returned by LLM adapters when the provider rejects a
+// request because the prompt exceeds the model's context window. Limit and
+// Requested are 0 when the provider's error does not report them. It matches
+// ErrContextLengthExceeded via errors.Is and unwraps to the provider error.
+//
+// Limit is whatever limit the provider reported, and its meaning varies:
+// Anthropic reports the input-only maximum, while OpenAI and OpenRouter report
+// the total window including output tokens. Consumers should leave a margin
+// rather than treat Limit as an exact prompt budget.
+type ContextLengthError struct {
+	Limit     int   // the provider-reported limit, if any (see above for what it covers)
+	Requested int   // the provider-reported size of the request, if any (may include output)
+	Err       error // the underlying provider error
+}
+
+func (e *ContextLengthError) Error() string {
+	// Zero means "not reported", so only reported values are printed.
+	switch {
+	case e.Limit > 0 && e.Requested > 0:
+		return fmt.Sprintf("%s (requested %d, limit %d): %v", ErrContextLengthExceeded, e.Requested, e.Limit, e.Err)
+	case e.Limit > 0:
+		return fmt.Sprintf("%s (limit %d): %v", ErrContextLengthExceeded, e.Limit, e.Err)
+	case e.Requested > 0:
+		return fmt.Sprintf("%s (requested %d): %v", ErrContextLengthExceeded, e.Requested, e.Err)
+	}
+	return fmt.Sprintf("%s: %v", ErrContextLengthExceeded, e.Err)
+}
+
+func (e *ContextLengthError) Unwrap() error { return e.Err }
+
+// Is reports whether target is ErrContextLengthExceeded.
+func (e *ContextLengthError) Is(target error) bool { return target == ErrContextLengthExceeded }
 
 // DoneReason describes why the agent loop terminated.
 //

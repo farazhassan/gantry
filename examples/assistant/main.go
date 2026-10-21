@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 
 	"github.com/farazhassan/gantry/components/ask"
 	"github.com/farazhassan/gantry/components/checkpointer/file"
@@ -39,6 +40,7 @@ func run() error {
 	var (
 		model     = flag.String("model", envOr("ASSISTANT_MODEL", "llama3.1"), "ollama model name")
 		ollamaURL = flag.String("ollama-url", os.Getenv("OLLAMA_URL"), "ollama base URL (empty = ollama default)")
+		numCtx    = flag.Int("num-ctx", envInt("ASSISTANT_NUM_CTX", 8192), "ollama context window (num_ctx) in tokens; drives history compaction")
 		sessionID = flag.String("session", "default", "session id (conversation to resume)")
 		stateDir  = flag.String("state-dir", defaultStateDir(), "directory for persisted sessions")
 		fsRoot    = flag.String("fs-root", mustCwd(), "directory the filesystem server may access")
@@ -74,7 +76,7 @@ func run() error {
 
 	// Agent.
 	agent, err := buildAgent(buildConfig{
-		LLM:          newOllamaLLM(*model, *ollamaURL),
+		LLM:          newOllamaLLM(*model, *ollamaURL, *numCtx),
 		Tools:        allTools,
 		Confirmer:    newCLIConfirmer(stdin, os.Stdout),
 		SystemPrompt: defaultPersona,
@@ -112,6 +114,13 @@ func armSignalInterrupt(cancel context.CancelFunc) func() {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
 	}
 	return def
 }

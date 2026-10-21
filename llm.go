@@ -8,6 +8,16 @@ type LLMClient interface {
 	Generate(ctx context.Context, req LLMRequest) (LLMResponse, error)
 }
 
+// ContextWindowReporter is optionally implemented by LLMClient adapters that
+// can discover the model's context window (maximum prompt tokens), typically
+// from the provider's models endpoint. Implementations should cache the
+// result: the agent asks once per run, and one client is shared across
+// concurrent runs, so ContextWindow and its cache must be safe for
+// concurrent use.
+type ContextWindowReporter interface {
+	ContextWindow(ctx context.Context) (int, error)
+}
+
 // LLMRequest carries a normalized prompt to the LLM.
 type LLMRequest struct {
 	System      string
@@ -78,4 +88,12 @@ const (
 	StopReasonEnd       StopReason = "end_turn"
 	StopReasonToolUse   StopReason = "tool_use"
 	StopReasonMaxTokens StopReason = "max_tokens"
+	// StopReasonContextWindow means generation stopped because the model's
+	// context window filled up (prompt + output), as opposed to the
+	// requested output cap (StopReasonMaxTokens). Anthropic reports it as
+	// model_context_window_exceeded. Without tool calls the loop treats it
+	// like any other non-tool stop. With tool calls their input may be cut
+	// off, so DefaultLLMCallHandler never runs them and returns a
+	// *ContextLengthError instead (see ContextOverflowHandler).
+	StopReasonContextWindow StopReason = "context_window"
 )

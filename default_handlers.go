@@ -2,6 +2,8 @@ package gantry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -37,13 +39,44 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			Temperature: temperatureFrom(ctx),
 		}
 		genCtx, gen := startGeneration(ctx, req)
-		resp, err := invokeLLM(genCtx, client, state, req)
+		var streamed bool
+		resp, err := invokeLLM(genCtx, client, state, req, &streamed)
+		if err == nil && resp.StopReason == StopReasonContextWindow && len(resp.ToolCalls) > 0 {
+			// The window filled mid tool call, so its input may be cut off:
+			// never run it. Report an overflow instead, so a
+			// ContextOverflowHandler can shrink the prompt and retry — unless
+			// text or reasoning was already streamed, since a retry would
+			// append a second answer after the abandoned one. The tokens were
+			// still spent.
+			state.Usage = state.Usage.Add(resp.Usage)
+			if resp.Usage.InputTokens > 0 {
+				// The request's prompt was still measured: anchor it so the
+				// overflow handler can size its target from it.
+				state.ContextUsage = ContextUsage{PromptTokens: resp.Usage.InputTokens, MessageCount: len(req.Messages)}
+			}
+			cause := errors.New("context window filled during a tool call")
+			if streamed {
+				cause = fmt.Errorf("context window filled during a tool call: %w", errOutputStreamed)
+			}
+			err = &ContextLengthError{Err: cause}
+		}
 		gen.end(resp, err)
 		if err != nil {
 			return err
 		}
 		state.LastResponse = &resp
 		state.Usage = state.Usage.Add(resp.Usage)
+		if resp.Usage.InputTokens > 0 {
+			// Only the prompt is anchored: OutputTokens can include hidden
+			// reasoning that is never replayed, so the reply is estimated from
+			// its visible content instead (see ContextUsage).
+			state.ContextUsage = ContextUsage{
+				PromptTokens: resp.Usage.InputTokens,
+				MessageCount: len(req.Messages),
+			}
+		} else {
+			state.ContextUsage = ContextUsage{}
+		}
 		return nil
 	}
 }
@@ -56,10 +89,13 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 // terminal metadata-only chunk (empty TextDelta/ReasoningDelta/RawFrame)
 // emits nothing, but a chunk carrying more than one field emits more than one
 // event.
-func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest) (LLMResponse, error) {
+func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest, streamed *bool) (LLMResponse, error) {
 	if _, ok := SinkFrom(ctx); ok {
 		if sc, ok := client.(StreamingLLMClient); ok {
 			return sc.GenerateStream(ctx, req, func(ch StreamChunk) error {
+				if ch.TextDelta != "" || ch.ReasoningDelta != "" {
+					*streamed = true
+				}
 				if ch.TextDelta != "" {
 					if err := emit(ctx, Event{
 						Type:      EventTextDelta,

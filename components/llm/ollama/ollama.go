@@ -26,10 +26,12 @@ type Client struct {
 	model   string
 	baseURL string
 	think   *bool
+	numCtx  int
 	httpc   *http.Client
 }
 
 var _ gantry.StreamingLLMClient = (*Client)(nil)
+var _ gantry.ContextWindowReporter = (*Client)(nil)
 
 // Option configures a Client at construction.
 type Option func(*Client)
@@ -77,6 +79,37 @@ func WithHTTPClient(h *http.Client) Option {
 // provider default apply.
 func WithThinking(enabled bool) Option {
 	return func(c *Client) { c.think = &enabled }
+}
+
+// WithNumCtx sets Ollama's num_ctx option — the context window the server
+// actually allocates for this model — on every request, and makes
+// ContextWindow report it. Ollama silently truncates prompts longer than
+// num_ctx instead of returning an error, so set this whenever compaction
+// should know the real limit. n <= 0 leaves Ollama's default (and the window
+// unknown).
+//
+// Changing num_ctx from the value the loaded model was started with makes
+// Ollama reload the model, so keep it constant across requests and clients
+// that share a server.
+func WithNumCtx(n int) Option {
+	return func(c *Client) {
+		if n > 0 {
+			c.numCtx = n
+		}
+	}
+}
+
+// ContextWindow reports the num_ctx configured with WithNumCtx. Without it
+// the effective window is Ollama's server default, which this client cannot
+// see, so it returns (0, nil): unknown, not an error.
+// The model's maximum from /api/show is deliberately not used: Ollama's
+// default num_ctx is far smaller, so reporting the maximum would overstate
+// the room available.
+func (c *Client) ContextWindow(ctx context.Context) (int, error) {
+	if c.numCtx <= 0 {
+		return 0, nil
+	}
+	return c.numCtx, nil
 }
 
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
@@ -175,7 +208,7 @@ func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (
 	if err := validateToolChoice(req.ToolChoice); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.think))
+	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.think, c.numCtx))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: encode request: %w", err)
 	}

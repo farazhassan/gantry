@@ -41,6 +41,8 @@ func (c *component) Install(a *gantry.Agent) error {
 				}
 				// Prepend history to the user input seeded by DefaultStartHandler.
 				s.Messages = append(hist, s.Messages...)
+				// Prepending shifts every index, invalidating the anchor.
+				s.ContextUsage = gantry.ContextUsage{}
 			}
 			return next(ctx, s)
 		}

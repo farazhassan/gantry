@@ -61,3 +61,23 @@ type rewriteCritic struct{ newOutput string }
 func (r rewriteCritic) Critique(ctx context.Context, s *gantry.State) (critic.Verdict, error) {
 	return critic.Verdict{Accept: true, ModifyOutput: r.newOutput}, nil
 }
+
+func TestWithCriticModifyOutputResetsContextUsage(t *testing.T) {
+	mainLLM := eval.NewMockLLMClient(gantry.LLMResponse{
+		Content:    "raw",
+		StopReason: gantry.StopReasonEnd,
+		Usage:      gantry.Usage{InputTokens: 500},
+	})
+	a, _ := gantry.NewAgent(gantry.WithLLM(mainLLM))
+	if err := a.With(critic.New(rewriteCritic{newOutput: "polished"})); err != nil {
+		t.Fatalf("install critic: %v", err)
+	}
+
+	state, err := a.Run(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state.ContextUsage != (gantry.ContextUsage{}) {
+		t.Errorf("ContextUsage = %+v, want zero after the critic rewrote the output", state.ContextUsage)
+	}
+}

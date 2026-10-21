@@ -51,6 +51,9 @@ func (comp *component) Install(a *gantry.Agent) error {
 				s.LastResponse.Content = v.ModifyOutput
 				if last := lastAssistantIndex(s.Messages); last >= 0 {
 					s.Messages[last].Content = v.ModifyOutput
+					// In-place rewrite: the measured prompt size no longer
+					// describes this transcript.
+					s.ContextUsage = gantry.ContextUsage{}
 				}
 				if s.Done {
 					s.FinalOutput = v.ModifyOutput

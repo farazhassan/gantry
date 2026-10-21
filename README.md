@@ -216,6 +216,22 @@ The core loop and component contracts are in place; planned built-ins, adapters,
 and capabilities — grouped by milestone — live in **[docs/resources/roadmap.md](docs/resources/roadmap.md)**.
 Contributions toward any of them are especially welcome.
 
+## Built with Gantry
+
+Projects and websites running on Gantry:
+
+<!-- Add your site: copy a line below, swap in your name and URL, and open a PR. -->
+[![Clariyo](https://img.shields.io/badge/Clariyo-agents-00ADD8)](https://clariyo.ai)
+
+Using Gantry in production? Open a PR adding a badge for your site above, and
+feel free to show it off on your own project with:
+
+[![Built with Gantry](https://img.shields.io/badge/built%20with-Gantry-00ADD8)](https://github.com/farazhassan/gantry)
+
+```markdown
+[![Built with Gantry](https://img.shields.io/badge/built%20with-Gantry-00ADD8)](https://github.com/farazhassan/gantry)
+```
+
 ## Contributing
 
 Contributions are welcome — bug fixes, new components, LLM adapters, examples, and

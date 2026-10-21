@@ -30,6 +30,10 @@ Flags (all optional):
 
 - `--model` (env `ASSISTANT_MODEL`, default `llama3.1`) — Ollama model.
 - `--ollama-url` (env `OLLAMA_URL`) — Ollama endpoint; empty uses the default.
+- `--num-ctx` (env `ASSISTANT_NUM_CTX`, default `8192`) — Ollama context
+  window (`num_ctx`). History is compacted at 80% of it; Ollama itself
+  silently truncates longer prompts, so set it to what your model and memory
+  allow.
 - `--session` (default `default`) — conversation id to resume.
 - `--state-dir` (default `~/.config/gantry-assistant/sessions`) — where
   conversations are persisted.

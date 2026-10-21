@@ -50,7 +50,10 @@ func (a *Agent) Resume(ctx context.Context, prior *State) (*State, error) {
 // an independent slice and the new user message is appended; because
 // DefaultStartHandler no-ops on a non-empty transcript, this is the single
 // source of the new user message (no double-seed). Usage is carried so the
-// session accumulates cumulative tokens/cost. Meta is shallow-copied into a new
+// session accumulates cumulative tokens/cost. ContextWindow is carried only
+// as a fallback (the run's client lookup takes precedence), and the
+// ContextUsage anchor is carried too: appending the new user message keeps
+// the anchor valid. Meta is shallow-copied into a new
 // map. All per-run scratch is left zero-valued.
 func newStateFrom(prior *State, input string) *State {
 	msgs := make([]Message, len(prior.Messages))
@@ -68,6 +71,9 @@ func newStateFrom(prior *State, input string) *State {
 		Usage:    prior.Usage,
 		Meta:     meta,
 		Trace:    NewTrace(),
+
+		ContextWindow: prior.ContextWindow,
+		ContextUsage:  prior.ContextUsage,
 	}
 }
 
