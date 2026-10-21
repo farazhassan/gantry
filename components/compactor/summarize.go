@@ -53,7 +53,7 @@ func (s *Summarizing) Compact(ctx context.Context, msgs []gantry.Message, b Budg
 	var b2 strings.Builder
 	b2.WriteString("Summarize the following messages concisely, preserving key facts and decisions.\n\n")
 	for _, m := range middle {
-		b2.WriteString(string(m.Role))
+		b2.WriteString(promptRole(m))
 		b2.WriteString(": ")
 		b2.WriteString(m.Content)
 		b2.WriteString("\n")
@@ -76,4 +76,15 @@ func (s *Summarizing) Compact(ctx context.Context, msgs []gantry.Message, b Budg
 	out = append(out, summary)
 	out = append(out, tailSlice...)
 	return out, nil
+}
+
+// promptRole labels m in a summarization prompt. A failed tool result is
+// labelled "tool (error)": the prompt flattens messages to text, so
+// Message.IsError would otherwise be lost and the summarizer could not tell
+// a failure from a successful result with the same content.
+func promptRole(m gantry.Message) string {
+	if m.Role == gantry.RoleTool && m.IsError {
+		return "tool (error)"
+	}
+	return string(m.Role)
 }
