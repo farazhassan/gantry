@@ -139,6 +139,9 @@ func TestDefaultObserveHandlerFoldsResults(t *testing.T) {
 	if state.Messages[1].Content != "result-b" {
 		t.Errorf("messages[1].Content = %q", state.Messages[1].Content)
 	}
+	if state.Messages[0].IsError || !state.Messages[1].IsError {
+		t.Errorf("IsError not carried over: messages = %+v", state.Messages)
+	}
 	if len(state.ToolResults) != 0 {
 		t.Errorf("ToolResults should be cleared after folding; got %+v", state.ToolResults)
 	}

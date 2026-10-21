@@ -455,8 +455,8 @@ func TestPolicyStopWaitInFlightSkipsQueuedCalls(t *testing.T) {
 			okResult = m.Content
 		}
 	}
-	if okResult != gantry.ErrToolSkipped.Error() {
-		t.Errorf("call %q result = %q, want skipped (%q)", "ok", okResult, gantry.ErrToolSkipped.Error())
+	if okResult != tool.SkippedContent {
+		t.Errorf("call %q result = %q, want skipped (%q)", "ok", okResult, tool.SkippedContent)
 	}
 }
 
@@ -875,7 +875,7 @@ func TestDispatchEmitsLiveResultEventForSkippedCall(t *testing.T) {
 	var sawSkippedLive bool
 	if _, err := a.RunStream(context.Background(), "go", func(ev gantry.Event) error {
 		if ev.Type == gantry.EventToolResultLive && ev.ToolResult != nil && ev.ToolResult.CallID == "ok" {
-			if ev.ToolResult.IsError && ev.ToolResult.Content == gantry.ErrToolSkipped.Error() {
+			if ev.ToolResult.IsError && ev.ToolResult.Content == tool.SkippedContent {
 				sawSkippedLive = true
 			}
 		}
@@ -1084,7 +1084,7 @@ func TestDispatchLiveResultEventCoversAbandonedQueuedCalls(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(call.ID, "ok") {
-			if !ev.ToolResult.IsError || ev.ToolResult.Content != gantry.ErrToolSkipped.Error() {
+			if !ev.ToolResult.IsError || ev.ToolResult.Content != tool.SkippedContent {
 				t.Errorf("abandoned call %q live result = %+v, want the ErrToolSkipped placeholder", call.ID, ev.ToolResult)
 			}
 		}

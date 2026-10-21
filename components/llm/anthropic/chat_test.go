@@ -216,7 +216,7 @@ func TestGenerateForwardsToolCallsAndMergesToolResults(t *testing.T) {
 				{ID: "toolu_2", Name: "get_time", Input: json.RawMessage(`{"tz":"PT"}`)},
 			}},
 			{Role: gantry.RoleTool, ToolCallID: "toolu_1", Content: "72F"},
-			{Role: gantry.RoleTool, ToolCallID: "toolu_2", Content: "10am"},
+			{Role: gantry.RoleTool, ToolCallID: "toolu_2", Content: "tz not found", IsError: true},
 		},
 	})
 	if err != nil {
@@ -245,6 +245,13 @@ func TestGenerateForwardsToolCallsAndMergesToolResults(t *testing.T) {
 	res0, _ := mergedBlocks[0].(map[string]any)
 	if res0["type"] != "tool_result" || res0["tool_use_id"] != "toolu_1" || res0["content"] != "72F" {
 		t.Errorf("tool_result 0 = %v, want tool_use_id=toolu_1 content=72F", res0)
+	}
+	if _, ok := res0["is_error"]; ok {
+		t.Errorf("tool_result 0 = %v, want no is_error on a successful result", res0)
+	}
+	res1, _ := mergedBlocks[1].(map[string]any)
+	if res1["is_error"] != true || res1["content"] != "tz not found" {
+		t.Errorf("tool_result 1 = %v, want is_error=true content unprefixed", res1)
 	}
 }
 
