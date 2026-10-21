@@ -2,6 +2,7 @@ package compactor_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/farazhassan/gantry"
@@ -90,5 +91,27 @@ func TestSummarizingPassThroughReturnsIndependentCopy(t *testing.T) {
 	got[0].Content = "MUTATED"
 	if msgs[0].Content != "a" {
 		t.Errorf("pass-through aliased input: msgs[0] = %q, want \"a\"", msgs[0].Content)
+	}
+}
+
+func TestSummarizingPromptMarksFailedToolResults(t *testing.T) {
+	mock := eval.NewMockLLMClient(gantry.LLMResponse{Content: "SUMMARY", StopReason: gantry.StopReasonEnd})
+	c := compactor.NewSummarizing(mock, 1, 1)
+
+	msgs := []gantry.Message{
+		{Role: gantry.RoleSystem, Content: "head"},
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "72F"},
+		{Role: gantry.RoleTool, ToolCallID: "c2", Content: "city not found", IsError: true},
+		{Role: gantry.RoleUser, Content: "tail"},
+	}
+	if _, err := c.Compact(context.Background(), msgs, compactor.Budget{MaxTokens: 1, SoftLimit: 1}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	p := mock.Requests()[0].Messages[0].Content
+	if !strings.Contains(p, "tool: 72F\n") {
+		t.Errorf("successful result not rendered plainly; prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "tool (error): city not found\n") {
+		t.Errorf("failed result not marked as an error; prompt:\n%s", p)
 	}
 }

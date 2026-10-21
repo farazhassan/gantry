@@ -183,7 +183,7 @@ func summaryPrompt(msgs []gantry.Message) (prompt string, complete bool) {
 			line.WriteString("previous summary: ")
 			line.WriteString(strings.TrimPrefix(m.Content, summaryPrefix))
 		} else {
-			line.WriteString(string(m.Role))
+			line.WriteString(promptRole(m))
 			line.WriteString(": ")
 			line.WriteString(m.Content)
 			for _, tc := range m.ToolCalls {

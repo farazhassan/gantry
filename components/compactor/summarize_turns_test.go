@@ -2,6 +2,7 @@ package compactor_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -294,5 +295,33 @@ func TestSummarizeTurnsSkipsWhenRequestCannotFitWindow(t *testing.T) {
 	got, _ := compactor.SummarizeTurns(mock, 1, compactor.WithSummaryMaxTokens(100)).Compact(context.Background(), msgs, b)
 	if len(got) != 3 || len(mock.Requests()) != 0 {
 		t.Errorf("got %d msgs and %d LLM calls; want input unchanged and no call", len(got), len(mock.Requests()))
+	}
+}
+
+func TestSummarizeTurnsPromptMarksFailedToolResults(t *testing.T) {
+	mock := eval.NewMockLLMClient(reply("S"))
+	msgs := []gantry.Message{
+		user("q1" + xs(40)),
+		{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{
+			{ID: "c1", Name: "weather", Input: json.RawMessage(`{}`)},
+			{ID: "c2", Name: "weather", Input: json.RawMessage(`{}`)},
+		}},
+		{Role: gantry.RoleTool, ToolCallID: "c1", Content: "72F"},
+		{Role: gantry.RoleTool, ToolCallID: "c2", Content: "city not found", IsError: true},
+		assistant("r1" + xs(40)),
+		user("q2"), assistant("r2"),
+	}
+	if _, err := compactor.SummarizeTurns(mock, 1).Compact(context.Background(), msgs, lenBudget); err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.Requests()) == 0 {
+		t.Fatal("summarizer was not called")
+	}
+	p := mock.Requests()[0].Messages[0].Content
+	if !strings.Contains(p, "tool: 72F\n") {
+		t.Errorf("successful result not rendered plainly; prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "tool (error): city not found\n") {
+		t.Errorf("failed result not marked as an error; prompt:\n%s", p)
 	}
 }
