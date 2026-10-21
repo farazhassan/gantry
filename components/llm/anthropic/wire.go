@@ -54,6 +54,7 @@ type reqBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 type reqTool struct {
@@ -153,7 +154,7 @@ func toMessages(in []gantry.Message) []reqMessage {
 	for _, m := range in {
 		switch m.Role {
 		case gantry.RoleTool:
-			block := reqBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}
+			block := reqBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content, IsError: m.IsError}
 			if lastToolResult {
 				out[len(out)-1].Content = append(out[len(out)-1].Content, block)
 			} else {

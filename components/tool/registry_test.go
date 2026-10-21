@@ -89,3 +89,29 @@ func TestRegistryInvokePreservesToolSentinel(t *testing.T) {
 		t.Errorf("err should also wrap the tool's own ErrToolAuth; got %v", err)
 	}
 }
+
+type plainFailingTool struct{}
+
+func (plainFailingTool) Definition() gantry.ToolDef {
+	return gantry.ToolDef{Name: "plain_failing", Description: "always fails", Schema: json.RawMessage(`{}`)}
+}
+
+func (plainFailingTool) Invoke(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("city not found")
+}
+
+func TestRegistryInvokeErrorMessageIsToolsOwn(t *testing.T) {
+	r := tool.NewRegistry()
+	r.Add(plainFailingTool{})
+	_, err := r.Invoke(context.Background(), gantry.ToolCall{Name: "plain_failing", Input: json.RawMessage(`{}`)})
+	if !errors.Is(err, gantry.ErrToolExecution) {
+		t.Errorf("err should wrap ErrToolExecution; got %v", err)
+	}
+	if err == nil || err.Error() != "city not found" {
+		t.Errorf("err.Error() = %q, want the tool's own message with no gantry prefix", err)
+	}
+	_, err = r.Invoke(context.Background(), gantry.ToolCall{Name: "ghost", Input: json.RawMessage(`{}`)})
+	if err == nil || err.Error() != `unknown tool "ghost"` {
+		t.Errorf("unknown tool err.Error() = %q, want %q", err, `unknown tool "ghost"`)
+	}
+}

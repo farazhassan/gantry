@@ -223,3 +223,39 @@ func TestGeneratePropagatesContextCancellation(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+func TestGeneratePrefixesFailedToolResults(t *testing.T) {
+	var gotBody map[string]any
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`)
+	})
+
+	_, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{
+			{Role: gantry.RoleUser, Content: "weather?"},
+			{Role: gantry.RoleAssistant, ToolCalls: []gantry.ToolCall{
+				{ID: "call_1", Name: "get_weather", Input: json.RawMessage(`{}`)},
+				{ID: "call_2", Name: "get_weather", Input: json.RawMessage(`{}`)},
+			}},
+			{Role: gantry.RoleTool, ToolCallID: "call_1", Content: "72F"},
+			{Role: gantry.RoleTool, ToolCallID: "call_2", Content: "city not found", IsError: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	msgs, _ := gotBody["messages"].([]any)
+	if len(msgs) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(msgs))
+	}
+	ok, _ := msgs[2].(map[string]any)
+	if ok["content"] != "72F" {
+		t.Errorf("successful tool message content = %v, want 72F", ok["content"])
+	}
+	failed, _ := msgs[3].(map[string]any)
+	if failed["content"] != "Error: city not found" {
+		t.Errorf("failed tool message content = %v, want %q", failed["content"], "Error: city not found")
+	}
+}

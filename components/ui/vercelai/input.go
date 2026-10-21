@@ -233,7 +233,7 @@ func toolCallAndResult(p Part) (gantry.ToolCall, *gantry.Message, error) {
 	case stateOutputAvailable:
 		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: decodeToolOutput(p.Output)}, nil
 	case stateOutputError:
-		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: p.ErrorText}, nil
+		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: p.ErrorText, IsError: true}, nil
 	case stateOutputDenied:
 		return call, &gantry.Message{Role: gantry.RoleTool, ToolCallID: p.ToolCallID, Content: "tool call denied by user"}, nil
 	default:

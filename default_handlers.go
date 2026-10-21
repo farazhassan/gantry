@@ -157,6 +157,7 @@ func DefaultObserveHandler(ctx context.Context, state *State) error {
 			Role:       RoleTool,
 			Content:    r.Content,
 			ToolCallID: r.CallID,
+			IsError:    r.IsError,
 		})
 	}
 	state.ToolResults = state.ToolResults[:0]

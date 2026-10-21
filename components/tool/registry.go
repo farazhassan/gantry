@@ -57,16 +57,25 @@ func (r *Registry) Definitions() []gantry.ToolDef {
 	return out
 }
 
-// Invoke runs the tool referenced by the call. Errors are wrapped with
-// gantry.ErrToolExecution.
+// Invoke runs the tool referenced by the call. Errors match
+// gantry.ErrToolExecution (and the tool's own error) via errors.Is/As, but
+// their message is the tool's own: it becomes the tool result content the
+// model sees, so it carries no "gantry: tool execution error" prefix.
 func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMessage, error) {
 	t, ok := r.Lookup(call.Name)
 	if !ok {
-		return nil, fmt.Errorf("%w: unknown tool %q", gantry.ErrToolExecution, call.Name)
+		return nil, execError{fmt.Errorf("unknown tool %q", call.Name)}
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
-		return out, fmt.Errorf("%w: %w", gantry.ErrToolExecution, err)
+		return out, execError{err}
 	}
 	return out, nil
 }
+
+// execError marks err as a gantry.ErrToolExecution without adding that
+// sentinel's text to the message.
+type execError struct{ err error }
+
+func (e execError) Error() string   { return e.err.Error() }
+func (e execError) Unwrap() []error { return []error{gantry.ErrToolExecution, e.err} }

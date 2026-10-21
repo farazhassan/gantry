@@ -87,6 +87,10 @@ func toChatRequest(model string, req gantry.LLMRequest, stream bool, think *bool
 		cm := chatMessage{Role: string(m.Role), Content: m.Content}
 		if m.Role == gantry.RoleTool {
 			cm.ToolName = m.Name
+			if m.IsError {
+				// No native tool-error flag on this wire format.
+				cm.Content = "Error: " + m.Content
+			}
 		}
 		for _, tc := range m.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, wireToolCall{

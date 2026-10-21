@@ -17,6 +17,11 @@ const (
 	dispatchName     = "components/tool:dispatch"
 )
 
+// SkippedContent is the tool result content the model sees for a call that
+// never ran because of the dispatch Policy. The result's Err is
+// gantry.ErrToolSkipped.
+const SkippedContent = "tool call skipped due to policy"
+
 type registryComponent struct {
 	reg    *Registry
 	policy Policy
@@ -158,7 +163,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 				// tool_result correspondence sent back to the LLM.
 				results[i] = gantry.ToolResult{
 					CallID:  call.ID,
-					Content: gantry.ErrToolSkipped.Error(),
+					Content: SkippedContent,
 					IsError: true,
 					Err:     gantry.ErrToolSkipped,
 				}
@@ -167,7 +172,7 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 					if aborted.Load() {
 						results[i] = gantry.ToolResult{
 							CallID:  call.ID,
-							Content: gantry.ErrToolSkipped.Error(),
+							Content: SkippedContent,
 							IsError: true,
 							Err:     gantry.ErrToolSkipped,
 						}
