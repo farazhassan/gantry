@@ -43,6 +43,10 @@ const (
 // Disposition = HarnessStop for that batch, regardless of the configured
 // Policy: retrying or continuing past a persistent failure is assumed
 // pointless.
+//
+// A call rejected for invalid arguments (gantry.ErrToolInvalidArgs — see
+// ValidateArgs) never ran, so the Policy ignores it: it is always fed back to
+// the LLM and never stops the batch or the run.
 type Policy struct {
 	// Parallelism caps how many tool calls run concurrently. <= 0 means
 	// full parallelism (every pending call runs at once), matching
