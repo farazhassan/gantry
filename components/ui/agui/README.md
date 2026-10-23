@@ -116,7 +116,8 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
   ones.
 - v1 honors `messages` and, when `tool.DynamicClient` is installed, `tools` —
   see "Frontend actions" above. Client-supplied `state` is still accepted in
-  the body but ignored.
+  the body but ignored; shared state flows agent-to-client only (see "Shared
+  state" below).
 
 ### AG-UI event coverage
 
@@ -133,8 +134,10 @@ rather than actually finishing), `CUSTOM` (gantry-specific: `gantry.usage`,
 adapter's `StreamChunk.ReasoningDelta` — see `anthropic.WithExtendedThinking`,
 `openai.WithReasoningEffort`, `ollama.WithThinking`, and
 `openrouter.WithReasoningEffort`), `RAW` (provider frames this package
-doesn't otherwise model), and `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
-(`components/planner`'s `update_plan` plan-step progress). The AG-UI spec's
+doesn't otherwise model), `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA`
+(`components/planner`'s `update_plan` plan-step progress), and
+`STATE_SNAPSHOT` (agent-published shared state — see "Shared state" below).
+The AG-UI spec's
 optional `subagentRunId` attribution field (the RunID of the nested run that
 produced an event) is stamped on every event type above except the three
 top-level lifecycle events (`RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`), which
@@ -145,9 +148,9 @@ the event, not when the AG-UI frame was written to the wire. It's left empty
 for an event whose `gantry.Event.Timestamp` is unset (only possible if that
 event bypassed Gantry's `emit()`, e.g. one constructed directly in a test).
 
-Not implemented, deliberately: `STATE_SNAPSHOT`/`STATE_DELTA`/
-`MESSAGES_SNAPSHOT` (no v1 synchronizable agent state — see "Request notes"
-above), the `*_CHUNK` convenience events (redundant with the explicit
+Not implemented, deliberately: `STATE_DELTA` (state is always sent as a
+whole snapshot), client-to-agent state (see "Request notes" above),
+`MESSAGES_SNAPSHOT`, the `*_CHUNK` convenience events (redundant with the explicit
 Start/Content/End sequence this package always emits),
 `REASONING_ENCRYPTED_VALUE` (no adapter round-trips thinking
 signatures/encrypted blocks back to the provider yet), `SUBAGENT_STARTED`'s
@@ -166,6 +169,34 @@ trip (gantry mints a fresh RunID on every `Agent.Resume` call today).
   `RUN_ERROR` frame, since the `200` status is already committed. The error is
   also logged server-side (see `WithLogger`); a panic's recovered value/stack
   go only to that log, never to the client (see `WithErrorMapper`).
+
+## Shared state
+
+An agent publishes shared state with `gantry.SetState`. Call it from a tool or
+a middleware; it's a no-op when nothing is streaming:
+
+```go
+if err := gantry.SetState(ctx, map[string]any{
+	"suggestions": []map[string]string{{"title": "By channel", "prompt": "Break it down by channel"}},
+}); err != nil {
+	return err
+}
+```
+
+The mapper streams it as `{"type":"STATE_SNAPSHOT","snapshot":{...}}`, which
+AG-UI clients expose as agent state (for example assistant-ui's
+`useAgUiState()`). Each call sends the **whole** state and replaces the last
+one; there is no `STATE_DELTA`. A `nil` snapshot is sent as `{}`.
+
+- **Top-level run only.** State belongs to the AG-UI thread, so a nested
+  sub-agent run's `SetState` (even with `subagent.WithEventPassthrough`) is
+  dropped by the mapper.
+- **Reset per run (opt-in).** AG-UI clients keep the last snapshot across
+  runs. Pass `agui.WithRunStateReset()` to `NewSink`/`NewMapper` to emit
+  `STATE_SNAPSHOT {}` right after `RUN_STARTED`, so a run that never calls
+  `SetState` clears the previous run's state. It's off by default; `Handler`
+  doesn't expose it.
+- `components/ui/vercelai` ignores state events.
 
 ## Options
 
@@ -194,6 +225,9 @@ If you have your own HTTP stack, skip the handler and use the sink directly:
 ```go
 sink := agui.NewSink(w, threadID, runID) // w is any io.Writer
 agent.RunFromStream(ctx, prior, input, sink.Sink())
+
+// Optional: clear the client's shared state at the start of every run.
+sink = agui.NewSink(w, threadID, runID, agui.WithRunStateReset())
 ```
 
 Handler's idle keep-alive is built on `sink.Heartbeat()`, which writes a bare
