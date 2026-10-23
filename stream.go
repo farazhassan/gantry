@@ -105,7 +105,9 @@ type Event struct {
 	// SetState). It is the whole state, replacing any earlier snapshot, and
 	// must be JSON-serializable: components/ui/agui forwards it to the
 	// client verbatim. It may be read asynchronously by a buffered sink, so
-	// don't mutate it after the call that published it.
+	// don't mutate it after the call that published it. A typed-nil value
+	// (e.g. a nil map) still serialises as "state":null in this core Event
+	// JSON; the AG-UI mapper sends it as {}.
 	State any `json:"state,omitempty"`
 
 	DoneReason  DoneReason `json:"done_reason,omitempty"`

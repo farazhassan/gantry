@@ -223,11 +223,10 @@ http.Handle("/agui", agui.Handler(agent,
 If you have your own HTTP stack, skip the handler and use the sink directly:
 
 ```go
-sink := agui.NewSink(w, threadID, runID) // w is any io.Writer
+// w is any io.Writer. WithRunStateReset is optional: it clears the client's
+// shared state at the start of every run.
+sink := agui.NewSink(w, threadID, runID, agui.WithRunStateReset())
 agent.RunFromStream(ctx, prior, input, sink.Sink())
-
-// Optional: clear the client's shared state at the start of every run.
-sink = agui.NewSink(w, threadID, runID, agui.WithRunStateReset())
 ```
 
 Handler's idle keep-alive is built on `sink.Heartbeat()`, which writes a bare
