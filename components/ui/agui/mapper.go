@@ -94,7 +94,7 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // identity (RunID/Agent/ParentToolCallID/...) to every translated event
 // except the three lifecycle events, and unconditionally prepends any
 // metadata-like CUSTOM events (events_dropped, usage) the event carries —
-// these, like RAW and ACTIVITY_*, are allowed to interleave inside an open
+// these, like RAW, ACTIVITY_* and STATE_SNAPSHOT, are allowed to interleave inside an open
 // text/reasoning message; AG-UI's message framing is keyed by messageId, so
 // an unrelated CUSTOM/RAW/ACTIVITY event between a message's Start and End
 // is valid. Only EventTextDelta and EventReasoningDelta close the OTHER
@@ -109,6 +109,9 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // client never sees the same tool call's result delivered twice — once in
 // real time as the call resolves, and again when its whole PhaseToolExec
 // batch finishes.
+//
+// EventStateChanged (gantry.SetState) maps to STATE_SNAPSHOT only for the
+// top-level run; a nested run's is dropped (see the case below).
 //
 // EventDone is translated based on whether it came from the top-level run
 // or a nested one: a done event with empty ParentRunID/ParentToolCallID is
@@ -171,6 +174,16 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 	case gantry.EventPlanStepChanged:
 		if ev.PlanStep != nil {
 			out = append(out, m.activityChange(ev.RunID, *ev.PlanStep, id)...)
+		}
+
+	case gantry.EventStateChanged:
+		// Shared state belongs to the AG-UI thread, which only the
+		// top-level run owns: a nested sub-agent run's state_changed
+		// (parent link set — the same test subagentStartFrame and the
+		// EventDone case use) is dropped instead of overwriting the
+		// thread's state with a sub-agent's private snapshot.
+		if ev.ParentRunID == "" && ev.ParentToolCallID == "" {
+			out = append(out, newStateSnapshot(ev.State).withIdentity(id))
 		}
 
 	case gantry.EventToolCall:

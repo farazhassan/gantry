@@ -881,3 +881,93 @@ func TestMapperActivityDoesNotCloseOpenText(t *testing.T) {
 		}
 	}
 }
+
+func TestMapperStateChangedMapsToStateSnapshot(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	m.started = true
+	snap := map[string]any{"suggestions": []any{map[string]any{"title": "By channel", "prompt": "Break it down by channel"}}}
+
+	got := m.Map(gantry.Event{Type: gantry.EventStateChanged, RunID: "run-1", Agent: "orchestrator", State: snap})
+	want := []Event{newStateSnapshot(snap).withIdentity(identity{RunID: "run-1", Agent: "orchestrator"})}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMapperStateChangedNilStateMapsToEmptySnapshot(t *testing.T) {
+	cases := []struct {
+		name  string
+		state any
+	}{
+		{"untyped_nil", nil},
+		{"typed_nil_map", map[string]any(nil)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMapper("t1", "r1")
+			m.started = true
+
+			got := m.Map(gantry.Event{Type: gantry.EventStateChanged, RunID: "run-1", State: tc.state})
+			want := []Event{newStateSnapshot(map[string]any{}).withIdentity(identity{RunID: "run-1"})}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got  %#v\nwant %#v", got, want)
+			}
+		})
+	}
+}
+
+// TestMapperStateChangedFromSubagentIsDropped: state belongs to the AG-UI
+// thread, which only the top-level run owns, so a nested run's
+// state_changed (either parent-link field set) must not reach the client —
+// and must not disturb the root run's later snapshots.
+func TestMapperStateChangedFromSubagentIsDropped(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   gantry.Event
+	}{
+		{"parent_run_and_call", gantry.Event{RunID: "run-child", ParentRunID: "run-1", ParentToolCallID: "call-1"}},
+		{"parent_run_only", gantry.Event{RunID: "run-child", ParentRunID: "run-1"}},
+		{"parent_call_only", gantry.Event{RunID: "run-child", ParentToolCallID: "call-1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMapper("t1", "r1")
+			m.started = true
+			ev := tc.ev
+			ev.Type = gantry.EventStateChanged
+			ev.State = map[string]any{"owner": "child"}
+
+			for _, out := range m.Map(ev) {
+				if _, ok := out.(StateSnapshot); ok {
+					t.Fatalf("sub-agent state_changed produced STATE_SNAPSHOT: %#v", out)
+				}
+			}
+
+			root := map[string]any{"owner": "root"}
+			got := m.Map(gantry.Event{Type: gantry.EventStateChanged, RunID: "run-1", State: root})
+			want := []Event{newStateSnapshot(root).withIdentity(identity{RunID: "run-1"})}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("root after sub-agent: got  %#v\nwant %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestMapperStateSnapshotDoesNotCloseOpenText(t *testing.T) {
+	// State, like activity and the gantry.* CUSTOM events, is metadata-like:
+	// it must not force-close an in-progress text or reasoning message.
+	m := NewMapper("t1", "r1")
+	m.started = true
+
+	_ = m.Map(gantry.Event{Type: gantry.EventTextDelta, TextDelta: "hi", RunID: "run-1"}) // opens run-1:msg:1
+	got := m.Map(gantry.Event{Type: gantry.EventStateChanged, RunID: "run-1", State: map[string]any{}})
+	for _, ev := range got {
+		switch ev.(type) {
+		case TextMessageEnd, ReasoningMessageEnd, ReasoningEnd:
+			t.Fatalf("state event closed an open text/reasoning message: %#v", got)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %#v, want exactly one STATE_SNAPSHOT", got)
+	}
+}
