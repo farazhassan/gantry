@@ -112,11 +112,8 @@ func Definition(opts ...Option) gantry.ToolDef {
 // an error, which the tool middleware surfaces to the LLM as an error result
 // (the run continues); the Prompter is not called in that case.
 func (t *Tool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
-	var req Request
-	if err := json.Unmarshal(input, &req); err != nil {
-		return nil, fmt.Errorf("ask: invalid input: %w", err)
-	}
-	if err := validate(req); err != nil {
+	req, err := parse(input)
+	if err != nil {
 		return nil, err
 	}
 	resp, err := t.p.Prompt(ctx, req)
@@ -128,6 +125,41 @@ func (t *Tool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessa
 		return nil, fmt.Errorf("ask: marshal response: %w", err)
 	}
 	return out, nil
+}
+
+// Validate checks raw ask_user arguments against the tool's schema rules —
+// parseable JSON, 1-4 questions, each with a header of at most 12 characters
+// and non-empty text, 2-4 options when present, and options whenever
+// multiSelect is set — without prompting anyone. The returned error matches
+// gantry.ErrToolInvalidArgs and its message is what the model sees.
+//
+// Invoke applies it before calling the Prompter. For ask_user declared as a
+// client tool (Definition with tool.Client or tool.DynamicClient), install
+// ClientValidation so the same rules run before the call reaches the client.
+func Validate(input json.RawMessage) error {
+	_, err := parse(input)
+	return err
+}
+
+// ClientValidation returns a Component that applies Validate to client-side
+// ask_user calls (see tool.ClientArgsValidator) so a call the client could
+// not render — e.g. a 13-character header — goes back to the model as an
+// error result instead of suspending the run. WithName applies, mirroring
+// Definition; install it alongside tool.Client(Definition(opts...)) or
+// tool.DynamicClient().
+func ClientValidation(opts ...Option) gantry.Component {
+	return tool.ClientArgsValidator(Definition(opts...).Name, Validate)
+}
+
+func parse(input json.RawMessage) (Request, error) {
+	var req Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return Request{}, tool.InvalidArgsError(fmt.Errorf("ask: invalid input: %w", err))
+	}
+	if err := validate(req); err != nil {
+		return Request{}, tool.InvalidArgsError(err)
+	}
+	return req, nil
 }
 
 func validate(req Request) error {

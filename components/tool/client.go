@@ -12,6 +12,7 @@ const (
 	advertiseClientName        = "components/tool:client_advertise"
 	dynamicClientAdvertiseName = "components/tool:dynamic_client_advertise"
 	suspendName                = "components/tool:client_suspend"
+	clientValidateJSONName     = "components/tool:client_validate_json"
 
 	// clientToolsMetaKey carries the set of client-side tool names from
 	// whichever PhaseStart middleware advertised them (Client's or
@@ -183,6 +184,20 @@ func SuspendClientCalls() gantry.Component {
 type suspendComponent struct{}
 
 func (suspendComponent) Install(a *gantry.Agent) error {
+	// PhaseToolExec: reject client calls whose arguments are not valid JSON
+	// (see ValidateArgs) before they can reach the suspend below. The client
+	// would receive a call it cannot parse and the run would end on it;
+	// instead the model gets an error result and another turn to fix the
+	// arguments. If every client call in the turn is rejected, the run
+	// simply continues. ClientArgsValidator adds per-tool checks on top.
+	if err := a.UseNamed(gantry.PhaseToolExec, clientValidateJSONName, func(next gantry.Handler) gantry.Handler {
+		return func(ctx context.Context, s *gantry.State) error {
+			rejectClientCalls(s, func(cl gantry.ToolCall) error { return ValidateArgs(cl.Input) })
+			return next(ctx, s)
+		}
+	}); err != nil {
+		return err
+	}
 	return a.UseNamed(gantry.PhaseObserve, suspendName, func(next gantry.Handler) gantry.Handler {
 		return func(ctx context.Context, s *gantry.State) error {
 			set := clientToolSet(s)

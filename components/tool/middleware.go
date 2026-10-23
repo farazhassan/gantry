@@ -188,6 +188,13 @@ func (c *registryComponent) Install(a *gantry.Agent) error {
 							Err:     err,
 						}
 						emitLive(ctx, results[i])
+						// Rejected arguments are the model's mistake to
+						// fix on its next turn, not a tool failure: the
+						// tool never ran, so the batch Policy does not
+						// apply and the error is always fed back.
+						if errors.Is(err, gantry.ErrToolInvalidArgs) {
+							return nil
+						}
 						onFailure, disposition := c.policy.OnFailure, c.policy.Disposition
 						if errors.Is(err, gantry.ErrToolAuth) || errors.Is(err, gantry.ErrToolPersistent) {
 							onFailure, disposition = StopCancelInFlight, HarnessStop

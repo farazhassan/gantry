@@ -34,6 +34,12 @@ var (
 	// earlier failure in the same dispatch batch set BatchFailureMode to a
 	// stopping mode (see components/tool.Policy).
 	ErrToolSkipped = errors.New("gantry: tool call skipped due to policy")
+	// ErrToolInvalidArgs is recorded on a tool call whose arguments were
+	// rejected before the tool ran: not valid JSON, or (for a client tool
+	// with a registered validator) not acceptable to that validator. The
+	// call becomes an error result the model sees on its next turn, so it
+	// can correct the arguments — see components/tool.ValidateArgs.
+	ErrToolInvalidArgs = errors.New("gantry: invalid tool arguments")
 	// ErrContextLengthExceeded is matched (via errors.Is) by every
 	// *ContextLengthError an LLM adapter returns when the provider rejects a
 	// request because the prompt exceeds the model's context window.

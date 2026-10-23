@@ -61,10 +61,16 @@ func (r *Registry) Definitions() []gantry.ToolDef {
 // gantry.ErrToolExecution (and the tool's own error) via errors.Is/As, but
 // their message is the tool's own: it becomes the tool result content the
 // model sees, so it carries no "gantry: tool execution error" prefix.
+//
+// Arguments that are not valid JSON (see ValidateArgs) are rejected without
+// invoking the tool; that error also matches gantry.ErrToolInvalidArgs.
 func (r *Registry) Invoke(ctx context.Context, call gantry.ToolCall) (json.RawMessage, error) {
 	t, ok := r.Lookup(call.Name)
 	if !ok {
 		return nil, execError{fmt.Errorf("unknown tool %q", call.Name)}
+	}
+	if err := ValidateArgs(call.Input); err != nil {
+		return nil, execError{err}
 	}
 	out, err := t.Invoke(ctx, call.Input)
 	if err != nil {
