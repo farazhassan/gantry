@@ -971,3 +971,39 @@ func TestMapperStateSnapshotDoesNotCloseOpenText(t *testing.T) {
 		t.Fatalf("got %#v, want exactly one STATE_SNAPSHOT", got)
 	}
 }
+
+func TestMapperRunStateResetEmitsEmptySnapshotAfterRunStarted(t *testing.T) {
+	m := NewMapper("t1", "r1", WithRunStateReset())
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart, RunID: "run-1"})
+	want := []Event{
+		newRunStarted("t1", "r1"),
+		newStateSnapshot(map[string]any{}),
+		newStepStarted("start").withIdentity(identity{RunID: "run-1"}),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+	// Like RUN_STARTED, the reset is emitted only once per Mapper.
+	got2 := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseStart, RunID: "run-1"})
+	want2 := []Event{newStepFinished("start").withIdentity(identity{RunID: "run-1"})}
+	if !reflect.DeepEqual(got2, want2) {
+		t.Fatalf("got  %#v\nwant %#v", got2, want2)
+	}
+}
+
+func TestMapperWithoutRunStateResetEmitsNoSnapshot(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	got := m.Map(gantry.Event{Type: gantry.EventPhaseStart, Phase: gantry.PhaseStart, RunID: "run-1"})
+	for _, ev := range got {
+		if _, ok := ev.(StateSnapshot); ok {
+			t.Fatalf("got a STATE_SNAPSHOT without WithRunStateReset: %#v", got)
+		}
+	}
+}
+
+func TestMapperNilMapperOptionIsSkipped(t *testing.T) {
+	m := NewMapper("t1", "r1", nil)
+	if got := m.Map(gantry.Event{Type: gantry.EventDone}); len(got) != 2 {
+		t.Fatalf("got %#v, want RUN_STARTED + RUN_FINISHED", got)
+	}
+}

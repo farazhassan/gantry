@@ -43,13 +43,17 @@ type Mapper struct {
 	// lazy-once pattern for RUN_STARTED, but keyed per-RunID since a Mapper
 	// sees many nested runs over its lifetime.
 	subagentStarted map[string]bool
+
+	// resetState makes startFrame follow RUN_STARTED with STATE_SNAPSHOT {}
+	// — see WithRunStateReset.
+	resetState bool
 }
 
 // NewMapper returns a Mapper for a single AG-UI thread identified by
 // threadID/runID (the AG-UI-level ids — a different id space from any
-// Gantry-level Event.RunID).
-func NewMapper(threadID, runID string) *Mapper {
-	return &Mapper{
+// Gantry-level Event.RunID), configured by opts (see WithRunStateReset).
+func NewMapper(threadID, runID string, opts ...MapperOption) *Mapper {
+	m := &Mapper{
 		threadID:        threadID,
 		runID:           runID,
 		openMsg:         map[string]string{},
@@ -60,6 +64,12 @@ func NewMapper(threadID, runID string) *Mapper {
 		subagentStarted: map[string]bool{},
 		liveResultSeen:  map[string]bool{},
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	return m
 }
 
 // subagentErrorReasons are the DoneReasons that classify a nested run's
@@ -280,13 +290,19 @@ func (m *Mapper) usageDelta(ev gantry.Event, id identity) []Event {
 // startFrame returns a RUN_STARTED event the first time it is called, marking
 // the run started; later calls return nil. Map uses it lazily, and the Sink
 // uses it so a RUN_ERROR emitted before any Gantry event is still preceded by
-// RUN_STARTED.
+// RUN_STARTED. With WithRunStateReset, RUN_STARTED is followed by
+// STATE_SNAPSHOT {} (no identity: no Gantry event produced it) on both
+// paths.
 func (m *Mapper) startFrame() []Event {
 	if m.started {
 		return nil
 	}
 	m.started = true
-	return []Event{newRunStarted(m.threadID, m.runID)}
+	out := []Event{newRunStarted(m.threadID, m.runID)}
+	if m.resetState {
+		out = append(out, newStateSnapshot(map[string]any{}))
+	}
+	return out
 }
 
 // subagentStartFrame returns a SUBAGENT_STARTED event the first time Map

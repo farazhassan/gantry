@@ -28,8 +28,9 @@ type Sink struct {
 }
 
 // NewSink returns a Sink writing to w for the run identified by threadID/runID.
-func NewSink(w io.Writer, threadID, runID string) *Sink {
-	return &Sink{w: w, mapper: NewMapper(threadID, runID)}
+// opts configure the underlying Mapper (see NewMapper, WithRunStateReset).
+func NewSink(w io.Writer, threadID, runID string, opts ...MapperOption) *Sink {
+	return &Sink{w: w, mapper: NewMapper(threadID, runID, opts...)}
 }
 
 // SetFlusher registers a callback invoked once per Gantry event, after that
