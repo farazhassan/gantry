@@ -111,9 +111,10 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // EventReasoningDelta close the OTHER kind's still-open message (with
 // TEXT_MESSAGE_END / REASONING_MESSAGE_END + REASONING_END) before opening
 // their own — text and reasoning are mutually exclusive per run, so a client
-// never sees interleaved content within a single message — and EventToolCall/EventToolResult/EventToolResultLive/
-// EventPhaseStart/EventPhaseEnd/EventDone close both, since those events
-// represent gantry moving past whatever the model was saying/thinking.
+// never sees interleaved content within a single message — and
+// EventToolCall/EventToolResult/EventToolResultLive/EventPhaseStart/
+// EventPhaseEnd/EventDone close both, since those events represent gantry
+// moving past whatever the model was saying/thinking.
 // EventToolResultLive additionally suppresses the later EventToolResult for
 // the same call (see toolResultMsgID and the liveResultSeen field) so a
 // client never sees the same tool call's result delivered twice — once in
