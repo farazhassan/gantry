@@ -937,10 +937,15 @@ func TestMapperStateChangedFromSubagentIsDropped(t *testing.T) {
 			ev.Type = gantry.EventStateChanged
 			ev.State = map[string]any{"owner": "child"}
 
-			for _, out := range m.Map(ev) {
-				if _, ok := out.(StateSnapshot); ok {
-					t.Fatalf("sub-agent state_changed produced STATE_SNAPSHOT: %#v", out)
-				}
+			// Any parent link makes this run's first event fire
+			// subagentStartFrame, so the output is exactly its
+			// SUBAGENT_STARTED and nothing else (no STATE_SNAPSHOT).
+			out := m.Map(ev)
+			if len(out) != 1 {
+				t.Fatalf("sub-agent state_changed produced %d events %#v, want exactly SUBAGENT_STARTED", len(out), out)
+			}
+			if _, ok := out[0].(SubagentStarted); !ok {
+				t.Fatalf("sub-agent state_changed produced %#v, want SubagentStarted", out[0])
 			}
 
 			root := map[string]any{"owner": "root"}

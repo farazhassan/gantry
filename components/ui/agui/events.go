@@ -632,7 +632,8 @@ func (e StateSnapshot) withTimestamp(ts int64) Event {
 // AG-UI clients replace their state with the snapshot value, and {} is the
 // unambiguous "no state" a client can safely read fields from. Typed nils
 // (a nil map, slice or pointer in a non-nil interface) are nil too: they
-// would marshal to null just the same.
+// would marshal to null just the same. So a nil map/slice/pointer means
+// "clear" and is sent as {}.
 func newStateSnapshot(snapshot any) StateSnapshot {
 	if isNilValue(snapshot) {
 		snapshot = map[string]any{}
@@ -640,14 +641,16 @@ func newStateSnapshot(snapshot any) StateSnapshot {
 	return StateSnapshot{Type: typeStateSnapshot, Snapshot: snapshot}
 }
 
-// isNilValue reports whether v is an untyped nil or a nil map, slice,
-// pointer, interface, func or chan held in a non-nil interface.
+// isNilValue reports whether v is an untyped nil or a nil map, slice or
+// pointer held in a non-nil interface — the kinds encoding/json marshals
+// as null. (Func and chan values can't be marshaled at all, and a nil
+// interface never survives reflect.ValueOf on an any.)
 func isNilValue(v any) bool {
 	if v == nil {
 		return true
 	}
 	switch rv := reflect.ValueOf(v); rv.Kind() {
-	case reflect.Map, reflect.Slice, reflect.Pointer, reflect.Interface, reflect.Func, reflect.Chan:
+	case reflect.Map, reflect.Slice, reflect.Pointer:
 		return rv.IsNil()
 	}
 	return false
