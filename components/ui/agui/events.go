@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 // Event is one AG-UI protocol event. Concrete types marshal to the exact AG-UI
@@ -78,6 +79,8 @@ const (
 
 	typeActivitySnapshot = "ACTIVITY_SNAPSHOT"
 	typeActivityDelta    = "ACTIVITY_DELTA"
+
+	typeStateSnapshot = "STATE_SNAPSHOT"
 
 	typeSubagentStarted  = "SUBAGENT_STARTED"
 	typeSubagentFinished = "SUBAGENT_FINISHED"
@@ -598,6 +601,59 @@ func (e ActivityDelta) withTimestamp(ts int64) Event {
 }
 func newActivityDelta(msgID string, patch []jsonPatchOp) ActivityDelta {
 	return ActivityDelta{Type: typeActivityDelta, MessageID: msgID, ActivityType: activityStepType, Patch: patch}
+}
+
+// --- State ---
+
+// StateSnapshot is the AG-UI STATE_SNAPSHOT event: the agent's complete
+// shared state for this thread, replacing whatever the client held before.
+// Gantry produces it from gantry.SetState (see Mapper's EventStateChanged
+// handling) and, with WithRunStateReset, as an empty reset right after
+// RUN_STARTED. STATE_DELTA is not implemented; state is always sent whole.
+type StateSnapshot struct {
+	Type      string `json:"type"`
+	Snapshot  any    `json:"snapshot"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+	identity
+}
+
+func (e StateSnapshot) eventType() string { return e.Type }
+func (e StateSnapshot) withIdentity(id identity) Event {
+	e.identity = id
+	return e
+}
+func (e StateSnapshot) withTimestamp(ts int64) Event {
+	e.Timestamp = ts
+	return e
+}
+
+// newStateSnapshot returns a STATE_SNAPSHOT for snapshot. A nil snapshot
+// becomes an empty object, so the wire never carries "snapshot":null —
+// AG-UI clients replace their state with the snapshot value, and {} is the
+// unambiguous "no state" a client can safely read fields from. Typed nils
+// (a nil map, slice or pointer in a non-nil interface) are nil too: they
+// would marshal to null just the same. So a nil map/slice/pointer means
+// "clear" and is sent as {}.
+func newStateSnapshot(snapshot any) StateSnapshot {
+	if isNilValue(snapshot) {
+		snapshot = map[string]any{}
+	}
+	return StateSnapshot{Type: typeStateSnapshot, Snapshot: snapshot}
+}
+
+// isNilValue reports whether v is an untyped nil or a nil map, slice or
+// pointer held in a non-nil interface — the kinds encoding/json marshals
+// as null. (Func and chan values can't be marshaled at all, and a nil
+// interface never survives reflect.ValueOf on an any.)
+func isNilValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Pointer:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // --- Subagent lifecycle ---

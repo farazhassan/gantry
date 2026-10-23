@@ -244,3 +244,21 @@ func TestSinkConcurrentEventsDoNotRace(t *testing.T) {
 		t.Fatal("expected SSE frames written, buffer is empty")
 	}
 }
+
+// TestSinkRunStateResetPrecedesRunError proves NewSink forwards
+// MapperOptions and that the reset rides on startFrame, so even a run that
+// fails before any gantry event clears the client's state.
+func TestSinkRunStateResetPrecedesRunError(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSink(&buf, "t1", "r1", WithRunStateReset())
+	if err := s.EmitError(errors.New("boom")); err != nil {
+		t.Fatalf("EmitError: %v", err)
+	}
+	want := regexp.MustCompile(`^` +
+		`data: \{"type":"RUN_STARTED","threadId":"t1","runId":"r1",` + tsPattern + `\}\n\n` +
+		`data: \{"type":"STATE_SNAPSHOT","snapshot":\{\},` + tsPattern + `\}\n\n` +
+		`data: \{"type":"RUN_ERROR","message":"boom",` + tsPattern + `\}\n\n$`)
+	if !want.MatchString(buf.String()) {
+		t.Fatalf("got  %q\nwant match for %s", buf.String(), want)
+	}
+}

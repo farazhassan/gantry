@@ -96,6 +96,10 @@ func (m *Mapper) Map(ev gantry.Event) []Chunk {
 			out = append(out, m.activityChange(*ev.PlanStep)...)
 		}
 
+	case gantry.EventStateChanged:
+		// Deliberately untranslated: the UI Message Stream protocol has no
+		// shared-state concept (agui maps this to STATE_SNAPSHOT instead).
+
 	case gantry.EventToolCall:
 		out = append(out, m.closeText()...)
 		out = append(out, m.closeReasoning()...)

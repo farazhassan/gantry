@@ -13,8 +13,9 @@ import (
 // RunAgentInput is the AG-UI request body POSTed to the handler. Messages
 // (the replayed thread) and Tools (client-declared tools, e.g. a CopilotKit
 // frontend action registered via useCopilotAction) are honored. State is
-// accepted but ignored — client-supplied state sync ("shared state") is a
-// separate, unimplemented feature; see doc.go.
+// accepted but ignored: client-to-agent state is not implemented. Shared
+// state flows agent-to-client only, via gantry.SetState → STATE_SNAPSHOT;
+// see doc.go.
 type RunAgentInput struct {
 	ThreadID string          `json:"threadId"`
 	RunID    string          `json:"runId"`

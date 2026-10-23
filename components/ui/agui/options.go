@@ -62,3 +62,20 @@ func WithErrorMapper(f func(error) string) Option { return streamconfig.WithErro
 // exact origins to allow (scheme + host [+ port], no path) — every call
 // replaces the previous allow-list rather than adding to it.
 func WithAllowedOrigins(origins ...string) Option { return streamconfig.WithAllowedOrigins(origins...) }
+
+// MapperOption configures optional Mapper behavior, passed to NewMapper or
+// NewSink. It is separate from Option, which configures Handler's
+// HTTP-level plumbing and is shared with vercelai via streamconfig. Mapper
+// behavior is AG-UI-specific, and callers with their own HTTP stack build a
+// Sink directly. A nil MapperOption is skipped.
+type MapperOption func(*Mapper)
+
+// WithRunStateReset makes the Mapper emit STATE_SNAPSHOT {} immediately
+// after RUN_STARTED, so a run that never calls gantry.SetState clears the
+// client's state from the previous run instead of leaving it in place
+// (AG-UI clients keep the last snapshot across runs on a thread). Off by
+// default, so existing users see no new events. Handler does not expose
+// it; use NewSink with this option from your own HTTP stack.
+func WithRunStateReset() MapperOption {
+	return func(m *Mapper) { m.resetState = true }
+}

@@ -59,7 +59,12 @@ const (
 	// observational only) rather than aborting the run — see EventSink.
 	EventToolResultLive  EventType = "tool_result_live"
 	EventPlanStepChanged EventType = "plan_step_changed"
-	EventDone            EventType = "done"
+	// EventStateChanged carries an agent-published shared-state snapshot on
+	// Event.State — the whole state, not a delta. Emitted by SetState, not
+	// the core run loop. UI adapters decide what to do with it (see
+	// SetState).
+	EventStateChanged EventType = "state_changed"
+	EventDone         EventType = "done"
 )
 
 // Event is a single whole-run observation emitted by RunStream. It is
@@ -95,6 +100,15 @@ type Event struct {
 	// changed, for EventPlanStepChanged. Emitted by components/planner's
 	// update_plan interception (see components/planner/update_plan_component.go).
 	PlanStep *PlanStep `json:"plan_step,omitempty"`
+
+	// State carries the shared-state snapshot for EventStateChanged (see
+	// SetState). It is the whole state, replacing any earlier snapshot, and
+	// must be JSON-serializable: components/ui/agui forwards it to the
+	// client verbatim. It may be read asynchronously by a buffered sink, so
+	// don't mutate it after the call that published it. A typed-nil value
+	// (e.g. a nil map) still serialises as "state":null in this core Event
+	// JSON; the AG-UI mapper sends it as {}.
+	State any `json:"state,omitempty"`
 
 	DoneReason  DoneReason `json:"done_reason,omitempty"`
 	FinalOutput string     `json:"final_output,omitempty"`
@@ -221,6 +235,26 @@ func emit(ctx context.Context, ev Event) error {
 // when no sink is active.
 func Emit(ctx context.Context, ev Event) error {
 	return emit(ctx, ev)
+}
+
+// SetState publishes snapshot as the run's current shared state by emitting
+// an EventStateChanged carrying it through Emit, so the event gets the same
+// identity stamping as every other event (the route components/planner's
+// update_plan uses for EventPlanStepChanged). snapshot is the WHOLE state:
+// each call replaces the previous one, there are no deltas. It must be
+// JSON-serializable. Like Emit, SetState is a no-op when no sink is active;
+// otherwise it returns the sink's error. Iteration is left 0 on the emitted
+// event (Emit has no access to State).
+//
+// snapshot may be read asynchronously by a buffered sink; don't mutate it
+// after the call — pass a fresh value each time.
+//
+// What happens next is up to the UI adapter: components/ui/agui maps a
+// top-level run's snapshot to an AG-UI STATE_SNAPSHOT and drops a nested
+// sub-agent run's (state belongs to the client thread, not a sub-agent);
+// components/ui/vercelai ignores it.
+func SetState(ctx context.Context, snapshot any) error {
+	return Emit(ctx, Event{Type: EventStateChanged, State: snapshot})
 }
 
 // NewBufferedSink wraps sink so event production is decoupled from consumption:
