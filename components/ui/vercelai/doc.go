@@ -35,6 +35,8 @@
 //     "file" part inside a user message is a 400 (real content that would
 //     otherwise silently vanish); "source-url"/"source-document"/"data-*"/
 //     "step-start" parts are silently skipped.
+//   - Shared state. gantry.SetState's EventStateChanged has no UI Message
+//     Stream equivalent and is ignored (agui streams it as STATE_SNAPSHOT).
 //
 // Typical use:
 //

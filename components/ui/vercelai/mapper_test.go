@@ -273,3 +273,15 @@ func TestMapperDropsNestedSubAgentEvents(t *testing.T) {
 		t.Fatal("started = true, want false (no top-level event has been mapped yet)")
 	}
 }
+
+// TestMapperIgnoresStateChanged pins that agent-published shared state
+// (gantry.SetState) has no UI Message Stream translation: the protocol has
+// no shared-state concept, so the event produces no chunk at all.
+func TestMapperIgnoresStateChanged(t *testing.T) {
+	m := NewMapper("m1")
+	m.started = true
+	got := m.Map(gantry.Event{Type: gantry.EventStateChanged, State: map[string]any{"suggestions": []any{}}})
+	if got != nil {
+		t.Fatalf("got %#v, want nil (vercelai ignores state_changed)", got)
+	}
+}
