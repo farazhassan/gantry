@@ -104,7 +104,8 @@ type Event struct {
 	// State carries the shared-state snapshot for EventStateChanged (see
 	// SetState). It is the whole state, replacing any earlier snapshot, and
 	// must be JSON-serializable: components/ui/agui forwards it to the
-	// client verbatim.
+	// client verbatim. It may be read asynchronously by a buffered sink, so
+	// don't mutate it after the call that published it.
 	State any `json:"state,omitempty"`
 
 	DoneReason  DoneReason `json:"done_reason,omitempty"`
@@ -242,6 +243,9 @@ func Emit(ctx context.Context, ev Event) error {
 // JSON-serializable. Like Emit, SetState is a no-op when no sink is active;
 // otherwise it returns the sink's error. Iteration is left 0 on the emitted
 // event (Emit has no access to State).
+//
+// snapshot may be read asynchronously by a buffered sink; don't mutate it
+// after the call — pass a fresh value each time.
 //
 // What happens next is up to the UI adapter: components/ui/agui maps a
 // top-level run's snapshot to an AG-UI STATE_SNAPSHOT and drops a nested
