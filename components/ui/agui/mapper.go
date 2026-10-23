@@ -107,11 +107,11 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // these, like RAW, ACTIVITY_* and STATE_SNAPSHOT, are allowed to interleave
 // inside an open text/reasoning message; AG-UI's message framing is keyed by
 // messageId, so an unrelated CUSTOM/RAW/ACTIVITY/STATE event between a
-// message's Start and End is valid. Only EventTextDelta and EventReasoningDelta close the OTHER
-// kind's still-open message (with TEXT_MESSAGE_END / REASONING_MESSAGE_END +
-// REASONING_END) before opening their own — text and reasoning are mutually
-// exclusive per run, so a client never sees interleaved content within a
-// single message — and EventToolCall/EventToolResult/EventToolResultLive/
+// message's Start and End is valid. Only EventTextDelta and
+// EventReasoningDelta close the OTHER kind's still-open message (with
+// TEXT_MESSAGE_END / REASONING_MESSAGE_END + REASONING_END) before opening
+// their own — text and reasoning are mutually exclusive per run, so a client
+// never sees interleaved content within a single message — and EventToolCall/EventToolResult/EventToolResultLive/
 // EventPhaseStart/EventPhaseEnd/EventDone close both, since those events
 // represent gantry moving past whatever the model was saying/thinking.
 // EventToolResultLive additionally suppresses the later EventToolResult for

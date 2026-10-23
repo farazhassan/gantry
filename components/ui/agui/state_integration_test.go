@@ -18,7 +18,6 @@ import (
 type stateFrame struct {
 	Type     string         `json:"type"`
 	Snapshot map[string]any `json:"snapshot"`
-	RunID    string         `json:"runId"`
 }
 
 // setStateAtStart installs a PhaseStart middleware on a that publishes
