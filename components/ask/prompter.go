@@ -5,7 +5,7 @@ import "context"
 
 // Question is a single question posed to the human.
 type Question struct {
-	Header      string   `json:"header"`                // short label, <= 12 chars; identifies the answer
+	Header      string   `json:"header"`                // the question's title; identifies the answer
 	Text        string   `json:"text"`                  // the question text
 	Options     []string `json:"options,omitempty"`     // optional; 2-4 if present; empty => free-text answer
 	MultiSelect bool     `json:"multiSelect,omitempty"` // allow selecting multiple options

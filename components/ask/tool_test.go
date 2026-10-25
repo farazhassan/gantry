@@ -105,7 +105,6 @@ func TestInvokeValidationErrors(t *testing.T) {
 		"no questions":        `{"questions":[]}`,
 		"too many questions":  `{"questions":[{"header":"a","text":"t"},{"header":"b","text":"t"},{"header":"c","text":"t"},{"header":"d","text":"t"},{"header":"e","text":"t"}]}`,
 		"missing header":      `{"questions":[{"text":"t"}]}`,
-		"long header":         `{"questions":[{"header":"thisistoolong!","text":"t"}]}`,
 		"missing text":        `{"questions":[{"header":"h"}]}`,
 		"one option":          `{"questions":[{"header":"h","text":"t","options":["only"]}]}`,
 		"five options":        `{"questions":[{"header":"h","text":"t","options":["1","2","3","4","5"]}]}`,
