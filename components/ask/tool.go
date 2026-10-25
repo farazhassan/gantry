@@ -25,7 +25,7 @@ const schema = `{
       "items": {
         "type": "object",
         "properties": {
-          "header": {"type": "string", "minLength": 1, "maxLength": 12},
+          "header": {"type": "string", "minLength": 1},
           "text": {"type": "string", "minLength": 1},
           "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
           "multiSelect": {"type": "boolean"}
@@ -45,7 +45,8 @@ const schema = `{
 
 const description = "Ask the human operator one to four structured questions and return their answers. " +
 	"Provide 2-4 options for a multiple-choice question; omit options for a free-text answer; " +
-	"set multiSelect to allow choosing more than one option. Each question needs a short header (<=12 chars)."
+	"set multiSelect to allow choosing more than one option. " +
+	"Each question needs a header: the question's title, which also identifies its answer."
 
 // Tool is the ask_user tool. It implements tool.Tool.
 type Tool struct {
@@ -128,8 +129,8 @@ func (t *Tool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMessa
 }
 
 // Validate checks raw ask_user arguments against the tool's schema rules —
-// parseable JSON, 1-4 questions, each with a header of at most 12 characters
-// and non-empty text, 2-4 options when present, and options whenever
+// parseable JSON, 1-4 questions, each with a non-empty header and non-empty
+// text, 2-4 options when present, and options whenever
 // multiSelect is set — without prompting anyone. The returned error matches
 // gantry.ErrToolInvalidArgs and its message is what the model sees.
 //
@@ -143,10 +144,10 @@ func Validate(input json.RawMessage) error {
 
 // ClientValidation returns a Component that applies Validate to client-side
 // ask_user calls (see tool.ClientArgsValidator) so a call the client could
-// not render — e.g. a 13-character header — goes back to the model as an
-// error result instead of suspending the run. WithName applies, mirroring
-// Definition; install it alongside tool.Client(Definition(opts...)) or
-// tool.DynamicClient().
+// not render — e.g. a multiSelect question with no options — goes back to
+// the model as an error result instead of suspending the run. WithName
+// applies, mirroring Definition; install it alongside
+// tool.Client(Definition(opts...)) or tool.DynamicClient().
 func ClientValidation(opts ...Option) gantry.Component {
 	return tool.ClientArgsValidator(Definition(opts...).Name, Validate)
 }
@@ -172,8 +173,6 @@ func validate(req Request) error {
 		switch {
 		case q.Header == "":
 			return fmt.Errorf("ask: question %d: header is required", qi)
-		case len([]rune(q.Header)) > 12:
-			return fmt.Errorf("ask: question %d: header must be <= 12 chars", qi)
 		case q.Text == "":
 			return fmt.Errorf("ask: question %d: text is required", qi)
 		case len(q.Options) > 0 && (len(q.Options) < 2 || len(q.Options) > 4):

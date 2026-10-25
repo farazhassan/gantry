@@ -19,12 +19,20 @@ func TestValidateAcceptsValidRequest(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsLongHeader(t *testing.T) {
+	in := `{"questions":[{"header":"Which revenue number should I use for the comparison?","text":"Which?"}]}`
+	if err := ask.Validate(json.RawMessage(in)); err != nil {
+		t.Fatalf("Validate = %v, want nil", err)
+	}
+}
+
 func TestValidateRejectsWithInvalidArgsSentinel(t *testing.T) {
 	cases := map[string]string{
 		"empty":               ``,
 		"malformed json":      `{"questions":[{"header":"say "hi"","text":"t"}]}`,
 		"no questions":        `{"questions":[]}`,
-		"long header":         `{"questions":[{"header":"thisistoolong!","text":"t"}]}`,
+		"no header":           `{"questions":[{"header":"","text":"t"}]}`,
+		"no text":             `{"questions":[{"header":"h","text":""}]}`,
 		"multiselect no opts": `{"questions":[{"header":"h","text":"t","multiSelect":true}]}`,
 	}
 	for name, in := range cases {
@@ -38,7 +46,7 @@ func TestValidateRejectsWithInvalidArgsSentinel(t *testing.T) {
 }
 
 func TestInvokeErrorMatchesValidate(t *testing.T) {
-	in := json.RawMessage(`{"questions":[{"header":"thisistoolong!","text":"t"}]}`)
+	in := json.RawMessage(`{"questions":[{"header":"h","text":""}]}`)
 	_, invokeErr := ask.NewTool(ask.NewAuto(ask.Response{})).Invoke(context.Background(), in)
 	if invokeErr == nil || invokeErr.Error() != ask.Validate(in).Error() {
 		t.Fatalf("Invoke err = %v, want Validate's %v", invokeErr, ask.Validate(in))
@@ -46,13 +54,13 @@ func TestInvokeErrorMatchesValidate(t *testing.T) {
 }
 
 func TestClientValidationFeedsSchemaErrorsBack(t *testing.T) {
-	longHeader := `{"questions":[{"header":"thisistoolong!","text":"t"}]}`
+	noText := `{"questions":[{"header":"Scope","text":""}]}`
 	valid := `{"questions":[{"header":"Scope","text":"Which?"}]}`
 	for _, name := range []string{"ask_user", "clarify"} {
 		t.Run(name, func(t *testing.T) {
 			mock := eval.NewMockLLMClient(
 				gantry.LLMResponse{
-					ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: name, Input: json.RawMessage(longHeader)}},
+					ToolCalls:  []gantry.ToolCall{{ID: "q1", Name: name, Input: json.RawMessage(noText)}},
 					StopReason: gantry.StopReasonToolUse,
 				},
 				gantry.LLMResponse{
@@ -73,7 +81,7 @@ func TestClientValidationFeedsSchemaErrorsBack(t *testing.T) {
 			if state.DoneReason != gantry.DoneClientToolCall || len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ID != "q2" {
 				t.Fatalf("DoneReason=%q pending=%#v, want suspend on q2 only", state.DoneReason, state.PendingToolCalls)
 			}
-			want := ask.Validate(json.RawMessage(longHeader)).Error()
+			want := ask.Validate(json.RawMessage(noText)).Error()
 			for _, m := range state.Messages {
 				if m.Role == gantry.RoleTool && m.ToolCallID == "q1" {
 					if !m.IsError || m.Content != want {
