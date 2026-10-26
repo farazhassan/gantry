@@ -162,3 +162,84 @@ func TestPreviewSeveralKeepKeysNearHalfBudgetStillFit(t *testing.T) {
 		t.Errorf("preview %d chars valid=%v", len(p), json.Valid([]byte(p)))
 	}
 }
+
+func TestPreviewCapsKeysOfWideObject(t *testing.T) {
+	var kv []string
+	for i := 0; i < 2000; i++ {
+		kv = append(kv, fmt.Sprintf(`"k%d":%d`, i, i))
+	}
+	c := "{" + strings.Join(kv, ",") + "}"
+	root, _ := parseJSON([]byte(c))
+	p := buildPreview(root, c, "res_w", 1500, keepSet(DefaultKeepKeys))
+	var got map[string]any
+	if err := json.Unmarshal([]byte(p), &got); err != nil || len(p) > 1500 {
+		t.Fatalf("len %d err %v", len(p), err)
+	}
+	if _, ok := got["k0"]; !ok {
+		t.Errorf("no keys shown: %s", p)
+	}
+	if m, _ := got["_more"].(string); !strings.Contains(m, "more fields: read_result path=\"\" offset=") {
+		t.Errorf("no _more hint: %s", p)
+	}
+}
+
+func TestPreviewHugeKeyStaysInBudget(t *testing.T) {
+	c := `{"` + strings.Repeat("k", 3000) + `":[1,2,3,4,5]}`
+	root, _ := parseJSON([]byte(c))
+	p := buildPreview(root, c, "res_h", 1500, keepSet(DefaultKeepKeys))
+	if len(p) > 1500 || !json.Valid([]byte(p)) {
+		t.Errorf("len %d valid %v", len(p), json.Valid([]byte(p)))
+	}
+}
+
+func TestFitNeverExceedsBudget(t *testing.T) {
+	cases := []struct {
+		name, content, path string
+		budget              int
+	}{
+		{"long path", `[1,2,3,4,5]`, strings.Repeat("p", 2000), 800},
+		{"long number", "1" + strings.Repeat("0", 3000), "", 800},
+		{"control chars", `"` + strings.Repeat(`\u0001`, 300) + `"`, "", 800},
+	}
+	for _, c := range cases {
+		n, err := parseJSON([]byte(c.content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := previewer{budget: c.budget, keep: keepSet(DefaultKeepKeys)}.fit(n, c.path).String()
+		if len(out) > c.budget {
+			t.Errorf("%s: %d bytes", c.name, len(out))
+		}
+	}
+}
+
+func TestPreviewCutsLongNumbers(t *testing.T) {
+	c := "1" + strings.Repeat("0", 5000)
+	root, _ := parseJSON([]byte(c))
+	p := buildPreview(root, c, "res_n", 1500, keepSet(DefaultKeepKeys))
+	if len(p) > 1500 || !json.Valid([]byte(p)) {
+		t.Errorf("len %d", len(p))
+	}
+}
+
+func TestPreviewDropsRootOffloadedKey(t *testing.T) {
+	c := `{"_offloaded":1,"x":[` + strings.Repeat(`{"a":"bbbbbbbbbbbbbbbbbbbb"},`, 200) + `1]}`
+	root, _ := parseJSON([]byte(c))
+	p := buildPreview(root, c, "res_o", 1500, keepSet(DefaultKeepKeys))
+	if _, ok := previewMeta(p); !ok {
+		t.Errorf("not recognised: %s", p)
+	}
+}
+
+func TestPreviewMetaIsStrict(t *testing.T) {
+	for _, c := range []string{
+		`{"_offloaded":{"ref":"res_abc"},"rows":[1,2]}`,
+		`{"x":{"_offloaded":{"ref":"res_abc","chars":5,"read":"r"}},"y":1}`,
+		`{"_offloaded":{"ref":"res_abc","chars":0,"read":"r"}}`,
+		`{"_offloaded":{"ref":"res_abc","chars":5,"read":""}}`,
+	} {
+		if _, ok := previewMeta(c); ok {
+			t.Errorf("previewMeta(%s) = true", c)
+		}
+	}
+}

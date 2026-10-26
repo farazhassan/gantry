@@ -23,10 +23,11 @@ type offloadedMeta struct {
 }
 
 // level is one step of the fitting ladder: keep up to k elements of each
-// array and descend at most depth levels before summarizing.
-type level struct{ k, depth int }
+// array, up to keys non-keep fields of each object, and descend at most
+// depth levels before summarizing.
+type level struct{ k, depth, keys int }
 
-var levels = []level{{3, 64}, {2, 64}, {1, 64}, {1, 4}, {0, 3}, {0, 2}, {0, 1}}
+var levels = []level{{3, 64, 50}, {2, 64, 30}, {1, 64, 20}, {0, 64, 20}, {1, 4, 12}, {0, 3, 8}, {0, 2, 6}, {0, 1, 4}}
 
 func keepSet(keys []string) map[string]bool {
 	m := make(map[string]bool, len(keys))
@@ -44,7 +45,9 @@ type previewer struct {
 // buildPreview renders content's preview: a JSON object holding a budgeted
 // summary of root (nil for non-JSON content) and a trailer naming the ref.
 // It depends only on its arguments, so equal content gives equal previews.
-// The result fits budget unless the trailer alone is larger.
+// The result fits budget unless the trailer alone is larger. ref must start
+// with "res_", or previewMeta will not recognise the preview. Budgets and
+// the trailer's chars count bytes, not runes.
 func buildPreview(root *node, content, ref string, budget int, keep map[string]bool) string {
 	meta := &node{kind: kindObject,
 		keys: []string{"ref", "chars", "read"},
@@ -79,8 +82,16 @@ func wrap(pv, meta *node) *node {
 	if pv.kind != kindObject {
 		pv = &node{kind: kindObject, keys: []string{"value"}, vals: []*node{pv}}
 	}
-	return &node{kind: kindObject, keys: append(append([]string{}, pv.keys...), metaKey),
-		vals: append(append([]*node{}, pv.vals...), meta)}
+	out := &node{kind: kindObject}
+	for i, k := range pv.keys {
+		if k != metaKey { // the trailer key must stay unique
+			out.keys = append(out.keys, k)
+			out.vals = append(out.vals, pv.vals[i])
+		}
+	}
+	out.keys = append(out.keys, metaKey)
+	out.vals = append(out.vals, meta)
+	return out
 }
 
 // fit renders n within the budget without a trailer (for read_result
@@ -91,18 +102,30 @@ func (p previewer) fit(n *node, path string) *node {
 			return pv
 		}
 	}
-	return summary(n, path)
+	if s := summary(n, path); len(s.String()) <= p.budget {
+		return s
+	}
+	return textNode("value too large to show; read a narrower path")
 }
 
 func (p previewer) render(n *node, path string, depth int, l level) *node {
 	switch n.kind {
 	case kindObject:
 		out := &node{kind: kindObject}
+		shown, dropped := 0, 0
 		for i, k := range n.keys {
 			v, vp := n.vals[i], keyPath(path, k)
 			var pv *node
+			kept := p.keep[k] && len(v.String()) <= p.budget/2
+			if !kept {
+				if shown >= l.keys {
+					dropped++
+					continue
+				}
+				shown++
+			}
 			switch {
-			case p.keep[k] && len(v.String()) <= p.budget/2:
+			case kept:
 				pv = v
 			case v.kind == kindScalar:
 				pv = cutScalar(v)
@@ -113,6 +136,13 @@ func (p previewer) render(n *node, path string, depth int, l level) *node {
 			}
 			out.keys = append(out.keys, k)
 			out.vals = append(out.vals, pv)
+		}
+		if dropped > 0 {
+			// Non-keep fields are paged in document order: read_result
+			// offset=N skips the first N non-keep fields, which are the
+			// ones shown here.
+			out.keys = append(out.keys, "_more")
+			out.vals = append(out.vals, textNode(fmt.Sprintf("%d more fields: read_result path=%q offset=%d", dropped, path, shown)))
 		}
 		return out
 	case kindArray:
@@ -169,6 +199,9 @@ func summary(n *node, path string) *node {
 }
 
 func cutScalar(n *node) *node {
+	if len(n.raw) > maxStringRunes && n.raw[0] != '"' {
+		return textNode(cutRunes(string(n.raw), maxStringRunes))
+	}
 	if s, ok := n.str(); ok && utf8.RuneCountInString(s) > maxStringRunes {
 		return textNode(cutRunes(s, maxStringRunes))
 	}
@@ -203,16 +236,25 @@ func cutBytes(s string, n int) string {
 }
 
 // previewMeta reports whether content is a preview this package wrote, and
-// its trailer.
+// its trailer: the last top-level key is _offloaded, holding a res_ ref, a
+// positive chars count and a read hint.
 func previewMeta(content string) (offloadedMeta, bool) {
 	if !strings.Contains(content, `"`+metaKey+`":{"ref":"res_`) {
 		return offloadedMeta{}, false
 	}
-	var p struct {
-		O *offloadedMeta `json:"_offloaded"`
-	}
-	if json.Unmarshal([]byte(content), &p) != nil || p.O == nil || p.O.Ref == "" {
+	root, err := parseJSON([]byte(content))
+	if err != nil || root.kind != kindObject || len(root.keys) == 0 || root.keys[len(root.keys)-1] != metaKey {
 		return offloadedMeta{}, false
 	}
-	return *p.O, true
+	o := root.vals[len(root.vals)-1]
+	ref, _ := o.get("ref").str()
+	read, _ := o.get("read").str()
+	var chars int
+	if c := o.get("chars"); c == nil || c.kind != kindScalar || json.Unmarshal(c.raw, &chars) != nil {
+		return offloadedMeta{}, false
+	}
+	if !strings.HasPrefix(ref, "res_") || chars <= 0 || read == "" {
+		return offloadedMeta{}, false
+	}
+	return offloadedMeta{Ref: ref, Chars: chars}, true
 }
