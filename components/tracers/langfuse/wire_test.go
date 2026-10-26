@@ -86,13 +86,14 @@ func TestGenerationCreateItem(t *testing.T) {
 	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	end := start.Add(time.Second)
 	attrs := map[string]any{
-		gantry.SpanKindKey:  gantry.SpanKindGeneration,
-		gantry.AttrModel:    "claude-x",
-		gantry.AttrInput:    `[{"role":"user","content":"hi"}]`,
-		gantry.AttrOutput:   `{"role":"assistant","content":"yo"}`,
-		gantry.AttrUsageIn:  10,
-		gantry.AttrUsageOut: 3,
-		"custom":            "keep",
+		gantry.SpanKindKey:   gantry.SpanKindGeneration,
+		gantry.AttrModel:     "claude-x",
+		gantry.AttrInput:     `[{"role":"user","content":"hi"}]`,
+		gantry.AttrOutput:    `{"role":"assistant","content":"yo"}`,
+		gantry.AttrUsageIn:   10,
+		gantry.AttrUsageOut:  3,
+		gantry.AttrUsageCost: 0.0125,
+		"custom":             "keep",
 	}
 	it := generationCreateItem("t1", "s1", "run1", "model.call", start, end, attrs, nil)
 
@@ -115,7 +116,14 @@ func TestGenerationCreateItem(t *testing.T) {
 	if usage["input"] != 10 || usage["output"] != 3 || usage["unit"] != "TOKENS" {
 		t.Errorf("usage = %v, want input=10 output=3 unit=TOKENS", usage)
 	}
+	cost, _ := it.Body["costDetails"].(map[string]any)
+	if cost["total"] != 0.0125 {
+		t.Errorf("costDetails = %v, want total=0.0125", it.Body["costDetails"])
+	}
 	md, _ := it.Body["metadata"].(map[string]any)
+	if _, ok := md[gantry.AttrUsageCost]; ok {
+		t.Error("usage_cost must be promoted out of metadata")
+	}
 	if md["custom"] != "keep" {
 		t.Errorf("metadata dropped custom key: %v", md)
 	}
@@ -160,5 +168,39 @@ func TestGenerationCreateItemError(t *testing.T) {
 	}
 	if _, ok := it.Body["output"]; ok {
 		t.Error("errored generation must not emit output")
+	}
+}
+
+func TestGenerationCreateItemNoCost(t *testing.T) {
+	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	attrs := map[string]any{
+		gantry.SpanKindKey: gantry.SpanKindGeneration,
+		gantry.AttrUsageIn: 10,
+	}
+	it := generationCreateItem("t1", "s1", "run1", "model.call", start, start.Add(time.Second), attrs, nil)
+	if _, ok := it.Body["costDetails"]; ok {
+		t.Error("generation without usage_cost must not emit costDetails")
+	}
+}
+
+func TestGenerationCreateItemErrorWithSpend(t *testing.T) {
+	start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	attrs := map[string]any{
+		gantry.SpanKindKey:   gantry.SpanKindGeneration,
+		gantry.AttrUsageIn:   10,
+		gantry.AttrUsageOut:  3,
+		gantry.AttrUsageCost: 0.5,
+	}
+	it := generationCreateItem("t1", "s1", "run1", "model.call", start, start.Add(time.Second), attrs, errors.New("boom"))
+	usage, _ := it.Body["usage"].(map[string]any)
+	if usage["input"] != 10 || usage["output"] != 3 {
+		t.Errorf("usage = %v, want input=10 output=3", usage)
+	}
+	cost, _ := it.Body["costDetails"].(map[string]any)
+	if cost["total"] != 0.5 {
+		t.Errorf("costDetails = %v, want total=0.5", it.Body["costDetails"])
+	}
+	if it.Body["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", it.Body["level"])
 	}
 }
