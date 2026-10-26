@@ -4,6 +4,11 @@ import "context"
 
 // LLMClient is the single interface the agent core requires the user to supply.
 // The base library ships no adapter; users wire up Anthropic / OpenAI / etc.
+//
+// A Generate that fails after the provider billed tokens (e.g. a client that
+// retries internally and gives up) may return that spend in the response's
+// Usage alongside the error; DefaultLLMCallHandler adds it to State.Usage.
+// Everything else in a response returned with an error is ignored.
 type LLMClient interface {
 	Generate(ctx context.Context, req LLMRequest) (LLMResponse, error)
 }
