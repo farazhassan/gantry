@@ -69,48 +69,72 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 	if scope == "" {
 		return nil, errors.New("read_result: no stored results in this conversation")
 	}
-	ref, base := in.Ref, ""
-	if !strings.HasPrefix(ref, "res_") {
-		raw, ok, err := t.store.Get(ctx, storeKey(scope, "src:"+ref))
+	shown := cutBytes(in.Ref, 200)
+	var content, base string
+	var found bool
+	if strings.HasPrefix(in.Ref, "res_") {
+		v, ok, err := t.store.Get(ctx, storeKey(scope, in.Ref))
+		if err != nil {
+			return nil, fmt.Errorf("read_result: %w", err)
+		}
+		content, found = v, ok
+	}
+	if !found { // a src handle, or a res_ ref that is really one
+		raw, ok, err := t.store.Get(ctx, storeKey(scope, "src:"+in.Ref))
 		if err != nil {
 			return nil, fmt.Errorf("read_result: %w", err)
 		}
 		if !ok {
-			return nil, fmt.Errorf("read_result: no stored result holds %q; call the tool that produced it again", in.Ref)
+			if strings.HasPrefix(in.Ref, "res_") {
+				return nil, fmt.Errorf("read_result: %s has expired or never existed; call the original tool again", shown)
+			}
+			return nil, fmt.Errorf("read_result: no stored result holds %q; call the tool that produced it again", shown)
 		}
 		var e srcEntry
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
-			return nil, fmt.Errorf("read_result: bad index entry for %q", in.Ref)
+			return nil, fmt.Errorf("read_result: bad index entry for %q", shown)
 		}
-		ref, base = e.Ref, e.Path
+		v, ok, err := t.store.Get(ctx, storeKey(scope, e.Ref))
+		if err != nil {
+			return nil, fmt.Errorf("read_result: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("read_result: %s has expired or never existed; call the original tool again", cutBytes(e.Ref, 200))
+		}
+		content, base = v, e.Path
 	}
-	content, ok, err := t.store.Get(ctx, storeKey(scope, ref))
-	if err != nil {
-		return nil, fmt.Errorf("read_result: %w", err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("read_result: %s has expired or never existed; call the original tool again", ref)
-	}
-	path := joinPaths(base, in.Path)
+	// The reply echoes the ref as the caller gave it, so a src handle's
+	// hints work when passed straight back.
+	echo := in.Ref
 	out := &node{kind: kindObject}
 	add := func(k string, v *node) { out.keys = append(out.keys, k); out.vals = append(out.vals, v) }
-	add("ref", textNode(ref))
+	add("ref", textNode(echo))
 	const replyCap = MaxReadChars + replySlack
 
 	root, perr := parseJSON([]byte(content))
 	if perr != nil {
-		if in.Path != "" {
+		if in.Path != "" || base != "" {
 			return nil, errors.New("read_result: this result is not JSON; omit path and page with offset")
 		}
 		return pageText(out, content, in.Offset, replyCap), nil
 	}
+	// For a src handle the object at base is the root of everything below:
+	// the caller's path, the echoed path and every hint are relative to it.
+	if base != "" {
+		r, err := root.at(base)
+		if err != nil {
+			return nil, fmt.Errorf("read_result: %w", err)
+		}
+		root = r
+	}
+	path := in.Path
 	n, err := root.at(path)
 	if err != nil {
 		return nil, fmt.Errorf("read_result: %w", err)
 	}
-	// The path is echoed back (cut if absurdly long); the value gets what
-	// is left of the reply cap after the frame around it.
-	add("path", textNode(cutBytes(path, 200)))
+	if len(path) <= 1000 {
+		add("path", textNode(path))
+	}
 	frame := len(out.String()) + len(`,"value":,"total":0000000,"next_offset":0000000`)
 	budget := max(replyCap-frame, 1000)
 	p := previewer{budget: budget, keep: map[string]bool{}}
@@ -120,6 +144,11 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 		limit = defaultReadLimit
 	}
 	switch {
+	case n.kind == kindScalar && len(n.raw) > budget && n.raw[0] == '"':
+		if str, ok := n.str(); ok {
+			return pageText(out, str, in.Offset, replyCap), nil
+		}
+		add("value", p.fit(n, path))
 	case n.kind == kindArray:
 		count := len(n.elems)
 		start := min(in.Offset, count)
@@ -140,11 +169,17 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 		// is read whole, or fitted with hints (the default case).
 		count := len(n.keys)
 		start := min(in.Offset, count)
-		sub := func(a, b int) *node { return &node{kind: kindObject, keys: n.keys[a:b], vals: n.vals[a:b]} }
+		sub := func(a, b int) *node {
+			keys := make([]string, b-a)
+			for i := range keys {
+				keys[i] = cutBytes(n.keys[a+i], 200) // a huge key must not blow the cap
+			}
+			return &node{kind: kindObject, keys: keys, vals: n.vals[a:b]}
+		}
 		end := fitPage(start, min(start+limit, count), budget, func(a, b int) string { return sub(a, b).String() })
 		page := sub(start, end)
 		if len(page.String()) > budget { // one field is too big on its own
-			page = &node{kind: kindObject, keys: []string{n.keys[start]},
+			page = &node{kind: kindObject, keys: []string{cutBytes(n.keys[start], 200)},
 				vals: []*node{p.fit(n.vals[start], keyPath(path, n.keys[start]))}}
 		}
 		add("value", page)

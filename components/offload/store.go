@@ -14,6 +14,11 @@ type Store interface {
 	Get(ctx context.Context, key string) (value string, ok bool, err error)
 }
 
+// markerSuffix names a result's commit marker, storeKey(scope, ref+":ok"):
+// "1", written after the src index and the full result. Its presence means
+// the result is completely stored; checking it never loads the result.
+const markerSuffix = ":ok"
+
 func storeKey(scope, name string) string { return scope + ":" + name }
 
 // refFor is the content's ref: equal content, equal ref, across runs.

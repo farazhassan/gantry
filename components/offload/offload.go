@@ -130,10 +130,12 @@ func (c *component) offload(ctx context.Context, scope, content string) (string,
 	if err != nil {
 		root = nil // not JSON: preview its head
 	}
-	// The ref entry is the commit marker: it is written last, so a partial
-	// index failure leaves it absent and the next call retries everything.
-	// Once it exists, nothing is written again.
-	_, stored, err := c.store.Get(ctx, storeKey(scope, ref))
+	// The ref+":ok" entry is the commit marker (tiny, so checking it never
+	// loads the result): it is written last, so a partial failure leaves it
+	// absent and the next call retries everything. Once it exists, nothing
+	// is written again.
+	marker := storeKey(scope, ref+markerSuffix)
+	_, stored, err := c.store.Get(ctx, marker)
 	if err != nil {
 		return "", fmt.Errorf("offload: lookup %s: %w", ref, err)
 	}
@@ -151,6 +153,9 @@ func (c *component) offload(ctx context.Context, scope, content string) (string,
 		}
 		if err := c.store.Put(ctx, storeKey(scope, ref), content); err != nil {
 			return "", fmt.Errorf("offload: store %s: %w", ref, err)
+		}
+		if err := c.store.Put(ctx, marker, "1"); err != nil {
+			return "", fmt.Errorf("offload: commit %s: %w", ref, err)
 		}
 	}
 	return buildPreview(root, content, ref, c.opts.PreviewChars, c.keep), nil

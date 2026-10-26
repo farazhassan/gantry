@@ -277,8 +277,8 @@ func TestRebuiltTurnsSkipPutsForStoredResults(t *testing.T) {
 			t.Fatalf("turn %d: not shrunk", turn)
 		}
 	}
-	if cs.puts != 201 {
-		t.Errorf("Puts = %d, want 201", cs.puts)
+	if cs.puts != 202 {
+		t.Errorf("Puts = %d, want 202", cs.puts)
 	}
 }
 

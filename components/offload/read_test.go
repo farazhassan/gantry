@@ -65,7 +65,7 @@ func TestReadBySrcHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(m["value"]) != "7" || string(m["path"]) != `"output.items[0].result.value"` {
+	if string(m["value"]) != "7" || string(m["path"]) != `"result.value"` {
 		t.Errorf("reply = %v", m)
 	}
 }
@@ -312,5 +312,127 @@ func TestReadNonJSONPagesByByteOffset(t *testing.T) {
 	}
 	if _, err := read(t, store, `{"ref":"`+ref+`","path":"x"}`); err == nil {
 		t.Error("path on non-JSON: want error")
+	}
+}
+
+func nItems(n int) string {
+	var s []string
+	for i := 0; i < n; i++ {
+		s = append(s, fmt.Sprintf(`{"n":%d}`, i))
+	}
+	return "[" + strings.Join(s, ",") + "]"
+}
+
+func TestReadSrcHintsAreRelativeToTheHandle(t *testing.T) {
+	content := `{"items":[{"src":"mtr_0","series":` + nItems(2000) + `},{"src":"mtr_1","series":` + nItems(2000) + `}]}`
+	store, _ := seeded(t, content)
+	m, err := read(t, store, `{"ref":"mtr_1"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m["ref"]) != `"mtr_1"` {
+		t.Errorf("ref echoed as %s", m["ref"])
+	}
+	hs := hintsIn(string(m["value"]))
+	if len(hs) == 0 || hs[0][0] != "series" {
+		t.Fatalf("hints = %v in %.300s", hs, m["value"])
+	}
+	args, _ := json.Marshal(map[string]any{"ref": "mtr_1", "path": hs[0][0], "offset": atoi(hs[0][1]), "limit": 2})
+	m, err = read(t, store, string(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m["value"]) != `[{"n":3},{"n":4}]` || string(m["path"]) != `"series"` {
+		t.Errorf("reply = %s / %s", m["value"], m["path"])
+	}
+}
+
+func TestReadPagesLongStrings(t *testing.T) {
+	body := strings.Repeat("wörd ", 4000)
+	store, ref := seeded(t, `{"body":`+string(marshalString(body))+`}`)
+	var got strings.Builder
+	offset := 0
+	for i := 0; i < 20; i++ {
+		m, err := read(t, store, fmt.Sprintf(`{"ref":%q,"path":"body","offset":%d}`, ref, offset))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v string
+		if json.Unmarshal(m["value"], &v) != nil || !utf8.ValidString(v) || string(m["total"]) != strconv.Itoa(len(body)) {
+			t.Fatalf("bad page: %.100s total=%s", m["value"], m["total"])
+		}
+		got.WriteString(v)
+		if m["next_offset"] == nil {
+			break
+		}
+		next := atoi(string(m["next_offset"]))
+		if next <= offset {
+			t.Fatal("no progress")
+		}
+		offset = next
+	}
+	if got.String() != body {
+		t.Errorf("reassembled %d of %d bytes", got.Len(), len(body))
+	}
+	// A JSON root that is a string pages too.
+	store2, ref2 := seeded(t, string(marshalString(body)))
+	m, err := read(t, store2, `{"ref":"`+ref2+`"}`)
+	if err != nil || m["next_offset"] == nil {
+		t.Errorf("string root: %v %v", m["next_offset"], err)
+	}
+}
+
+func TestReadHugeKeyInPagedObject(t *testing.T) {
+	store, ref := seeded(t, `{"`+strings.Repeat("k", 20000)+`":1,"b":2}`)
+	m, err := read(t, store, `{"ref":"`+ref+`","offset":0,"limit":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m["total"]) != "2" || string(m["next_offset"]) != "1" {
+		t.Errorf("total/next = %s/%s", m["total"], m["next_offset"])
+	}
+}
+
+func TestReadErrorsAreCappedAndHelpful(t *testing.T) {
+	store, ref := seeded(t, `{"alpha":1,"list":[1,2,3],"pad":"`+strings.Repeat("x", 5000)+`"}`)
+	long := strings.Repeat("z", 5000)
+	for _, args := range []string{`{"ref":"` + long + `"}`, `{"ref":"` + ref + `","path":"` + long + `"}`} {
+		_, err := read(t, store, args)
+		if err == nil || len(err.Error()) > 700 {
+			t.Errorf("error = %v", err)
+		}
+	}
+	_, err := read(t, store, `{"ref":"`+ref+`","path":"nope"}`)
+	if err == nil || !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "list") {
+		t.Errorf("missing field error lacks field names: %v", err)
+	}
+	_, err = read(t, store, `{"ref":"`+ref+`","path":"list[9]"}`)
+	if err == nil || !strings.Contains(err.Error(), "3") {
+		t.Errorf("missing element error lacks length: %v", err)
+	}
+	_, err = read(t, store, `{"ref":"`+ref+`","path":"x[\\\"a.b\\\"]"}`)
+	if err == nil || !strings.Contains(err.Error(), `["x.y"]`) {
+		t.Errorf("no quoting hint: %v", err)
+	}
+}
+
+func TestReadResRefFallsBackToSrcIndex(t *testing.T) {
+	store, _ := seeded(t, `{"items":[{"src":"res_fake","v":1,"pad":"`+strings.Repeat("x", 5000)+`"}]}`)
+	m, err := read(t, store, `{"ref":"res_fake","path":"v"}`)
+	if err != nil || string(m["value"]) != "1" {
+		t.Errorf("fallback: %v %v", m, err)
+	}
+}
+
+func TestReadPathEchoLimit(t *testing.T) {
+	store, ref := seeded(t, bigMetric(400))
+	long := strings.Repeat("a", 1500)
+	_, err := read(t, store, `{"ref":"`+ref+`","path":"`+long+`"}`)
+	if err == nil {
+		t.Error("want error")
+	}
+	m, err := read(t, store, `{"ref":"`+ref+`","path":"series[0].points","limit":1}`)
+	if err != nil || m["path"] == nil {
+		t.Errorf("short path should echo: %v", err)
 	}
 }

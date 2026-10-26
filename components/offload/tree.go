@@ -194,23 +194,27 @@ type step struct {
 // parsePath reads dot-and-bracket paths such as items[0].result.series.
 func parsePath(p string) ([]step, error) {
 	var steps []step
+	q0 := cutBytes(p, 200) // errors echo at most this much of the input
 	for i := 0; i < len(p); {
 		switch p[i] {
 		case '.':
 			i++
 		case '[':
+			if strings.HasPrefix(p[i:], `[\"`) {
+				return nil, fmt.Errorf("bad path %q: write quoted keys as [\"x.y\"] without backslashes", q0)
+			}
 			if i+1 < len(p) && p[i+1] == '"' {
 				q, err := strconv.QuotedPrefix(p[i+1:])
 				if err != nil {
-					return nil, fmt.Errorf("bad quoted key in path %q", p)
+					return nil, fmt.Errorf("bad quoted key in path %q", q0)
 				}
 				key, err := strconv.Unquote(q)
 				if err != nil {
-					return nil, fmt.Errorf("bad quoted key in path %q", p)
+					return nil, fmt.Errorf("bad quoted key in path %q", q0)
 				}
 				end := i + 1 + len(q)
 				if end >= len(p) || p[end] != ']' {
-					return nil, fmt.Errorf("unclosed [ in path %q", p)
+					return nil, fmt.Errorf("unclosed [ in path %q", q0)
 				}
 				steps = append(steps, step{key: key})
 				i = end + 1
@@ -218,11 +222,11 @@ func parsePath(p string) ([]step, error) {
 			}
 			j := strings.IndexByte(p[i:], ']')
 			if j < 0 {
-				return nil, fmt.Errorf("unclosed [ in path %q", p)
+				return nil, fmt.Errorf("unclosed [ in path %q", q0)
 			}
 			idx, err := strconv.Atoi(p[i+1 : i+j])
 			if err != nil || idx < 0 {
-				return nil, fmt.Errorf("bad index %q in path %q", p[i+1:i+j], p)
+				return nil, fmt.Errorf("bad index %q in path %q", cutBytes(p[i+1:i+j], 50), q0)
 			}
 			steps = append(steps, step{index: idx, isIndex: true})
 			i += j + 1
@@ -247,19 +251,42 @@ func (n *node) at(path string) (*node, error) {
 	cur := n
 	for _, s := range steps {
 		if s.isIndex {
-			if cur.kind != kindArray || s.index >= len(cur.elems) {
-				return nil, fmt.Errorf("path %q: no element [%d]", path, s.index)
+			if cur.kind != kindArray {
+				return nil, fmt.Errorf("path %q: [%d] applied to %s, not an array", cutBytes(path, 200), s.index, describe(cur))
+			}
+			if s.index >= len(cur.elems) {
+				return nil, fmt.Errorf("path %q: no element [%d]; the array has %d elements", cutBytes(path, 200), s.index, len(cur.elems))
 			}
 			cur = cur.elems[s.index]
 			continue
 		}
 		v := cur.get(s.key)
 		if v == nil {
-			return nil, fmt.Errorf("path %q: no field %q", path, s.key)
+			return nil, fmt.Errorf("path %q: no field %q; here: %s", cutBytes(path, 200), cutBytes(s.key, 50), describe(cur))
 		}
 		cur = v
 	}
 	return cur, nil
+}
+
+// describe says what a node holds, for path errors: an object's field names
+// (up to 20), an array's length, or that it is a scalar.
+func describe(n *node) string {
+	switch n.kind {
+	case kindObject:
+		var names []string
+		for i, k := range n.keys {
+			if i == 20 {
+				names = append(names, fmt.Sprintf("… %d more", len(n.keys)-20))
+				break
+			}
+			names = append(names, strconv.Quote(cutBytes(k, 50)))
+		}
+		return "an object with fields " + strings.Join(names, ", ")
+	case kindArray:
+		return fmt.Sprintf("an array of %d elements", len(n.elems))
+	}
+	return "a value, not an object"
 }
 
 // keyPath appends an object key to a path. A key that is empty or holds a
