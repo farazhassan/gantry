@@ -19,9 +19,11 @@ const (
 // fields (e.g. Langfuse model/input/output/usage). Kept as plain attributes so
 // any Tracer that ignores them still works.
 const (
-	AttrModel    = "model"
-	AttrInput    = "input"
-	AttrOutput   = "output"
-	AttrUsageIn  = "usage_in"
-	AttrUsageOut = "usage_out"
+	AttrModel     = "model"
+	AttrInput     = "input"
+	AttrOutput    = "output"
+	AttrUsageIn   = "usage_in"
+	AttrUsageOut  = "usage_out"
+	AttrUsageCost = "usage_cost" // billed USD; set only when the adapter reports it
+	AttrProvider  = "provider"   // upstream provider; set only when the adapter reports it
 )

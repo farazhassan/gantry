@@ -79,6 +79,7 @@ type LLMResponse struct {
 	StopReason StopReason
 	Usage      Usage
 	Model      string // model that produced the reply; adapters set it (optional)
+	Provider   string // upstream provider that served the reply; adapters set it (optional)
 }
 
 // StopReason describes why the LLM stopped generating.

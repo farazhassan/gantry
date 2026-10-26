@@ -170,3 +170,53 @@ func TestToolChoiceFrom_BareContextIsNil(t *testing.T) {
 		t.Fatalf("ToolChoiceFrom(bare) = %+v, want nil", tc)
 	}
 }
+
+func TestDefaultLLMCallHandler_RecordsCostAndProvider(t *testing.T) {
+	trc := NewTrace()
+	tr := NewDefaultTracer(trc)
+	ctx := withTracer(context.Background(), tr)
+	ctx, root := tr.StartSpan(ctx, "run")
+
+	h := DefaultLLMCallHandler(stubLLM{resp: LLMResponse{
+		Content:  "hello",
+		Usage:    Usage{InputTokens: 11, OutputTokens: 3, Cost: 0.125},
+		Provider: "Baidu",
+	}})
+	state := &State{Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(ctx, state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	root.End(nil)
+
+	gen := findEndedSpan(t, trc, "model.call")
+	if gen.Attrs[AttrUsageCost] != 0.125 {
+		t.Errorf("usage_cost = %v, want 0.125", gen.Attrs[AttrUsageCost])
+	}
+	if gen.Attrs[AttrProvider] != "Baidu" {
+		t.Errorf("provider = %v, want Baidu", gen.Attrs[AttrProvider])
+	}
+}
+
+func TestDefaultLLMCallHandler_OmitsZeroCostAndEmptyProvider(t *testing.T) {
+	trc := NewTrace()
+	tr := NewDefaultTracer(trc)
+	ctx := withTracer(context.Background(), tr)
+	ctx, root := tr.StartSpan(ctx, "run")
+
+	h := DefaultLLMCallHandler(stubLLM{resp: LLMResponse{
+		Content: "hello", Usage: Usage{InputTokens: 11, OutputTokens: 3},
+	}})
+	state := &State{Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(ctx, state); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	root.End(nil)
+
+	gen := findEndedSpan(t, trc, "model.call")
+	if v, ok := gen.Attrs[AttrUsageCost]; ok {
+		t.Errorf("usage_cost = %v, want attr absent when cost is 0", v)
+	}
+	if v, ok := gen.Attrs[AttrProvider]; ok {
+		t.Errorf("provider = %v, want attr absent when provider is empty", v)
+	}
+}
