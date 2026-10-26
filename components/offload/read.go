@@ -88,7 +88,7 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 			if strings.HasPrefix(in.Ref, "res_") {
 				return nil, fmt.Errorf("read_result: %s has expired or never existed; call the original tool again", shown)
 			}
-			return nil, fmt.Errorf("read_result: no stored result holds %q; call the tool that produced it again", shown)
+			return nil, fmt.Errorf("read_result: no stored result holds %q; read the res_… ref from the preview that showed it, or call the tool again", shown)
 		}
 		var e srcEntry
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
@@ -189,7 +189,7 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 		}
 	default:
 		if len(n.String()) > budget {
-			n = p.fit(n, path)
+			n = fitRead(p, n, path)
 		}
 		add("value", n)
 	}
@@ -248,3 +248,21 @@ func pageText(out *node, content string, offset, replyCap int) json.RawMessage {
 }
 
 func intNode(i int) *node { return &node{kind: kindScalar, raw: []byte(fmt.Sprint(i))} }
+
+// fitRead is p.fit for the value being read. When fit can only summarize n
+// at the very path being read, the summary's hint would loop, so it carries
+// paging arguments instead.
+func fitRead(p previewer, n *node, path string) *node {
+	v := p.fit(n, path)
+	if got, ok := v.str(); ok {
+		if want, _ := summary(n, path).str(); got == want {
+			switch n.kind {
+			case kindObject:
+				return textNode(fmt.Sprintf("{%d fields: read_result path=%q offset=0 limit=%d}", len(n.keys), path, defaultReadLimit))
+			case kindArray:
+				return textNode(fmt.Sprintf("[%d items: read_result path=%q offset=0 limit=%d]", len(n.elems), path, defaultReadLimit))
+			}
+		}
+	}
+	return v
+}

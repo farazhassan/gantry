@@ -9,15 +9,21 @@ import (
 
 // Store keeps full tool results. Put must not overwrite an existing key:
 // refs are content-derived, so the first write is the right one.
+//
+// Keys are "<scope>:res_<hex>" for a full result and "<scope>:src:<handle>"
+// for a src index entry (JSON {ref,path}). Implementations that expire or
+// evict keys should give all keys the same TTL.
 type Store interface {
 	Put(ctx context.Context, key, value string) error
 	Get(ctx context.Context, key string) (value string, ok bool, err error)
 }
 
-// markerSuffix names a result's commit marker, storeKey(scope, ref+":ok"):
-// "1", written after the src index and the full result. Its presence means
-// the result is completely stored; checking it never loads the result.
-const markerSuffix = ":ok"
+// Exister is an optional Store extension: Exists reports whether key is
+// stored without fetching its value. Stores that hold large values
+// should implement it.
+type Exister interface {
+	Exists(ctx context.Context, key string) (bool, error)
+}
 
 func storeKey(scope, name string) string { return scope + ":" + name }
 
@@ -39,8 +45,10 @@ type MemStore struct {
 	m  map[string]string
 }
 
+// NewMemStore returns an empty in-process store.
 func NewMemStore() *MemStore { return &MemStore{m: map[string]string{}} }
 
+// Put stores value under key unless key already exists.
 func (s *MemStore) Put(_ context.Context, key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,9 +58,18 @@ func (s *MemStore) Put(_ context.Context, key, value string) error {
 	return nil
 }
 
+// Get returns the value stored under key.
 func (s *MemStore) Get(_ context.Context, key string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.m[key]
 	return v, ok, nil
+}
+
+// Exists reports whether key is stored.
+func (s *MemStore) Exists(_ context.Context, key string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.m[key]
+	return ok, nil
 }

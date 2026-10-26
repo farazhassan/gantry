@@ -11,7 +11,7 @@ import (
 
 // State.Meta keys the middleware sets before each LLM call.
 const (
-	MetaSavedChars = "offload.saved_chars" // bytes currently replaced by previews
+	MetaSavedChars = "offload.saved_chars" // (bytes) currently replaced by previews
 	MetaPreviews   = "offload.previews"    // tool results currently shown as previews
 )
 
@@ -130,12 +130,13 @@ func (c *component) offload(ctx context.Context, scope, content string) (string,
 	if err != nil {
 		root = nil // not JSON: preview its head
 	}
-	// The ref+":ok" entry is the commit marker (tiny, so checking it never
-	// loads the result): it is written last, so a partial failure leaves it
-	// absent and the next call retries everything. Once it exists, nothing
-	// is written again.
-	marker := storeKey(scope, ref+markerSuffix)
-	_, stored, err := c.store.Get(ctx, marker)
+	// The value itself is the commit marker: it is written last, so a
+	// partial index failure leaves it absent and the next call retries
+	// everything, and an evicted value is rewritten when a rebuilt history
+	// brings the full result back. Once it exists, nothing is written again.
+	// (An evicted src entry is not rewritten; reads then recover through
+	// the res_ ref in the preview.)
+	stored, err := c.exists(ctx, storeKey(scope, ref))
 	if err != nil {
 		return "", fmt.Errorf("offload: lookup %s: %w", ref, err)
 	}
@@ -154,11 +155,17 @@ func (c *component) offload(ctx context.Context, scope, content string) (string,
 		if err := c.store.Put(ctx, storeKey(scope, ref), content); err != nil {
 			return "", fmt.Errorf("offload: store %s: %w", ref, err)
 		}
-		if err := c.store.Put(ctx, marker, "1"); err != nil {
-			return "", fmt.Errorf("offload: commit %s: %w", ref, err)
-		}
 	}
 	return buildPreview(root, content, ref, c.opts.PreviewChars, c.keep), nil
+}
+
+// exists checks key without fetching its value when the store can.
+func (c *component) exists(ctx context.Context, key string) (bool, error) {
+	if e, ok := c.store.(Exister); ok {
+		return e.Exists(ctx, key)
+	}
+	_, ok, err := c.store.Get(ctx, key)
+	return ok, err
 }
 
 func (c *component) meter(s *gantry.State) {

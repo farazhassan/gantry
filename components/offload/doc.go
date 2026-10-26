@@ -14,4 +14,19 @@
 // The full results live in a Store scoped by Options.Scope (e.g. a chat
 // id), so they outlive the run that produced them. With an empty scope,
 // nothing is shrunk.
+//
+// Wiring: New and ReadTool must be given the same Store and the same scope
+// function, and the agent needs the ReadTool registered, or the model cannot
+// read what a preview points at. Install offload before the compactor, so
+// compaction sees the previews, not the full results.
+//
+// Error results are never shrunk. A result that is not JSON gets a preview
+// with a "head" field holding its first bytes. While it runs, the middleware
+// sets two State.Meta keys: MetaSavedChars (bytes currently replaced by
+// previews) and MetaPreviews (how many tool results are currently previews).
+//
+// Stored keys are "<scope>:res_<hex>" for a full result and
+// "<scope>:src:<handle>" for a src index entry; a Store that expires keys
+// should give them all the same TTL. A Store may also implement Exister so
+// the middleware can check a result is stored without fetching it.
 package offload

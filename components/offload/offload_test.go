@@ -277,8 +277,8 @@ func TestRebuiltTurnsSkipPutsForStoredResults(t *testing.T) {
 			t.Fatalf("turn %d: not shrunk", turn)
 		}
 	}
-	if cs.puts != 202 {
-		t.Errorf("Puts = %d, want 202", cs.puts)
+	if cs.puts != 201 {
+		t.Errorf("Puts = %d, want 201", cs.puts)
 	}
 }
 
@@ -348,5 +348,74 @@ func TestResolveEmptyScopeErrors(t *testing.T) {
 	got, err := Resolve(context.Background(), store, "", p)
 	if err == nil || !strings.Contains(err.Error(), "no scope to resolve") || got != p {
 		t.Errorf("Resolve = %v", err)
+	}
+}
+
+// del removes a key, as a Redis eviction would.
+func (s *MemStore) del(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, key)
+}
+
+func TestEvictedValueIsRewrittenWhenHistoryReturns(t *testing.T) {
+	mem := NewMemStore()
+	c := newComp(mem)
+	content := manySrcs(200)
+	s := &gantry.State{Messages: history(content, 1)}
+	c.shrink(withScope("chat1"), s)
+	meta, ok := previewMeta(s.Messages[2].Content)
+	if !ok {
+		t.Fatal("not shrunk")
+	}
+	key := storeKey("chat1", meta.Ref)
+	mem.del(key)
+	if _, ok, _ := mem.Get(context.Background(), key); ok {
+		t.Fatal("del did not delete")
+	}
+	s2 := &gantry.State{Messages: history(content, 1)}
+	c.shrink(withScope("chat1"), s2)
+	if v, ok, _ := mem.Get(context.Background(), key); !ok || v != content {
+		t.Error("evicted value was not restored")
+	}
+}
+
+// existerStore implements Exists; Get of a full result (a res_ key) is counted.
+type existerStore struct {
+	*MemStore
+	mu        sync.Mutex
+	exists    int
+	fullFetch int
+}
+
+func (s *existerStore) Exists(ctx context.Context, key string) (bool, error) {
+	s.mu.Lock()
+	s.exists++
+	s.mu.Unlock()
+	return s.MemStore.Exists(ctx, key)
+}
+
+func (s *existerStore) Get(ctx context.Context, key string) (string, bool, error) {
+	if strings.Contains(key, ":res_") {
+		s.mu.Lock()
+		s.fullFetch++
+		s.mu.Unlock()
+	}
+	return s.MemStore.Get(ctx, key)
+}
+
+func TestExistenceCheckUsesExistsNotGet(t *testing.T) {
+	es := &existerStore{MemStore: NewMemStore()}
+	c := newComp(es)
+	big := manySrcs(200)
+	for turn := 1; turn <= 3; turn++ {
+		s := &gantry.State{Messages: history(big, turn)}
+		c.shrink(withScope("chat1"), s)
+		if _, ok := previewMeta(s.Messages[2].Content); !ok {
+			t.Fatalf("turn %d: not shrunk", turn)
+		}
+	}
+	if es.exists == 0 || es.fullFetch != 0 {
+		t.Errorf("Exists calls = %d, full-value Gets = %d", es.exists, es.fullFetch)
 	}
 }

@@ -436,3 +436,22 @@ func TestReadPathEchoLimit(t *testing.T) {
 		t.Errorf("short path should echo: %v", err)
 	}
 }
+
+func TestReadSummaryOfThePathJustReadPages(t *testing.T) {
+	store, ref := seeded(t, `{"`+"a"+strings.Repeat("k", 5000)+`":1,"`+"b"+strings.Repeat("k", 5000)+`":2,"`+"c"+strings.Repeat("k", 5000)+`":3}`)
+	m, err := read(t, store, `{"ref":"`+ref+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := hintsIn(string(m["value"]))
+	if len(hs) != 1 || hs[0][0] != "" {
+		t.Fatalf("value = %.300s hints = %v", m["value"], hs)
+	}
+	if !strings.Contains(string(m["value"]), "limit=20") {
+		t.Errorf("hint lacks limit: %s", m["value"])
+	}
+	m, err = read(t, store, `{"ref":"`+ref+`","offset":`+hs[0][1]+`,"limit":20}`)
+	if err != nil || string(m["total"]) != "3" {
+		t.Errorf("following the hint: %v %v", m, err)
+	}
+}

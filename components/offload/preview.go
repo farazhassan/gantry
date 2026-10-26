@@ -9,6 +9,7 @@ import (
 
 // DefaultKeepKeys are kept whole in every preview: provenance, coverage
 // and headline numbers a model needs to keep reasoning without a fetch.
+// Treat it as read-only.
 var DefaultKeepKeys = []string{"src", "coverage", "capped", "notes", "value", "vs_prior_period"}
 
 // metaKey is the preview's trailer field. Content carrying it is a preview.
