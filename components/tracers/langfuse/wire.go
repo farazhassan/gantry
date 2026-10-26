@@ -105,9 +105,9 @@ func eventCreateItem(traceID, parentID, name string, start time.Time, attrs map[
 
 // generationCreateItem builds a Langfuse generation observation from a gantry
 // SpanKindGeneration span. It promotes the neutral generation attributes
-// (model, input, output, usage_in/out, and usage_cost as costDetails.total) into
-// Langfuse-native fields and leaves
-// everything else — minus the kind marker — in metadata.
+// (model, input, output, usage_in/out, and usage_cost as costDetails.total)
+// into Langfuse-native fields and leaves everything else, minus the kind
+// marker, in metadata.
 func generationCreateItem(traceID, spanID, parentID, name string, start, end time.Time, attrs map[string]any, err error) ingestionItem {
 	body := map[string]any{
 		"id":        spanID,

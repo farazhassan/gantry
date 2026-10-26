@@ -8,7 +8,9 @@ import (
 	"github.com/farazhassan/gantry"
 )
 
-// MockTurn is one scripted turn returned by MockLLMClient.
+// MockTurn is one scripted turn returned by MockLLMClient. With a non-nil Err,
+// Response.Usage is still counted as spend (see gantry.LLMClient); its other
+// fields are ignored.
 type MockTurn struct {
 	Response gantry.LLMResponse
 	Err      error
