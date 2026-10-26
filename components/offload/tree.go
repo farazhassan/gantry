@@ -31,10 +31,16 @@ type node struct {
 // parseJSON decodes data. A string value that itself holds a JSON object or
 // array is decoded as that nested value (query_data's output is one), so
 // previews, paths and src handles see through it.
-func parseJSON(data []byte) (*node, error) {
+func parseJSON(data []byte) (*node, error) { return parseJSONAt(data, 0) }
+
+// maxDepth caps how deeply objects and arrays may nest, so a hostile result
+// cannot overflow the stack of the recursive walkers.
+const maxDepth = 10000
+
+func parseJSONAt(data []byte, depth int) (*node, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
-	n, err := parseValue(dec)
+	n, err := parseValue(dec, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -44,13 +50,16 @@ func parseJSON(data []byte) (*node, error) {
 	return n, nil
 }
 
-func parseValue(dec *json.Decoder) (*node, error) {
+func parseValue(dec *json.Decoder, depth int) (*node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
 	}
 	switch t := tok.(type) {
 	case json.Delim:
+		if (t == '{' || t == '[') && depth+1 > maxDepth {
+			return nil, errors.New("offload: JSON nested too deeply")
+		}
 		switch t {
 		case '{':
 			n := &node{kind: kindObject}
@@ -63,7 +72,7 @@ func parseValue(dec *json.Decoder) (*node, error) {
 				if !ok {
 					return nil, fmt.Errorf("offload: object key %v is not a string", kt)
 				}
-				v, err := parseValue(dec)
+				v, err := parseValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -77,7 +86,7 @@ func parseValue(dec *json.Decoder) (*node, error) {
 		case '[':
 			n := &node{kind: kindArray}
 			for dec.More() {
-				v, err := parseValue(dec)
+				v, err := parseValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -91,7 +100,7 @@ func parseValue(dec *json.Decoder) (*node, error) {
 		return nil, fmt.Errorf("offload: unexpected delimiter %v", t)
 	case string:
 		if s := strings.TrimSpace(t); len(s) > 1 && (s[0] == '{' || s[0] == '[') {
-			if nested, err := parseJSON([]byte(s)); err == nil {
+			if nested, err := parseJSONAt([]byte(s), depth); err == nil {
 				return nested, nil
 			}
 		}
@@ -190,6 +199,23 @@ func parsePath(p string) ([]step, error) {
 		case '.':
 			i++
 		case '[':
+			if i+1 < len(p) && p[i+1] == '"' {
+				q, err := strconv.QuotedPrefix(p[i+1:])
+				if err != nil {
+					return nil, fmt.Errorf("bad quoted key in path %q", p)
+				}
+				key, err := strconv.Unquote(q)
+				if err != nil {
+					return nil, fmt.Errorf("bad quoted key in path %q", p)
+				}
+				end := i + 1 + len(q)
+				if end >= len(p) || p[end] != ']' {
+					return nil, fmt.Errorf("unclosed [ in path %q", p)
+				}
+				steps = append(steps, step{key: key})
+				i = end + 1
+				break
+			}
 			j := strings.IndexByte(p[i:], ']')
 			if j < 0 {
 				return nil, fmt.Errorf("unclosed [ in path %q", p)
@@ -236,7 +262,12 @@ func (n *node) at(path string) (*node, error) {
 	return cur, nil
 }
 
+// keyPath appends an object key to a path. A key that is empty or holds a
+// path delimiter or quote is written as a quoted bracket segment.
 func keyPath(base, key string) string {
+	if key == "" || strings.ContainsAny(key, `.[]"`) {
+		return base + "[" + strconv.Quote(key) + "]"
+	}
 	if base == "" {
 		return key
 	}

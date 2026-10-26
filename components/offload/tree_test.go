@@ -1,6 +1,9 @@
 package offload
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseKeepsKeyOrderAndRoundTrips(t *testing.T) {
 	in := `{"b":1,"a":[true,null,"x"],"c":{"z":2.5,"y":"q"}}`
@@ -77,5 +80,45 @@ func TestJoinPaths(t *testing.T) {
 		if got := joinPaths(c[0], c[1]); got != c[2] {
 			t.Errorf("joinPaths(%q,%q) = %q, want %q", c[0], c[1], got, c[2])
 		}
+	}
+}
+
+func TestSrcPathsRoundTripAwkwardKeys(t *testing.T) {
+	for _, in := range []string{
+		`{"x.y":{"src":"s1"},"a[0]":{"src":"s2"},"":{"src":"s3"},"q\"z":{"src":"s4"},"n":{"":{"src":"s5"},"b.c":[{"src":"s6"}]},"src":"r"}`,
+		`{"":{"src":"s3"},"src":"r"}`,
+	} {
+		n, err := parseJSON([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sps := srcPaths(n)
+		if len(sps) < 2 {
+			t.Fatalf("srcPaths = %v", sps)
+		}
+		for _, sp := range sps {
+			v, err := n.at(sp.path)
+			if err != nil {
+				t.Errorf("at(%q): %v", sp.path, err)
+				continue
+			}
+			if s, _ := v.get("src").str(); s != sp.src {
+				t.Errorf("at(%q).src = %q, want %q", sp.path, s, sp.src)
+			}
+		}
+	}
+	n, _ := parseJSON([]byte(`{"x.y":{"src":"s1"}}`))
+	if v, err := n.at(`["x.y"].src`); err != nil || v.String() != `"s1"` {
+		t.Errorf(`at(["x.y"].src) = %v, %v`, v, err)
+	}
+}
+
+func TestParseCapsNestingDepth(t *testing.T) {
+	deep := func(n int) []byte { return []byte(strings.Repeat("[", n) + strings.Repeat("]", n)) }
+	if _, err := parseJSON(deep(10001)); err == nil {
+		t.Error("parseJSON accepted 10001 levels")
+	}
+	if _, err := parseJSON(deep(100)); err != nil {
+		t.Errorf("depth 100: %v", err)
 	}
 }
