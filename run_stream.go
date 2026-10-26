@@ -20,7 +20,10 @@ import (
 // itself) returns an error, the run aborts immediately, so the in-flight
 // phase emits its phase_start but no phase_end, and no terminal done event
 // follows. Consumers should treat a non-nil error from RunStream — not the
-// absence of a phase_end — as the signal that the stream ended early.
+// absence of a phase_end — as the signal that the stream ended early. The one
+// exception is a nested sub-agent run (see WithParentLink): it still emits a
+// done event carrying the error (Event.Error, DoneReason DoneError or the
+// blocking sentinel's reason), because its parent's stream carries on.
 //
 // sink must be non-nil; use Run for the non-streaming case.
 func (a *Agent) RunStream(ctx context.Context, input string, sink EventSink) (*State, error) {

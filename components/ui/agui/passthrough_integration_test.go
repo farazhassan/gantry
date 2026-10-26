@@ -23,6 +23,7 @@ type rawFrame struct {
 	StepName         string `json:"stepName"`
 	Name             string `json:"name"`
 	SubagentRunID    string `json:"subagentRunId"`
+	Message          string `json:"message"`
 }
 
 func TestPassthroughTwoConcurrentSubagentsEndToEnd(t *testing.T) {
@@ -213,5 +214,79 @@ func TestPassthroughSubagentStartedThenFinishedBracket(t *testing.T) {
 	}
 	if finishIdx <= startIdx {
 		t.Errorf("SUBAGENT_FINISHED at index %d, want after SUBAGENT_STARTED at index %d", finishIdx, startIdx)
+	}
+}
+
+// A child whose LLM call fails aborts with an error the parent recovers from
+// (dispatch hands it to the parent's model as an error tool result). The
+// child's SUBAGENT_STARTED must still be closed by a SUBAGENT_ERROR before
+// RUN_FINISHED, or an AG-UI client's verifier rejects the stream.
+func TestPassthroughSubagentLLMErrorClosesWithSubagentError(t *testing.T) {
+	critic, err := gantry.NewAgent(gantry.WithLLM(erroringLLM{}), gantry.WithName("critic"))
+	if err != nil {
+		t.Fatalf("NewAgent(critic): %v", err)
+	}
+	critiqueTool := subagent.New("critique", "d", critic, subagent.WithEventPassthrough())
+	orchestrator, err := gantry.NewAgent(
+		gantry.WithLLM(eval.NewMockLLMClient(
+			gantry.LLMResponse{
+				ToolCalls:  []gantry.ToolCall{{ID: "call-critique", Name: "critique", Input: json.RawMessage(`{"goal":"g"}`)}},
+				StopReason: gantry.StopReasonToolUse,
+			},
+			gantry.LLMResponse{Content: "carried on without the critique", StopReason: gantry.StopReasonEnd},
+		)),
+		gantry.WithName("orchestrator"),
+		gantry.WithComponents(subagent.Component(0, critiqueTool)),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent(orchestrator): %v", err)
+	}
+
+	srv := httptest.NewServer(Handler(orchestrator))
+	defer srv.Close()
+	body := `{"threadId":"t1","runId":"r1","messages":[{"id":"m1","role":"user","content":"go"}]}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var types []string
+	var started, errored []rawFrame
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var f rawFrame
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f); err != nil {
+			t.Fatalf("unmarshal frame %q: %v", line, err)
+		}
+		types = append(types, f.Type)
+		switch f.Type {
+		case "SUBAGENT_STARTED":
+			started = append(started, f)
+		case "SUBAGENT_ERROR":
+			errored = append(errored, f)
+		case "SUBAGENT_FINISHED":
+			t.Errorf("got SUBAGENT_FINISHED for a child whose run failed")
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	if len(started) != 1 || len(errored) != 1 {
+		t.Fatalf("SUBAGENT_STARTED = %d, SUBAGENT_ERROR = %d, want 1 each; frames: %v", len(started), len(errored), types)
+	}
+	if errored[0].SubagentRunID != started[0].SubagentRunID {
+		t.Errorf("SUBAGENT_ERROR subagentRunId = %q, want the started one %q", errored[0].SubagentRunID, started[0].SubagentRunID)
+	}
+	if !strings.Contains(errored[0].Message, "llm boom") {
+		t.Errorf("SUBAGENT_ERROR message = %q, want it to carry the LLM error", errored[0].Message)
+	}
+	if types[len(types)-1] != "RUN_FINISHED" {
+		t.Errorf("last frame = %q, want RUN_FINISHED; frames: %v", types[len(types)-1], types)
 	}
 }
