@@ -129,7 +129,9 @@ func (c *Client) Generate(ctx context.Context, req gantry.LLMRequest) (gantry.LL
 		return gantry.LLMResponse{}, fmt.Errorf("openrouter: response had no choices")
 	}
 	ch := cr.Choices[0]
-	return assembleResponse(ch.Message.Content, ch.Message.ToolCalls, ch.FinishReason, toUsage(cr.Usage)), nil
+	out := assembleResponse(ch.Message.Content, ch.Message.ToolCalls, ch.FinishReason, toUsage(cr.Usage))
+	out.Provider, out.Model = cr.Provider, cr.Model
+	return out, nil
 }
 
 // GenerateStream sends a streaming chat-completions request, invoking yield
@@ -147,10 +149,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 	}
 
 	var (
-		content      strings.Builder
-		calls        toolAccumulator
-		finishReason string
-		u            gantry.Usage
+		content         strings.Builder
+		calls           toolAccumulator
+		finishReason    string
+		u               gantry.Usage
+		provider, model string
 	)
 
 	sc := bufio.NewScanner(resp.Body)
@@ -170,6 +173,12 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		var chunk chatResponse
 		if err := json.Unmarshal(payload, &chunk); err != nil {
 			return gantry.LLMResponse{}, fmt.Errorf("openrouter: decode stream chunk: %w", err)
+		}
+		if chunk.Provider != "" {
+			provider = chunk.Provider
+		}
+		if chunk.Model != "" {
+			model = chunk.Model
 		}
 		if chunk.Usage != nil {
 			u = toUsage(chunk.Usage)
@@ -201,6 +210,7 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 	}
 
 	out := assembleResponse(content.String(), calls.calls(), finishReason, u)
+	out.Provider, out.Model = provider, model
 	// Terminal metadata chunk (empty delta) for parity with the in-repo mock;
 	// the default LLM handler ignores empty-delta chunks, so this is harmless.
 	usage := out.Usage
@@ -287,8 +297,10 @@ func toUsage(u *usage) gantry.Usage {
 		return gantry.Usage{}
 	}
 	return gantry.Usage{
-		InputTokens:     u.PromptTokens, // already includes cached tokens
-		OutputTokens:    u.CompletionTokens,
-		CacheReadTokens: u.PromptTokensDetails.CachedTokens,
+		InputTokens:      u.PromptTokens, // already includes cached tokens
+		OutputTokens:     u.CompletionTokens,
+		CacheReadTokens:  u.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: u.PromptTokensDetails.CacheWriteTokens,
+		Cost:             u.Cost,
 	}
 }

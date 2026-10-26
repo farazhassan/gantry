@@ -83,8 +83,10 @@ type wireToolCallFunc struct {
 // content/tool-call deltas live under choices[].delta, and a terminal payload
 // carries usage when stream_options.include_usage is set).
 type chatResponse struct {
-	Choices []choice `json:"choices"`
-	Usage   *usage   `json:"usage"`
+	Provider string   `json:"provider"` // upstream provider OpenRouter routed to
+	Model    string   `json:"model"`    // model actually served; may differ from the requested one (auto-routing, fallbacks)
+	Choices  []choice `json:"choices"`
+	Usage    *usage   `json:"usage"`
 }
 
 type choice struct {
@@ -110,10 +112,12 @@ type respToolCall struct {
 }
 
 type usage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokens        int     `json:"prompt_tokens"`
+	CompletionTokens    int     `json:"completion_tokens"`
+	Cost                float64 `json:"cost"` // billed USD
 	PromptTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
 }
 
