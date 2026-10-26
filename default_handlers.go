@@ -47,8 +47,7 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			// ContextOverflowHandler can shrink the prompt and retry — unless
 			// text or reasoning was already streamed, since a retry would
 			// append a second answer after the abandoned one. The tokens were
-			// still spent.
-			state.Usage = state.Usage.Add(resp.Usage)
+			// still spent: the error path below counts them.
 			if resp.Usage.InputTokens > 0 {
 				// The request's prompt was still measured: anchor it so the
 				// overflow handler can size its target from it.
@@ -62,6 +61,8 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 		}
 		gen.end(resp, err)
 		if err != nil {
+			// A failed call can still have been billed (see LLMClient).
+			state.Usage = state.Usage.Add(resp.Usage)
 			return err
 		}
 		state.LastResponse = &resp

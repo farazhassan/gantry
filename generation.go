@@ -81,8 +81,9 @@ func startGeneration(ctx context.Context, req LLMRequest) (context.Context, gene
 
 // end records the completion, token usage, cost, model and provider on the
 // generation span, then ends it. A non-nil error is passed through to
-// Span.End so the tracer can mark the observation failed; output/usage are
-// only recorded on success.
+// Span.End so the tracer can mark the observation failed. Output, model and
+// provider are recorded only on success; usage and cost are also recorded
+// for a failed call that reports some spend.
 //
 // Attribute keys here (SpanKindKey, AttrInput, AttrOutput, AttrUsageIn,
 // AttrUsageOut, AttrUsageCost, AttrModel, AttrProvider) are deliberately
@@ -97,16 +98,18 @@ func (g generation) end(resp LLMResponse, err error) {
 	}
 	if err == nil {
 		g.span.SetAttr(AttrOutput, marshalResponse(resp))
-		g.span.SetAttr(AttrUsageIn, resp.Usage.InputTokens)
-		g.span.SetAttr(AttrUsageOut, resp.Usage.OutputTokens)
-		if resp.Usage.Cost != 0 {
-			g.span.SetAttr(AttrUsageCost, resp.Usage.Cost)
-		}
 		if resp.Model != "" {
 			g.span.SetAttr(AttrModel, resp.Model)
 		}
 		if resp.Provider != "" {
 			g.span.SetAttr(AttrProvider, resp.Provider)
+		}
+	}
+	if err == nil || resp.Usage != (Usage{}) {
+		g.span.SetAttr(AttrUsageIn, resp.Usage.InputTokens)
+		g.span.SetAttr(AttrUsageOut, resp.Usage.OutputTokens)
+		if resp.Usage.Cost != 0 {
+			g.span.SetAttr(AttrUsageCost, resp.Usage.Cost)
 		}
 	}
 	g.span.End(err)

@@ -2,12 +2,20 @@ package gantry
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
 type stubLLM struct{ resp LLMResponse }
 
 func (s stubLLM) Generate(context.Context, LLMRequest) (LLMResponse, error) { return s.resp, nil }
+
+type erroringLLM struct {
+	resp LLMResponse
+	err  error
+}
+
+func (e erroringLLM) Generate(context.Context, LLMRequest) (LLMResponse, error) { return e.resp, e.err }
 
 type recordingLLM struct {
 	resp    LLMResponse
@@ -218,5 +226,62 @@ func TestDefaultLLMCallHandler_OmitsZeroCostAndEmptyProvider(t *testing.T) {
 	}
 	if v, ok := gen.Attrs[AttrProvider]; ok {
 		t.Errorf("provider = %v, want attr absent when provider is empty", v)
+	}
+}
+
+func TestDefaultLLMCallHandler_CountsUsageSpentByAFailedCall(t *testing.T) {
+	trc := NewTrace()
+	tr := NewDefaultTracer(trc)
+	ctx := withTracer(context.Background(), tr)
+	ctx, root := tr.StartSpan(ctx, "run")
+
+	boom := errors.New("boom")
+	h := DefaultLLMCallHandler(erroringLLM{
+		resp: LLMResponse{Usage: Usage{InputTokens: 100, OutputTokens: 7, Cost: 0.25}, Model: "m", Provider: "p"},
+		err:  boom,
+	})
+	state := &State{Usage: Usage{InputTokens: 1, Cost: 0.5}, Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	if err := h(ctx, state); !errors.Is(err, boom) {
+		t.Fatalf("handler err = %v, want boom", err)
+	}
+	root.End(nil)
+
+	want := Usage{InputTokens: 101, OutputTokens: 7, Cost: 0.75}
+	if state.Usage != want {
+		t.Errorf("State.Usage = %+v, want %+v (prior plus the failed call's spend)", state.Usage, want)
+	}
+	if state.LastResponse != nil {
+		t.Errorf("LastResponse = %+v, want nil: a failed call must not become the last reply", state.LastResponse)
+	}
+	gen := findEndedSpan(t, trc, "model.call")
+	if gen.Attrs[AttrUsageIn] != 100 || gen.Attrs[AttrUsageOut] != 7 || gen.Attrs[AttrUsageCost] != 0.25 {
+		t.Errorf("failed span usage attrs = %v/%v/%v, want 100/7/0.25", gen.Attrs[AttrUsageIn], gen.Attrs[AttrUsageOut], gen.Attrs[AttrUsageCost])
+	}
+	for _, k := range []string{AttrOutput, AttrModel, AttrProvider} {
+		if v, ok := gen.Attrs[k]; ok {
+			t.Errorf("failed span has %s = %v, want it success-only", k, v)
+		}
+	}
+}
+
+func TestDefaultLLMCallHandler_FailedCallWithoutUsageRecordsNone(t *testing.T) {
+	trc := NewTrace()
+	tr := NewDefaultTracer(trc)
+	ctx := withTracer(context.Background(), tr)
+	ctx, root := tr.StartSpan(ctx, "run")
+
+	h := DefaultLLMCallHandler(erroringLLM{err: errors.New("boom")})
+	state := &State{Usage: Usage{InputTokens: 1}, Messages: []Message{{Role: RoleUser, Content: "hi"}}}
+	_ = h(ctx, state)
+	root.End(nil)
+
+	if state.Usage != (Usage{InputTokens: 1}) {
+		t.Errorf("State.Usage = %+v, want unchanged", state.Usage)
+	}
+	gen := findEndedSpan(t, trc, "model.call")
+	for _, k := range []string{AttrUsageIn, AttrUsageOut, AttrUsageCost} {
+		if v, ok := gen.Attrs[k]; ok {
+			t.Errorf("failed span with no usage has %s = %v, want absent", k, v)
+		}
 	}
 }
