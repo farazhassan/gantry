@@ -327,6 +327,28 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	}
 	ctx = withIdentity(ctx, ident)
 
+	// A nested run that aborts with an error still emits a terminal done
+	// event, so a consumer tracking the sub-agent's lifecycle (the AG-UI
+	// mapper's SUBAGENT_STARTED/SUBAGENT_ERROR pair) sees it close even
+	// though the parent run carries on. A top-level run doesn't: its error
+	// return is the consumer's signal (see RunStream).
+	doneEmitted := false
+	if ident.parentRunID != "" {
+		defer func() {
+			if retErr == nil || doneEmitted {
+				return
+			}
+			usage := state.Usage
+			_ = emit(ctx, Event{
+				Type:       EventDone,
+				Iteration:  state.Iteration,
+				DoneReason: abortReason(retErr),
+				Error:      retErr.Error(),
+				Usage:      &usage,
+			})
+		}()
+	}
+
 	// Resolve tracer: prefer the configured one; otherwise build a default
 	// tracer that writes to state.Trace.
 	tracer := a.tracer
@@ -429,6 +451,7 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	// usage is copied out of state (rather than passing &state.Usage) so the
 	// emitted event's snapshot is immune to any further mutation of state.
 	usage := state.Usage
+	doneEmitted = true
 	if err := emit(ctx, Event{
 		Type:        EventDone,
 		Iteration:   state.Iteration,
@@ -440,6 +463,21 @@ func (a *Agent) run(ctx context.Context, state *State, sink EventSink) (_ *State
 	}
 
 	return state, nil
+}
+
+// abortReason is the DoneReason a run that aborted with err reports on its
+// terminal done event: the one a blocking sentinel implies, else DoneError.
+func abortReason(err error) DoneReason {
+	switch {
+	case errors.Is(err, ErrGuardrailBlocked):
+		return DoneGuardrailBlocked
+	case errors.Is(err, ErrHumanAborted):
+		return DoneHumanAborted
+	case errors.Is(err, ErrToolPolicyAborted):
+		return DoneToolPolicyAborted
+	default:
+		return DoneError
+	}
 }
 
 // runPhase resolves the inner handler for the phase, composes the chain,

@@ -245,7 +245,11 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 		case ev.ParentRunID == "" && ev.ParentToolCallID == "":
 			out = append(out, newRunFinished(m.threadID, m.runID))
 		case subagentErrorReasons[ev.DoneReason]:
-			out = append(out, newSubagentError(ev.RunID, "sub-agent run terminated: "+string(ev.DoneReason)).withIdentity(id))
+			msg := "sub-agent run terminated: " + string(ev.DoneReason)
+			if ev.Error != "" {
+				msg += ": " + ev.Error
+			}
+			out = append(out, newSubagentError(ev.RunID, msg).withIdentity(id))
 		default:
 			out = append(out, newSubagentFinished(ev.RunID, ev.FinalOutput, ev.DoneReason == gantry.DoneClientToolCall).withIdentity(id))
 		}

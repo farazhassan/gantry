@@ -112,6 +112,10 @@ type Event struct {
 
 	DoneReason  DoneReason `json:"done_reason,omitempty"`
 	FinalOutput string     `json:"final_output,omitempty"`
+	// Error is the run's terminal error text on the done event a nested
+	// sub-agent run emits when it aborts with an error (see Agent.run);
+	// empty on every other event, including a top-level run's.
+	Error string `json:"error,omitempty"`
 
 	// Usage is a snapshot of the run's cumulative token/cost accounting as of
 	// this event (see State.Usage), attached to phase_end and done events. A
