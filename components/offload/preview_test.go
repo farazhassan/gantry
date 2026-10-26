@@ -243,3 +243,63 @@ func TestPreviewMetaIsStrict(t *testing.T) {
 		}
 	}
 }
+
+func kFields(n int) string {
+	var kv []string
+	for i := 0; i < n; i++ {
+		kv = append(kv, fmt.Sprintf(`"k%d":%d`, i, i))
+	}
+	return strings.Join(kv, ",")
+}
+
+// The _more offset indexes all of the object's fields in document order, so
+// the field at that index is the first k field the preview did not show.
+func TestPreviewMoreOffsetIndexesAllFields(t *testing.T) {
+	c := `{"value":"` + strings.Repeat("v", 1000) + `","notes":"short",` + kFields(100) + `}`
+	for _, budget := range []int{1500, 3000} {
+		root, _ := parseJSON([]byte(c))
+		p := buildPreview(root, c, "res_o", budget, keepSet(DefaultKeepKeys))
+		var got map[string]any
+		if err := json.Unmarshal([]byte(p), &got); err != nil {
+			t.Fatal(err)
+		}
+		var off int
+		if _, err := fmt.Sscanf(got["_more"].(string)[strings.Index(got["_more"].(string), "offset="):], "offset=%d", &off); err != nil {
+			t.Fatalf("budget %d: %v: %s", budget, err, p)
+		}
+		first := root.keys[off]
+		if _, shown := got[first]; shown || !strings.HasPrefix(first, "k") {
+			t.Errorf("budget %d: field at offset %d is %q (shown=%v)", budget, off, first, shown)
+		}
+		if _, shown := got[root.keys[off-1]]; !shown {
+			t.Errorf("budget %d: field before offset %q not shown", budget, root.keys[off-1])
+		}
+	}
+	c2 := "{" + kFields(2000) + "}"
+	root, _ := parseJSON([]byte(c2))
+	if p := buildPreview(root, c2, "res_o", 1500, keepSet(DefaultKeepKeys)); !strings.Contains(p, `offset=50`) {
+		t.Errorf("plain root offset: %s", p)
+	}
+}
+
+func TestPreviewHasOneMoreKey(t *testing.T) {
+	c := `{"_more":"orig",` + kFields(100) + `}`
+	root, _ := parseJSON([]byte(c))
+	p := buildPreview(root, c, "res_o", 1500, keepSet(DefaultKeepKeys))
+	if n := strings.Count(p, `"_more":`); n != 1 {
+		t.Errorf("%d _more keys: %s", n, p)
+	}
+	if strings.Contains(p, "orig") {
+		t.Errorf("own _more shown: %s", p)
+	}
+}
+
+func TestPreviewMetaBailsOnHugeContent(t *testing.T) {
+	c := `{"_offloaded":{"ref":"res_a","chars":5,"read":"r"},"x":"` + strings.Repeat("y", 250000) + `"}`
+	if _, ok := previewMeta(c); ok {
+		t.Error("huge content accepted")
+	}
+	if _, ok := previewMeta(`{"_offloaded":{"ref":"res_a","chars":5,"read":"r"}}` + "\n "); !ok {
+		t.Error("trailing whitespace rejected")
+	}
+}

@@ -112,7 +112,7 @@ func (p previewer) render(n *node, path string, depth int, l level) *node {
 	switch n.kind {
 	case kindObject:
 		out := &node{kind: kindObject}
-		shown, dropped := 0, 0
+		shown, dropped, next := 0, 0, 0
 		for i, k := range n.keys {
 			v, vp := n.vals[i], keyPath(path, k)
 			var pv *node
@@ -123,6 +123,7 @@ func (p previewer) render(n *node, path string, depth int, l level) *node {
 					continue
 				}
 				shown++
+				next = i + 1
 			}
 			switch {
 			case kept:
@@ -138,11 +139,22 @@ func (p previewer) render(n *node, path string, depth int, l level) *node {
 			out.vals = append(out.vals, pv)
 		}
 		if dropped > 0 {
-			// Non-keep fields are paged in document order: read_result
-			// offset=N skips the first N non-keep fields, which are the
-			// ones shown here.
+			// offset indexes ALL of the object's fields in document order
+			// (keep keys included): it is the index just after the last
+			// non-keep field shown. read_result pages fields by offset/limit
+			// over that same order, so keep keys after the offset may be
+			// shown again. The object's own "_more" field is left out of
+			// the preview so the key stays unique.
+			kept := &node{kind: kindObject}
+			for i, k := range out.keys {
+				if k != "_more" {
+					kept.keys = append(kept.keys, k)
+					kept.vals = append(kept.vals, out.vals[i])
+				}
+			}
+			out = kept
 			out.keys = append(out.keys, "_more")
-			out.vals = append(out.vals, textNode(fmt.Sprintf("%d more fields: read_result path=%q offset=%d", dropped, path, shown)))
+			out.vals = append(out.vals, textNode(fmt.Sprintf("%d more fields: read_result path=%q offset=%d", dropped, path, next)))
 		}
 		return out
 	case kindArray:
@@ -240,6 +252,9 @@ func cutBytes(s string, n int) string {
 // positive chars count and a read hint.
 func previewMeta(content string) (offloadedMeta, bool) {
 	if !strings.Contains(content, `"`+metaKey+`":{"ref":"res_`) {
+		return offloadedMeta{}, false
+	}
+	if len(content) > 64<<10 || !strings.HasSuffix(strings.TrimRight(content, " \t\r\n"), "}}") {
 		return offloadedMeta{}, false
 	}
 	root, err := parseJSON([]byte(content))
