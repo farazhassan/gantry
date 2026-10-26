@@ -134,9 +134,10 @@ func (t readTool) Invoke(ctx context.Context, input json.RawMessage) (json.RawMe
 		if end < count {
 			add("next_offset", intNode(end))
 		}
-	case n.kind == kindObject && (in.Offset > 0 || in.Limit > 0 || len(n.String()) > budget):
+	case n.kind == kindObject && (in.Offset > 0 || in.Limit > 0):
 		// Fields are paged over ALL keys in document order, the same index
-		// the preview's _more offset uses.
+		// the preview's _more offset uses. Without offset or limit an object
+		// is read whole, or fitted with hints (the default case).
 		count := len(n.keys)
 		start := min(in.Offset, count)
 		sub := func(a, b int) *node { return &node{kind: kindObject, keys: n.keys[a:b], vals: n.vals[a:b]} }

@@ -72,18 +72,23 @@ func TestReadBySrcHandle(t *testing.T) {
 
 func TestReadCapsLargeValues(t *testing.T) {
 	store, ref := seeded(t, bigMetric(400))
-	// The root is too big for one reply, so it pages by field; the oversized
-	// "points" field then comes back previewed.
-	m, err := read(t, store, `{"ref":"`+ref+`","path":"series[0]","offset":1}`)
+	m, err := read(t, store, `{"ref":"`+ref+`"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(m["value"]), "read_result path=") {
-		t.Errorf("over-size value not previewed: %.200s", m["value"])
+	v := string(m["value"])
+	for _, want := range []string{`"src"`, `"value":4200`, `"vs_prior_period"`, "read_result path="} {
+		if !strings.Contains(v, want) {
+			t.Errorf("root read lacks %s: %.400s", want, v)
+		}
 	}
-	m, err = read(t, store, `{"ref":"`+ref+`"}`)
-	if err != nil || m["next_offset"] == nil || string(m["total"]) != "6" {
-		t.Errorf("root should page: %v %v", m["next_offset"], err)
+	if m["next_offset"] != nil {
+		t.Errorf("unpaged read should not page: %s", m["next_offset"])
+	}
+	// A paged read of the oversized field also comes back previewed.
+	m, err = read(t, store, `{"ref":"`+ref+`","path":"series[0]","offset":1}`)
+	if err != nil || !strings.Contains(string(m["value"]), "read_result path=") {
+		t.Errorf("over-size field not previewed: %.200s %v", m["value"], err)
 	}
 }
 
