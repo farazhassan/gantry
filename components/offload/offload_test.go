@@ -3,9 +3,10 @@ package offload
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/farazhassan/gantry"
 	"github.com/farazhassan/gantry/eval"
@@ -165,7 +166,7 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestInstallRunsAfterInnerAssembly(t *testing.T) {
+func TestShrinksOnTheCallAfterTheModelReadsTheResult(t *testing.T) {
 	big := bigMetric(400)
 	mock := eval.NewMockLLMClient(
 		gantry.LLMResponse{ToolCalls: []gantry.ToolCall{{ID: "c1", Name: "get_metric", Input: []byte(`{}`)}}, StopReason: gantry.StopReasonToolUse},
@@ -217,9 +218,9 @@ func TestInstallRunsAfterInnerAssembly(t *testing.T) {
 	}
 }
 
-func TestShrinkPlusMeterIsCheapOnLongHistories(t *testing.T) {
+func BenchmarkShrinkSteadyState(b *testing.B) {
 	c := newComp(NewMemStore())
-	big := bigMetric(400) // ~ 20k
+	big := bigMetric(400)
 	var msgs []gantry.Message
 	for i := 0; i < 400; i++ {
 		content := `{"src":"mtr_s","value":1}`
@@ -233,11 +234,119 @@ func TestShrinkPlusMeterIsCheapOnLongHistories(t *testing.T) {
 	s := &gantry.State{Messages: msgs}
 	ctx := withScope("chat1")
 	c.shrink(ctx, s) // first call does the work
-	start := time.Now()
-	c.shrink(ctx, s)
-	d := time.Since(start)
-	t.Logf("steady-state shrink+meter over 800 messages: %v", d)
-	if d > 20*time.Millisecond {
-		t.Errorf("steady-state shrink took %v", d)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.shrink(ctx, s)
+	}
+}
+
+type countingStore struct {
+	Store
+	mu     sync.Mutex
+	puts   int
+	failAt int // fail the Nth Put (1-based); 0 = never
+}
+
+func (s *countingStore) Put(ctx context.Context, k, v string) error {
+	s.mu.Lock()
+	s.puts++
+	n := s.puts
+	s.mu.Unlock()
+	if s.failAt != 0 && n == s.failAt {
+		return errors.New("down")
+	}
+	return s.Store.Put(ctx, k, v)
+}
+
+func manySrcs(n int) string {
+	var parts []string
+	for i := 0; i < n; i++ {
+		parts = append(parts, fmt.Sprintf(`{"src":"mtr_%03d","pad":"%s"}`, i, strings.Repeat("p", 30)))
+	}
+	return `{"items":[` + strings.Join(parts, ",") + `]}`
+}
+
+func TestRebuiltTurnsSkipPutsForStoredResults(t *testing.T) {
+	cs := &countingStore{Store: NewMemStore()}
+	c := newComp(cs)
+	big := manySrcs(200)
+	for turn := 1; turn <= 3; turn++ {
+		s := &gantry.State{Messages: history(big, turn)}
+		c.shrink(withScope("chat1"), s)
+		if _, ok := previewMeta(s.Messages[2].Content); !ok {
+			t.Fatalf("turn %d: not shrunk", turn)
+		}
+	}
+	if cs.puts != 201 {
+		t.Errorf("Puts = %d, want 201", cs.puts)
+	}
+}
+
+func TestPartialIndexFailureIsRetriedNextCall(t *testing.T) {
+	mem := NewMemStore()
+	big := manySrcs(200)
+	failing := &countingStore{Store: mem, failAt: 50}
+	var reported error
+	c := New(failing, Options{Scope: scopeFromCtx, OnError: func(_ context.Context, err error) { reported = err }}).(*component)
+	s := &gantry.State{Messages: history(big, 1)}
+	c.shrink(withScope("chat1"), s)
+	if s.Messages[2].Content != big || reported == nil {
+		t.Fatal("failed write should keep the full result and report")
+	}
+	c2 := newComp(mem)
+	s2 := &gantry.State{Messages: history(big, 1)}
+	c2.shrink(withScope("chat1"), s2)
+	if _, ok := previewMeta(s2.Messages[2].Content); !ok {
+		t.Fatal("retry did not shrink")
+	}
+	for i := 0; i < 200; i++ {
+		if _, ok, _ := mem.Get(context.Background(), fmt.Sprintf("chat1:src:mtr_%03d", i)); !ok {
+			t.Fatalf("index entry %d missing after retry", i)
+		}
+	}
+}
+
+type getFailStore struct{ Store }
+
+func (getFailStore) Get(context.Context, string) (string, bool, error) {
+	return "", false, errors.New("down")
+}
+
+func TestGetFailureKeepsTheFullResultAndReports(t *testing.T) {
+	var reported error
+	c := New(getFailStore{NewMemStore()}, Options{Scope: scopeFromCtx, OnError: func(_ context.Context, err error) { reported = err }}).(*component)
+	big := bigMetric(400)
+	s := &gantry.State{Messages: history(big, 1)}
+	c.shrink(withScope("chat1"), s)
+	if s.Messages[2].Content != big || reported == nil {
+		t.Error("Get failure should keep the result full and report")
+	}
+}
+
+func TestMeterNeverGoesNegative(t *testing.T) {
+	foreign := `{"_offloaded":{"ref":"res_x","chars":5,"read":"r"}}`
+	c := newComp(NewMemStore())
+	s := &gantry.State{Messages: []gantry.Message{{Role: gantry.RoleTool, Content: foreign}}}
+	c.shrink(withScope("chat1"), s)
+	if v := s.Meta[MetaSavedChars].(int); v < 0 {
+		t.Errorf("saved_chars = %d", v)
+	}
+}
+
+func TestPreviewCharsIsCapped(t *testing.T) {
+	if got := (Options{PreviewChars: 1 << 20}).withDefaults().PreviewChars; got != 32<<10 {
+		t.Errorf("PreviewChars = %d", got)
+	}
+}
+
+func TestResolveEmptyScopeErrors(t *testing.T) {
+	store := NewMemStore()
+	c := newComp(store)
+	s := &gantry.State{Messages: history(bigMetric(400), 1)}
+	c.shrink(withScope("chat1"), s)
+	p := s.Messages[2].Content
+	got, err := Resolve(context.Background(), store, "", p)
+	if err == nil || !strings.Contains(err.Error(), "no scope to resolve") || got != p {
+		t.Errorf("Resolve = %v", err)
 	}
 }

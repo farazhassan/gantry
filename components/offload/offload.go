@@ -28,7 +28,8 @@ type Options struct {
 	// AfterCalls: how many assistant messages must follow a result before it
 	// is shrunk (default 1).
 	AfterCalls int
-	// PreviewChars is the preview budget in bytes (default 1500).
+	// PreviewChars is the preview budget in bytes (default 1500, capped at
+	// 32KiB so previews stay under previewMeta's 64KiB detection guard).
 	PreviewChars int
 	// KeepKeys are kept whole in previews (default DefaultKeepKeys).
 	KeepKeys []string
@@ -46,6 +47,7 @@ func (o Options) withDefaults() Options {
 	if o.PreviewChars <= 0 {
 		o.PreviewChars = 1500
 	}
+	o.PreviewChars = min(o.PreviewChars, 32<<10)
 	if o.KeepKeys == nil {
 		o.KeepKeys = DefaultKeepKeys
 	}
@@ -59,7 +61,9 @@ type component struct {
 }
 
 // New returns the component that shrinks large, already-read tool results
-// before each LLM call. It panics without a store or Options.Scope.
+// before each LLM call. Install it before the compactor, if both are used:
+// install order makes offload the inner middleware, so it shrinks first and
+// the compactor measures the shrunk messages. It panics without a store or Options.Scope.
 func New(store Store, opts Options) gantry.Component {
 	if store == nil || opts.Scope == nil {
 		panic("offload: New requires a Store and Options.Scope")
@@ -126,17 +130,27 @@ func (c *component) offload(ctx context.Context, scope, content string) (string,
 	if err != nil {
 		root = nil // not JSON: preview its head
 	}
-	if err := c.store.Put(ctx, storeKey(scope, ref), content); err != nil {
-		return "", fmt.Errorf("offload: store %s: %w", ref, err)
+	// The ref entry is the commit marker: it is written last, so a partial
+	// index failure leaves it absent and the next call retries everything.
+	// Once it exists, nothing is written again.
+	_, stored, err := c.store.Get(ctx, storeKey(scope, ref))
+	if err != nil {
+		return "", fmt.Errorf("offload: lookup %s: %w", ref, err)
 	}
-	if root != nil {
-		// The index is first-writer-wins (Put never overwrites): if the same
-		// src handle appears in two different results, the first one stays.
-		for _, sp := range srcPaths(root) {
-			entry, _ := json.Marshal(srcEntry{Ref: ref, Path: sp.path})
-			if err := c.store.Put(ctx, storeKey(scope, "src:"+sp.src), string(entry)); err != nil {
-				return "", fmt.Errorf("offload: index %s: %w", sp.src, err)
+	if !stored {
+		if root != nil {
+			// The index is first-writer-wins (Put never overwrites): if the
+			// same src handle appears in two different results, the first
+			// one stays.
+			for _, sp := range srcPaths(root) {
+				entry, _ := json.Marshal(srcEntry{Ref: ref, Path: sp.path})
+				if err := c.store.Put(ctx, storeKey(scope, "src:"+sp.src), string(entry)); err != nil {
+					return "", fmt.Errorf("offload: index %s: %w", sp.src, err)
+				}
 			}
+		}
+		if err := c.store.Put(ctx, storeKey(scope, ref), content); err != nil {
+			return "", fmt.Errorf("offload: store %s: %w", ref, err)
 		}
 	}
 	return buildPreview(root, content, ref, c.opts.PreviewChars, c.keep), nil
@@ -149,7 +163,7 @@ func (c *component) meter(s *gantry.State) {
 			continue
 		}
 		if meta, ok := previewMeta(m.Content); ok {
-			saved += meta.Chars - len(m.Content)
+			saved += max(0, meta.Chars-len(m.Content))
 			previews++
 		}
 	}
@@ -166,6 +180,9 @@ func Resolve(ctx context.Context, store Store, scope, content string) (string, e
 	meta, ok := previewMeta(content)
 	if !ok {
 		return content, nil
+	}
+	if scope == "" {
+		return content, fmt.Errorf("offload: no scope to resolve %s in", meta.Ref)
 	}
 	full, found, err := store.Get(ctx, storeKey(scope, meta.Ref))
 	if err != nil {
