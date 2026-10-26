@@ -177,7 +177,7 @@ Batteries-included, opt-in capabilities that attach as middleware via convenienc
 `With…` constructors — mix and match what you need:
 
 **transcript** · **memory** · **tool** · **skill** · **retriever** · **planner** ·
-**critic** · **guardrail** · **limiter** · **compactor** · **humanloop** · **checkpointer**
+**critic** · **guardrail** · **limiter** · **compactor** · **offload** · **humanloop** · **checkpointer**
 
 Each ships a reference built-in (swap in your own by satisfying the component's
 interface). Full reference table, built-ins, and an end-to-end example wiring
