@@ -21,6 +21,7 @@ type chatRequest struct {
 	Stream        bool             `json:"stream"`
 	StreamOptions *streamOptions   `json:"stream_options,omitempty"`
 	Reasoning     *reasoningConfig `json:"reasoning,omitempty"`
+	SessionID     string           `json:"session_id,omitempty"`
 }
 
 // reasoningConfig mirrors OpenRouter's unified reasoning parameter, which

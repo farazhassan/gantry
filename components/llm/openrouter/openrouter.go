@@ -21,6 +21,10 @@ const (
 	dataPrefix     = "data: "
 	doneSentinel   = "[DONE]"
 	maxLineBytes   = 1 << 20 // 1 MiB; one SSE data line can hold a whole tool-call payload
+
+	// maxSessionIDLen caps session_id. OpenRouter's limit is 256 characters;
+	// the check counts bytes, which is stricter and fine for compact ids.
+	maxSessionIDLen = 256
 )
 
 // Client is a gantry.StreamingLLMClient backed by OpenRouter's
@@ -33,6 +37,7 @@ type Client struct {
 	baseURL         string
 	apiKey          string
 	reasoningEffort string
+	sessionID       func(context.Context) string
 	httpc           *http.Client
 	ctxWindow       windowCache
 }
@@ -104,6 +109,19 @@ func WithHTTPClient(h *http.Client) Option {
 // default) omits the field entirely.
 func WithReasoningEffort(effort string) Option {
 	return func(c *Client) { c.reasoningEffort = effort }
+}
+
+// WithSessionID sets a callback that returns the OpenRouter session_id for a
+// request's context. OpenRouter uses session_id as the sticky routing key: it
+// prefers the upstream provider that served the session's earlier requests,
+// so that provider's prompt cache stays warm (it still fails over if the
+// provider is down), and it groups the requests in its activity view.
+// Stickiness lapses after 10 minutes idle and does not apply when a
+// provider.order is set. Pass a compact id such as a UUID; an empty id, or
+// one over 256 bytes, is not sent. The callback runs on every request, so
+// keep it cheap.
+func WithSessionID(fn func(ctx context.Context) string) Option {
+	return func(c *Client) { c.sessionID = fn }
 }
 
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
@@ -260,7 +278,13 @@ func (a *toolAccumulator) calls() []respToolCall {
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.reasoningEffort))
+	cr := toChatRequest(c.model, req, stream, c.reasoningEffort)
+	if c.sessionID != nil {
+		if id := c.sessionID(ctx); len(id) <= maxSessionIDLen {
+			cr.SessionID = id
+		}
+	}
+	body, err := json.Marshal(cr)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: encode request: %w", err)
 	}

@@ -298,3 +298,27 @@ func TestGenerateStreamWithoutCostOrProviderLeavesThemEmpty(t *testing.T) {
 		t.Errorf("Provider/Model = %q/%q, want both empty", resp.Provider, resp.Model)
 	}
 }
+
+func TestGenerateStreamSendsSessionID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, `{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")
+	}))
+	t.Cleanup(srv.Close)
+	c := openrouter.New("test-model",
+		openrouter.WithAPIKey("test-key"),
+		openrouter.WithBaseURL(srv.URL),
+		openrouter.WithHTTPClient(srv.Client()),
+		openrouter.WithSessionID(func(context.Context) string { return "chat-123" }),
+	)
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if gotBody["session_id"] != "chat-123" {
+		t.Errorf("session_id = %v, want chat-123", gotBody["session_id"])
+	}
+}
