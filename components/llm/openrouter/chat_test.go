@@ -255,3 +255,102 @@ func TestGeneratePrefixesFailedToolResults(t *testing.T) {
 		t.Errorf("failed tool message content = %v, want %q", failed["content"], "Error: city not found")
 	}
 }
+
+func TestGenerateReportsCostCacheAndProvider(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"provider":"GMICloud",
+			"model":"deepseek/deepseek-v4-flash",
+			"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1000,"completion_tokens":20,"cost":0.0000475,
+			         "prompt_tokens_details":{"cached_tokens":760,"cache_write_tokens":50}}
+		}`)
+	})
+
+	resp, err := c.Generate(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	want := gantry.Usage{InputTokens: 1000, OutputTokens: 20, CacheReadTokens: 760, CacheWriteTokens: 50, Cost: 0.0000475}
+	if resp.Usage != want {
+		t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
+	}
+	if resp.Provider != "GMICloud" {
+		t.Errorf("Provider = %q, want GMICloud", resp.Provider)
+	}
+	if resp.Model != "deepseek/deepseek-v4-flash" {
+		t.Errorf("Model = %q, want deepseek/deepseek-v4-flash", resp.Model)
+	}
+}
+
+type sessionKey struct{}
+
+// newSessionClient returns a Client with the given WithSessionID callback
+// whose server stores each request body in *body and replies "ok".
+func newSessionClient(t *testing.T, fn func(context.Context) string, body *map[string]any) *openrouter.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, body)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	return openrouter.New("test-model",
+		openrouter.WithAPIKey("test-key"),
+		openrouter.WithBaseURL(srv.URL),
+		openrouter.WithHTTPClient(srv.Client()),
+		openrouter.WithSessionID(fn),
+	)
+}
+
+func TestGenerateSendsSessionIDFromContext(t *testing.T) {
+	var gotBody map[string]any
+	c := newSessionClient(t, func(ctx context.Context) string {
+		id, _ := ctx.Value(sessionKey{}).(string)
+		return id
+	}, &gotBody)
+
+	ctx := context.WithValue(context.Background(), sessionKey{}, "chat-123")
+	if _, err := c.Generate(ctx, gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if gotBody["session_id"] != "chat-123" {
+		t.Errorf("session_id = %v, want chat-123", gotBody["session_id"])
+	}
+
+	// No id on the context: the field is omitted, not sent empty.
+	gotBody = nil
+	if _, err := c.Generate(context.Background(), gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if v, ok := gotBody["session_id"]; ok {
+		t.Errorf("session_id = %v, want field absent when the callback returns \"\"", v)
+	}
+}
+
+func TestGenerateOmitsSessionIDByDefault(t *testing.T) {
+	var gotBody map[string]any
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	})
+	if _, err := c.Generate(context.Background(), gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if v, ok := gotBody["session_id"]; ok {
+		t.Errorf("session_id = %v, want absent without WithSessionID", v)
+	}
+}
+
+func TestGenerateDropsOverlongSessionID(t *testing.T) {
+	var gotBody map[string]any
+	long := strings.Repeat("x", 257)
+	c := newSessionClient(t, func(context.Context) string { return long }, &gotBody)
+	if _, err := c.Generate(context.Background(), gantry.LLMRequest{Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if v, ok := gotBody["session_id"]; ok {
+		t.Errorf("session_id of %d chars sent, want it dropped (OpenRouter's limit is 256)", len(v.(string)))
+	}
+}

@@ -21,6 +21,10 @@ const (
 	dataPrefix     = "data: "
 	doneSentinel   = "[DONE]"
 	maxLineBytes   = 1 << 20 // 1 MiB; one SSE data line can hold a whole tool-call payload
+
+	// maxSessionIDLen caps session_id. OpenRouter's limit is 256 characters;
+	// the check counts bytes, which is stricter and fine for compact ids.
+	maxSessionIDLen = 256
 )
 
 // Client is a gantry.StreamingLLMClient backed by OpenRouter's
@@ -33,6 +37,7 @@ type Client struct {
 	baseURL         string
 	apiKey          string
 	reasoningEffort string
+	sessionID       func(context.Context) string
 	httpc           *http.Client
 	ctxWindow       windowCache
 }
@@ -106,6 +111,19 @@ func WithReasoningEffort(effort string) Option {
 	return func(c *Client) { c.reasoningEffort = effort }
 }
 
+// WithSessionID sets a callback that returns the OpenRouter session_id for a
+// request's context. OpenRouter uses session_id as the sticky routing key: it
+// prefers the upstream provider that served the session's earlier requests,
+// so that provider's prompt cache stays warm (it still fails over if the
+// provider is down), and it groups the requests in its activity view.
+// Stickiness lapses after 10 minutes idle and does not apply when a
+// provider.order is set. Pass a compact id such as a UUID; an empty id, or
+// one over 256 bytes, is not sent. The callback runs on every request, so
+// keep it cheap.
+func WithSessionID(fn func(ctx context.Context) string) Option {
+	return func(c *Client) { c.sessionID = fn }
+}
+
 // BaseURL returns the endpoint the client posts to (trailing slash trimmed).
 func (c *Client) BaseURL() string { return c.baseURL }
 
@@ -129,7 +147,9 @@ func (c *Client) Generate(ctx context.Context, req gantry.LLMRequest) (gantry.LL
 		return gantry.LLMResponse{}, fmt.Errorf("openrouter: response had no choices")
 	}
 	ch := cr.Choices[0]
-	return assembleResponse(ch.Message.Content, ch.Message.ToolCalls, ch.FinishReason, toUsage(cr.Usage)), nil
+	out := assembleResponse(ch.Message.Content, ch.Message.ToolCalls, ch.FinishReason, toUsage(cr.Usage))
+	out.Provider, out.Model = cr.Provider, cr.Model
+	return out, nil
 }
 
 // GenerateStream sends a streaming chat-completions request, invoking yield
@@ -147,10 +167,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 	}
 
 	var (
-		content      strings.Builder
-		calls        toolAccumulator
-		finishReason string
-		u            gantry.Usage
+		content         strings.Builder
+		calls           toolAccumulator
+		finishReason    string
+		u               gantry.Usage
+		provider, model string
 	)
 
 	sc := bufio.NewScanner(resp.Body)
@@ -170,6 +191,12 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		var chunk chatResponse
 		if err := json.Unmarshal(payload, &chunk); err != nil {
 			return gantry.LLMResponse{}, fmt.Errorf("openrouter: decode stream chunk: %w", err)
+		}
+		if chunk.Provider != "" {
+			provider = chunk.Provider
+		}
+		if chunk.Model != "" {
+			model = chunk.Model
 		}
 		if chunk.Usage != nil {
 			u = toUsage(chunk.Usage)
@@ -201,6 +228,7 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 	}
 
 	out := assembleResponse(content.String(), calls.calls(), finishReason, u)
+	out.Provider, out.Model = provider, model
 	// Terminal metadata chunk (empty delta) for parity with the in-repo mock;
 	// the default LLM handler ignores empty-delta chunks, so this is harmless.
 	usage := out.Usage
@@ -250,7 +278,13 @@ func (a *toolAccumulator) calls() []respToolCall {
 }
 
 func (c *Client) post(ctx context.Context, req gantry.LLMRequest, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, stream, c.reasoningEffort))
+	cr := toChatRequest(c.model, req, stream, c.reasoningEffort)
+	if c.sessionID != nil {
+		if id := c.sessionID(ctx); len(id) <= maxSessionIDLen {
+			cr.SessionID = id
+		}
+	}
+	body, err := json.Marshal(cr)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: encode request: %w", err)
 	}
@@ -287,8 +321,10 @@ func toUsage(u *usage) gantry.Usage {
 		return gantry.Usage{}
 	}
 	return gantry.Usage{
-		InputTokens:     u.PromptTokens, // already includes cached tokens
-		OutputTokens:    u.CompletionTokens,
-		CacheReadTokens: u.PromptTokensDetails.CachedTokens,
+		InputTokens:      u.PromptTokens, // already includes cached tokens
+		OutputTokens:     u.CompletionTokens,
+		CacheReadTokens:  u.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: u.PromptTokensDetails.CacheWriteTokens,
+		Cost:             u.Cost,
 	}
 }

@@ -244,3 +244,81 @@ func TestGenerateStreamPropagatesContextCancellation(t *testing.T) {
 		t.Error("want error on canceled context, got nil")
 	}
 }
+
+func TestGenerateStreamReportsCostCacheAndProvider(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w,
+			`{"provider":"Baidu","model":"deepseek/deepseek-v4-flash","choices":[{"delta":{"role":"assistant","content":"hi"}}]}`,
+			`{"provider":"Baidu","model":"deepseek/deepseek-v4-flash","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":20,"cost":0.0000475,"prompt_tokens_details":{"cached_tokens":600,"cache_write_tokens":50}}}`,
+			"[DONE]",
+		)
+	})
+
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	want := gantry.Usage{InputTokens: 1000, OutputTokens: 20, CacheReadTokens: 600, CacheWriteTokens: 50, Cost: 0.0000475}
+	if resp.Usage != want {
+		t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
+	}
+	if resp.StopReason != gantry.StopReasonEnd {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, gantry.StopReasonEnd)
+	}
+	if resp.Provider != "Baidu" {
+		t.Errorf("Provider = %q, want Baidu", resp.Provider)
+	}
+	if resp.Model != "deepseek/deepseek-v4-flash" {
+		t.Errorf("Model = %q, want deepseek/deepseek-v4-flash", resp.Model)
+	}
+}
+
+func TestGenerateStreamWithoutCostOrProviderLeavesThemEmpty(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w,
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}`,
+			"[DONE]",
+		)
+	})
+
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if resp.Usage.Cost != 0 || resp.Usage.CacheWriteTokens != 0 {
+		t.Errorf("Usage = %+v, want Cost=0 CacheWriteTokens=0", resp.Usage)
+	}
+	if resp.Provider != "" || resp.Model != "" {
+		t.Errorf("Provider/Model = %q/%q, want both empty", resp.Provider, resp.Model)
+	}
+}
+
+func TestGenerateStreamSendsSessionID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSON(r, &gotBody)
+		sse(w, `{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")
+	}))
+	t.Cleanup(srv.Close)
+	c := openrouter.New("test-model",
+		openrouter.WithAPIKey("test-key"),
+		openrouter.WithBaseURL(srv.URL),
+		openrouter.WithHTTPClient(srv.Client()),
+		openrouter.WithSessionID(func(context.Context) string { return "chat-123" }),
+	)
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "hi"}},
+	}, func(gantry.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if gotBody["session_id"] != "chat-123" {
+		t.Errorf("session_id = %v, want chat-123", gotBody["session_id"])
+	}
+}

@@ -79,16 +79,18 @@ func startGeneration(ctx context.Context, req LLMRequest) (context.Context, gene
 	return ctx, generation{span: span}
 }
 
-// end records the completion, token usage, and model on the generation span,
-// then ends it. A non-nil error is passed through to Span.End so the tracer can
-// mark the observation failed; output/usage are only recorded on success.
+// end records the completion, token usage, cost, model and provider on the
+// generation span, then ends it. A non-nil error is passed through to
+// Span.End so the tracer can mark the observation failed; output/usage are
+// only recorded on success.
 //
 // Attribute keys here (SpanKindKey, AttrInput, AttrOutput, AttrUsageIn,
-// AttrUsageOut, AttrModel) are deliberately exporter-neutral: gantry does not
-// bind to any vendor's semantic conventions. The span is marked with
-// SpanKindGeneration; each tracer/exporter maps that kind and the attributes
-// onto its own model — e.g. the Langfuse exporter emits a generation with
-// native model/input/output/usage fields.
+// AttrUsageOut, AttrUsageCost, AttrModel, AttrProvider) are deliberately
+// exporter-neutral: gantry does not bind to any vendor's semantic
+// conventions. The span is marked with SpanKindGeneration; each
+// tracer/exporter maps that kind and the attributes onto its own model —
+// e.g. the Langfuse exporter emits a generation with native
+// model/input/output/usage fields.
 func (g generation) end(resp LLMResponse, err error) {
 	if g.span == nil {
 		return
@@ -97,8 +99,14 @@ func (g generation) end(resp LLMResponse, err error) {
 		g.span.SetAttr(AttrOutput, marshalResponse(resp))
 		g.span.SetAttr(AttrUsageIn, resp.Usage.InputTokens)
 		g.span.SetAttr(AttrUsageOut, resp.Usage.OutputTokens)
+		if resp.Usage.Cost != 0 {
+			g.span.SetAttr(AttrUsageCost, resp.Usage.Cost)
+		}
 		if resp.Model != "" {
 			g.span.SetAttr(AttrModel, resp.Model)
+		}
+		if resp.Provider != "" {
+			g.span.SetAttr(AttrProvider, resp.Provider)
 		}
 	}
 	g.span.End(err)
