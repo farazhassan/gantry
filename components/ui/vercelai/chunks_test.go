@@ -29,6 +29,7 @@ func TestChunkJSONShape(t *testing.T) {
 		{"finish_step", newFinishStep(), `{"type":"finish-step"}`},
 		{"error", newErrorChunk("boom"), `{"type":"error","errorText":"boom"}`},
 		{"data_usage", newDataChunk("gantry-usage", "", usageValue{InputTokens: 120, OutputTokens: 340, Tokens: 460, CostUSD: 0.0041}), `{"type":"data-gantry-usage","data":{"inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}}`},
+		{"data_usage_cache", newDataChunk("gantry-usage", "", usageValue{InputTokens: 120, OutputTokens: 340, Tokens: 460, CacheReadTokens: 80, CacheWriteTokens: 30, CostUSD: 0.0041}), `{"type":"data-gantry-usage","data":{"inputTokens":120,"outputTokens":340,"tokens":460,"cacheReadTokens":80,"cacheWriteTokens":30,"costUsd":0.0041}}`},
 		{"data_usage_zero_cost", newDataChunk("gantry-usage", "", usageValue{InputTokens: 10, Tokens: 10}), `{"type":"data-gantry-usage","data":{"inputTokens":10,"tokens":10}}`},
 		{"data_events_dropped", newDataChunk("gantry-events-dropped", "", eventsDroppedValue{Count: 3}), `{"type":"data-gantry-events-dropped","data":{"count":3}}`},
 		{

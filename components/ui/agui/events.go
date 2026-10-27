@@ -487,19 +487,21 @@ const usageName = "gantry.usage"
 
 // usageValue is the Custom.Value payload shape for usageName.
 type usageValue struct {
-	InputTokens  int     `json:"inputTokens,omitempty"`
-	OutputTokens int     `json:"outputTokens,omitempty"`
-	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
-	CostUSD      float64 `json:"costUsd,omitempty"`
+	InputTokens  int `json:"inputTokens,omitempty"`
+	OutputTokens int `json:"outputTokens,omitempty"`
+	Tokens       int `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
+	// CacheReadTokens and CacheWriteTokens are subsets of InputTokens: the
+	// prompt tokens served from, and written to, the provider's prompt cache
+	// (see gantry.Usage).
+	CacheReadTokens  int     `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int     `json:"cacheWriteTokens,omitempty"`
+	CostUSD          float64 `json:"costUsd,omitempty"`
 }
 
-func newUsage(inputTokens, outputTokens int, costUSD float64, id identity) Custom {
-	c := newCustom(usageName, usageValue{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		Tokens:       inputTokens + outputTokens,
-		CostUSD:      costUSD,
-	})
+// newUsage builds a gantry.usage event from v, filling in v.Tokens.
+func newUsage(v usageValue, id identity) Custom {
+	v.Tokens = v.InputTokens + v.OutputTokens
+	c := newCustom(usageName, v)
 	c.identity = id
 	return c
 }

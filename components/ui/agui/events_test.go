@@ -55,8 +55,9 @@ func TestEventJSONShape(t *testing.T) {
 			newStateSnapshot(map[string]any{"k": "v"}).withIdentity(identity{RunID: "run-1", Agent: "orchestrator"}),
 			`{"type":"STATE_SNAPSHOT","snapshot":{"k":"v"},"runId":"run-1","agent":"orchestrator"}`,
 		},
-		{"usage", newUsage(120, 340, 0.0041, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}}`},
-		{"usage_zero_cost", newUsage(10, 0, 0, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":10,"tokens":10}}`},
+		{"usage", newUsage(usageValue{InputTokens: 120, OutputTokens: 340, CostUSD: 0.0041}, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":120,"outputTokens":340,"tokens":460,"costUsd":0.0041}}`},
+		{"usage_cache", newUsage(usageValue{InputTokens: 120, OutputTokens: 340, CacheReadTokens: 80, CacheWriteTokens: 30, CostUSD: 0.0041}, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":120,"outputTokens":340,"tokens":460,"cacheReadTokens":80,"cacheWriteTokens":30,"costUsd":0.0041}}`},
+		{"usage_zero_cost", newUsage(usageValue{InputTokens: 10}, identity{}), `{"type":"CUSTOM","name":"gantry.usage","value":{"inputTokens":10,"tokens":10}}`},
 		{"events_dropped", newEventsDropped(3, identity{}), `{"type":"CUSTOM","name":"gantry.events_dropped","value":{"count":3}}`},
 		{"subagent_started_minimal", newSubagentStarted("run-child", "researcher", "", ""), `{"type":"SUBAGENT_STARTED","subagentRunId":"run-child","name":"researcher"}`},
 		{

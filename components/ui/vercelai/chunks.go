@@ -250,10 +250,15 @@ func newDataChunk(name, id string, data any) DataChunk {
 // usageValue is the data-gantry-usage payload shape, mirroring agui's
 // gantry.usage CUSTOM event value.
 type usageValue struct {
-	InputTokens  int     `json:"inputTokens,omitempty"`
-	OutputTokens int     `json:"outputTokens,omitempty"`
-	Tokens       int     `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
-	CostUSD      float64 `json:"costUsd,omitempty"`
+	InputTokens  int `json:"inputTokens,omitempty"`
+	OutputTokens int `json:"outputTokens,omitempty"`
+	Tokens       int `json:"tokens,omitempty"` // InputTokens + OutputTokens, for clients that don't split them
+	// CacheReadTokens and CacheWriteTokens are subsets of InputTokens: the
+	// prompt tokens served from, and written to, the provider's prompt cache
+	// (see gantry.Usage).
+	CacheReadTokens  int     `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int     `json:"cacheWriteTokens,omitempty"`
+	CostUSD          float64 `json:"costUsd,omitempty"`
 }
 
 // eventsDroppedValue is the data-gantry-events-dropped payload shape.
