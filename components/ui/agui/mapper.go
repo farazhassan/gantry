@@ -315,7 +315,13 @@ func (m *Mapper) usageDelta(ev gantry.Event, id identity) []Event {
 		return nil
 	}
 	m.lastUsage[ev.RunID] = *ev.Usage
-	return []Event{newUsage(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.Cost, id)}
+	return []Event{newUsage(usageValue{
+		InputTokens:      ev.Usage.InputTokens,
+		OutputTokens:     ev.Usage.OutputTokens,
+		CacheReadTokens:  ev.Usage.CacheReadTokens,
+		CacheWriteTokens: ev.Usage.CacheWriteTokens,
+		CostUSD:          ev.Usage.Cost,
+	}, id)}
 }
 
 // startFrame returns a RUN_STARTED event the first time it is called, marking

@@ -188,13 +188,13 @@ func TestMapperDoneClosesOpenTextAndStep(t *testing.T) {
 func TestMapperUsageDedup(t *testing.T) {
 	m := NewMapper("m1")
 	m.started = true
-	u := gantry.Usage{InputTokens: 10, OutputTokens: 5, Cost: 0.001}
+	u := gantry.Usage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 4, CacheWriteTokens: 1, Cost: 0.001}
 	// No step is open (no PhaseAssembleContext seen yet), so PhaseObserve's
 	// phase_end contributes only the usage chunk -- closeStep() is a no-op
 	// when stepOpen is false.
 	got := m.Map(gantry.Event{Type: gantry.EventPhaseEnd, Phase: gantry.PhaseObserve, Usage: &u})
 	want := []Chunk{
-		newDataChunk("gantry-usage", "", usageValue{InputTokens: 10, OutputTokens: 5, Tokens: 15, CostUSD: 0.001}),
+		newDataChunk("gantry-usage", "", usageValue{InputTokens: 10, OutputTokens: 5, Tokens: 15, CacheReadTokens: 4, CacheWriteTokens: 1, CostUSD: 0.001}),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)

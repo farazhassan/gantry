@@ -245,10 +245,12 @@ func (m *Mapper) usageDelta(ev gantry.Event) []Chunk {
 	m.lastUsage = *ev.Usage
 	m.haveUsage = true
 	return []Chunk{newDataChunk("gantry-usage", "", usageValue{
-		InputTokens:  ev.Usage.InputTokens,
-		OutputTokens: ev.Usage.OutputTokens,
-		Tokens:       ev.Usage.InputTokens + ev.Usage.OutputTokens,
-		CostUSD:      ev.Usage.Cost,
+		InputTokens:      ev.Usage.InputTokens,
+		OutputTokens:     ev.Usage.OutputTokens,
+		Tokens:           ev.Usage.InputTokens + ev.Usage.OutputTokens,
+		CacheReadTokens:  ev.Usage.CacheReadTokens,
+		CacheWriteTokens: ev.Usage.CacheWriteTokens,
+		CostUSD:          ev.Usage.Cost,
 	})}
 }
 
