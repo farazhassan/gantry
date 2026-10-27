@@ -45,8 +45,9 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 			// The window filled mid tool call, so its input may be cut off:
 			// never run it. Report an overflow instead, so a
 			// ContextOverflowHandler can shrink the prompt and retry — unless
-			// text or reasoning was already streamed, since a retry would
-			// append a second answer after the abandoned one. The tokens were
+			// text, reasoning or a tool call's start was already streamed,
+			// since a retry would append a second answer after the abandoned
+			// one. The tokens were
 			// still spent: the error path below counts them.
 			if resp.Usage.InputTokens > 0 {
 				// The request's prompt was still measured: anchor it so the
@@ -88,7 +89,8 @@ func DefaultLLMCallHandler(client LLMClient) Handler {
 // call can be wrapped in a generation span by the caller. Each populated field
 // on a chunk is emitted through emit as its own event, independently — a
 // terminal metadata-only chunk (empty TextDelta/ReasoningDelta/RawFrame)
-// emits nothing, but a chunk carrying more than one field emits more than one
+// emits nothing, and a ToolCallStart emits only for a tool that set
+// EarlyStart — but a chunk carrying more than one field emits more than one
 // event.
 func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMRequest, streamed *bool) (LLMResponse, error) {
 	if _, ok := SinkFrom(ctx); ok {
@@ -117,6 +119,19 @@ func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMReque
 						return err
 					}
 				}
+				if tc := ch.ToolCallStart; tc != nil && earlyStart(req.Tools, tc.Name) {
+					// An announced call is output the consumer has seen, so
+					// it counts as streamed: a retry would leave it behind.
+					*streamed = true
+					if err := emit(ctx, Event{
+						Type:      EventToolCallStart,
+						Iteration: state.Iteration,
+						Phase:     PhaseLLMCall,
+						ToolCall:  &ToolCall{ID: tc.ID, Name: tc.Name},
+					}); err != nil {
+						return err
+					}
+				}
 				if len(ch.RawFrame) > 0 {
 					if err := emit(ctx, Event{
 						Type:      EventRaw,
@@ -133,6 +148,17 @@ func invokeLLM(ctx context.Context, client LLMClient, state *State, req LLMReque
 		}
 	}
 	return client.Generate(ctx, req)
+}
+
+// earlyStart reports whether the tool named name opted into
+// EventToolCallStart (ToolDef.EarlyStart) in tools.
+func earlyStart(tools []ToolDef, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return t.EarlyStart
+		}
+	}
+	return false
 }
 
 // DefaultPostLLMHandler examines state.LastResponse. If the response has

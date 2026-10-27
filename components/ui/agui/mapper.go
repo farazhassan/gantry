@@ -38,6 +38,12 @@ type Mapper struct {
 	// redundant TOOL_CALL_RESULT for the same toolCallId.
 	liveResultSeen map[string]bool
 
+	// callStarted tracks "runID:callID" for every call already opened with
+	// TOOL_CALL_START from an EventToolCallStart, so the call's later
+	// EventToolCall sends only its TOOL_CALL_ARGS and TOOL_CALL_END instead
+	// of starting the same toolCallId twice.
+	callStarted map[string]bool
+
 	// subagentStarted tracks, per gantry RunID, whether SUBAGENT_STARTED has
 	// already been emitted for that (nested) run -- mirrors started's
 	// lazy-once pattern for RUN_STARTED, but keyed per-RunID since a Mapper
@@ -63,6 +69,7 @@ func NewMapper(threadID, runID string, opts ...MapperOption) *Mapper {
 		lastActivity:    map[string]activityStepValue{},
 		subagentStarted: map[string]bool{},
 		liveResultSeen:  map[string]bool{},
+		callStarted:     map[string]bool{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -112,9 +119,12 @@ var subagentErrorReasons = map[gantry.DoneReason]bool{
 // TEXT_MESSAGE_END / REASONING_MESSAGE_END + REASONING_END) before opening
 // their own — text and reasoning are mutually exclusive per run, so a client
 // never sees interleaved content within a single message — and
-// EventToolCall/EventToolResult/EventToolResultLive/EventPhaseStart/
-// EventPhaseEnd/EventDone close both, since those events represent gantry
-// moving past whatever the model was saying/thinking.
+// EventToolCallStart/EventToolCall/EventToolResult/EventToolResultLive/
+// EventPhaseStart/EventPhaseEnd/EventDone close both, since those events
+// represent gantry moving past whatever the model was saying/thinking.
+// EventToolCallStart opens the call with TOOL_CALL_START alone; the same
+// call's EventToolCall then sends just TOOL_CALL_ARGS and TOOL_CALL_END
+// (see the callStarted field).
 // EventToolResultLive additionally suppresses the later EventToolResult for
 // the same call (see toolResultMsgID and the liveResultSeen field) so a
 // client never sees the same tool call's result delivered twice — once in
@@ -197,12 +207,28 @@ func (m *Mapper) Map(ev gantry.Event) []Event {
 			out = append(out, newStateSnapshot(ev.State).withIdentity(id))
 		}
 
+	case gantry.EventToolCallStart:
+		out = append(out, m.closeText(ev.RunID, id)...)
+		out = append(out, m.closeReasoning(ev.RunID, id)...)
+		if tc := ev.ToolCall; tc != nil {
+			key := ev.RunID + ":" + tc.ID
+			if !m.callStarted[key] {
+				m.callStarted[key] = true
+				out = append(out, newToolCallStart(tc.ID, tc.Name).withIdentity(id))
+			}
+		}
+
 	case gantry.EventToolCall:
 		out = append(out, m.closeText(ev.RunID, id)...)
 		out = append(out, m.closeReasoning(ev.RunID, id)...)
 		if tc := ev.ToolCall; tc != nil {
+			key := ev.RunID + ":" + tc.ID
+			if m.callStarted[key] {
+				delete(m.callStarted, key)
+			} else {
+				out = append(out, newToolCallStart(tc.ID, tc.Name).withIdentity(id))
+			}
 			out = append(out,
-				newToolCallStart(tc.ID, tc.Name).withIdentity(id),
 				newToolCallArgs(tc.ID, string(tc.Input)).withIdentity(id),
 				newToolCallEnd(tc.ID).withIdentity(id),
 			)

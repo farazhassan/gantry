@@ -74,6 +74,40 @@ func TestMapperToolCallClosesOpenText(t *testing.T) {
 	}
 }
 
+func TestMapperToolCallStartOpensCallOnce(t *testing.T) {
+	m := NewMapper("t1", "r1")
+	id := identity{RunID: "run-1"}
+	_ = m.Map(gantry.Event{Type: gantry.EventReasoningDelta, ReasoningDelta: "hmm", RunID: "run-1"})
+	start := &gantry.ToolCall{ID: "c1", Name: "submit"}
+	gotStart := m.Map(gantry.Event{Type: gantry.EventToolCallStart, ToolCall: start, RunID: "run-1"})
+	wantStart := []Event{
+		newReasoningMessageEnd("run-1:reasoning:1").withIdentity(id),
+		newReasoningEnd("run-1:reasoning:1").withIdentity(id),
+		newToolCallStart("c1", "submit").withIdentity(id),
+	}
+	if !reflect.DeepEqual(gotStart, wantStart) {
+		t.Fatalf("start got  %#v\nwant %#v", gotStart, wantStart)
+	}
+	// A repeated announcement for the same call adds nothing.
+	if got := m.Map(gantry.Event{Type: gantry.EventToolCallStart, ToolCall: start, RunID: "run-1"}); len(got) != 0 {
+		t.Fatalf("repeat start got %#v, want nothing", got)
+	}
+	tc := &gantry.ToolCall{ID: "c1", Name: "submit", Input: json.RawMessage(`{"a":1}`)}
+	gotCall := m.Map(gantry.Event{Type: gantry.EventToolCall, ToolCall: tc, RunID: "run-1"})
+	wantCall := []Event{
+		newToolCallArgs("c1", `{"a":1}`).withIdentity(id),
+		newToolCallEnd("c1").withIdentity(id),
+	}
+	if !reflect.DeepEqual(gotCall, wantCall) {
+		t.Fatalf("call got  %#v\nwant %#v", gotCall, wantCall)
+	}
+	// The same id in a later call (Ollama ids restart) is opened afresh.
+	gotAgain := m.Map(gantry.Event{Type: gantry.EventToolCall, ToolCall: tc, RunID: "run-1"})
+	if len(gotAgain) != 3 || gotAgain[0] != Event(newToolCallStart("c1", "submit").withIdentity(id)) {
+		t.Fatalf("later call got %#v, want START/ARGS/END", gotAgain)
+	}
+}
+
 func TestMapperToolResultAndDone(t *testing.T) {
 	m := NewMapper("t1", "r1")
 	m.started = true // skip lazy RunStarted for a focused assertion

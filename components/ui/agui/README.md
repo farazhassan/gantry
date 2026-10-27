@@ -124,7 +124,10 @@ data: {"type":"RUN_FINISHED","threadId":"demo-thread","runId":"demo-run"}
 Implemented: `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR`, `STEP_STARTED`/
 `STEP_FINISHED`, `TEXT_MESSAGE_START`/`TEXT_MESSAGE_CONTENT`/
 `TEXT_MESSAGE_END`, `TOOL_CALL_START`/`TOOL_CALL_ARGS`/`TOOL_CALL_END`/
-`TOOL_CALL_RESULT`, `SUBAGENT_STARTED`/`SUBAGENT_FINISHED`/`SUBAGENT_ERROR`
+`TOOL_CALL_RESULT` (a tool whose `ToolDef` sets `EarlyStart` gets its
+`TOOL_CALL_START` as soon as the model names the call, while its arguments
+are still being written; `TOOL_CALL_ARGS` and `TOOL_CALL_END` still arrive
+together once they're complete), `SUBAGENT_STARTED`/`SUBAGENT_FINISHED`/`SUBAGENT_ERROR`
 (a nested sub-agent run's lifecycle — `SUBAGENT_FINISHED` carries
 `outcome:{"type":"suspended"}` when the run paused on a client-tool call
 rather than actually finishing), `CUSTOM` (gantry-specific: `gantry.usage`,

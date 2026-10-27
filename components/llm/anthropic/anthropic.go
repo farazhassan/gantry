@@ -219,6 +219,12 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 		case "content_block_start":
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 				tools.start(ev.Index, ev.ContentBlock.ID, ev.ContentBlock.Name)
+				if ev.ContentBlock.ID != "" && ev.ContentBlock.Name != "" {
+					start := gantry.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
+					if err := yield(gantry.StreamChunk{ToolCallStart: &start}); err != nil {
+						return gantry.LLMResponse{}, err
+					}
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
