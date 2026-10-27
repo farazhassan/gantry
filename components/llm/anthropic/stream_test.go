@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -353,5 +354,35 @@ func TestGenerateStreamOmitsThinkingConfigByDefault(t *testing.T) {
 	}
 	if _, ok := gotBody["thinking"]; ok {
 		t.Errorf("request body has \"thinking\" key = %v, want omitted (extended thinking not configured)", gotBody["thinking"])
+	}
+}
+
+func TestGenerateStreamAnnouncesToolUseAtBlockStart(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w, [][2]string{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"calc","input":{}}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":2}"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		})
+	})
+
+	var starts []gantry.ToolCall
+	_, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "calc"}},
+	}, func(ch gantry.StreamChunk) error {
+		if ch.ToolCallStart != nil {
+			starts = append(starts, *ch.ToolCallStart)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	want := []gantry.ToolCall{{ID: "toolu_1", Name: "calc"}}
+	if !reflect.DeepEqual(starts, want) {
+		t.Errorf("ToolCallStart chunks = %+v, want %+v", starts, want)
 	}
 }

@@ -187,7 +187,11 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 			}
 		}
 		for _, tc := range ch.Delta.ToolCalls {
-			calls.add(tc)
+			if start, ok := calls.add(tc); ok {
+				if err := yield(gantry.StreamChunk{ToolCallStart: &start}); err != nil {
+					return gantry.LLMResponse{}, err
+				}
+			}
 		}
 		if ch.FinishReason != "" {
 			finishReason = ch.FinishReason
@@ -207,32 +211,44 @@ func (c *Client) GenerateStream(ctx context.Context, req gantry.LLMRequest, yiel
 	return out, nil
 }
 
-// toolAccumulator stitches streamed tool-call fragments back together. OpenAI
+// toolAccumulator stitches streamed tool-call fragments back together. The API
 // splits one call across many deltas keyed by Index: the first carries id/name,
 // later ones append argument fragments.
 type toolAccumulator struct {
-	order []int
-	byIdx map[int]*respToolCall
+	order     []int
+	byIdx     map[int]*respToolCall
+	announced map[int]bool
 }
 
-func (a *toolAccumulator) add(frag respToolCall) {
+// add folds frag into its call. It returns the call's ID and Name, with ok
+// true, the first time both are known -- usually on the call's first
+// fragment -- so GenerateStream can announce it (StreamChunk.ToolCallStart)
+// before its arguments finish.
+func (a *toolAccumulator) add(frag respToolCall) (start gantry.ToolCall, ok bool) {
 	if a.byIdx == nil {
 		a.byIdx = make(map[int]*respToolCall)
+		a.announced = make(map[int]bool)
 	}
-	cur, ok := a.byIdx[frag.Index]
-	if !ok {
+	cur, seen := a.byIdx[frag.Index]
+	if !seen {
 		cp := frag
-		a.byIdx[frag.Index] = &cp
+		cur = &cp
+		a.byIdx[frag.Index] = cur
 		a.order = append(a.order, frag.Index)
-		return
+	} else {
+		if frag.ID != "" {
+			cur.ID = frag.ID
+		}
+		if frag.Function.Name != "" {
+			cur.Function.Name = frag.Function.Name
+		}
+		cur.Function.Arguments += frag.Function.Arguments
 	}
-	if frag.ID != "" {
-		cur.ID = frag.ID
+	if a.announced[frag.Index] || cur.ID == "" || cur.Function.Name == "" {
+		return gantry.ToolCall{}, false
 	}
-	if frag.Function.Name != "" {
-		cur.Function.Name = frag.Function.Name
-	}
-	cur.Function.Arguments += frag.Function.Arguments
+	a.announced[frag.Index] = true
+	return gantry.ToolCall{ID: cur.ID, Name: cur.Function.Name}, true
 }
 
 func (a *toolAccumulator) calls() []respToolCall {

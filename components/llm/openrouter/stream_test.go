@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -320,5 +321,39 @@ func TestGenerateStreamSendsSessionID(t *testing.T) {
 	}
 	if gotBody["session_id"] != "chat-123" {
 		t.Errorf("session_id = %v, want chat-123", gotBody["session_id"])
+	}
+}
+
+func TestGenerateStreamAnnouncesToolCallOnceIDAndNameAreKnown(t *testing.T) {
+	c := newServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		sse(w,
+			// Call 0's id arrives after its name; call 1 has both up front.
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"calc","arguments":"{\"a\":"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"2"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"echo","arguments":"{}"}}]}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+			"[DONE]",
+		)
+	})
+
+	var starts []gantry.ToolCall
+	resp, err := c.GenerateStream(context.Background(), gantry.LLMRequest{
+		Messages: []gantry.Message{{Role: gantry.RoleUser, Content: "calc"}},
+	}, func(ch gantry.StreamChunk) error {
+		if ch.ToolCallStart != nil {
+			starts = append(starts, *ch.ToolCallStart)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	want := []gantry.ToolCall{{ID: "call_1", Name: "calc"}, {ID: "call_2", Name: "echo"}}
+	if !reflect.DeepEqual(starts, want) {
+		t.Errorf("ToolCallStart chunks = %+v, want %+v", starts, want)
+	}
+	if len(resp.ToolCalls) != 2 || resp.ToolCalls[0].ID != "call_1" || string(resp.ToolCalls[0].Input) != `{"a":2}` {
+		t.Errorf("ToolCalls = %+v, want call_1 calc {\"a\":2} then call_2", resp.ToolCalls)
 	}
 }

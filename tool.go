@@ -24,8 +24,17 @@ type ToolResult struct {
 
 // ToolDef describes a tool to the LLM. Schema is a JSON Schema document
 // describing the Input shape.
+//
+// EarlyStart opts the tool into an EventToolCallStart (see stream.go) the
+// moment a streaming adapter learns a call's id and name, before the model
+// has finished writing its arguments -- so a UI can show the call while a
+// long input is still being generated. It is never sent to the provider.
+// Set it only on a tool no PostLLM component drops or rewrites (as
+// components/planner does to update_plan): an announced call that never
+// reaches EventToolCall leaves the consumer holding a start with no end.
 type ToolDef struct {
 	Name        string
 	Description string
 	Schema      json.RawMessage
+	EarlyStart  bool
 }

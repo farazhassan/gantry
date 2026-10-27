@@ -9,16 +9,23 @@ import (
 
 // StreamChunk is one incremental update from a streaming LLM call. A chunk
 // carries a text delta, and/or the terminal StopReason + Usage on the final
-// chunk, and/or a reasoning delta (provider "extended thinking" content) or a
-// raw provider frame gantry does not otherwise model. Fields are omitempty so
+// chunk, and/or a reasoning delta (provider "extended thinking" content), a
+// tool call's early announcement, or a raw provider frame gantry does not
+// otherwise model. Fields are omitempty so
 // chunks serialize compactly.
 type StreamChunk struct {
 	TextDelta      string          `json:"text_delta,omitempty"`
 	ReasoningDelta string          `json:"reasoning_delta,omitempty"`
 	RawFrame       json.RawMessage `json:"raw_frame,omitempty"`
 	RawSource      string          `json:"raw_source,omitempty"`
-	StopReason     StopReason      `json:"stop_reason,omitempty"`
-	Usage          *Usage          `json:"usage,omitempty"`
+	// ToolCallStart announces a streamed tool call as soon as its ID and
+	// Name are both known, before its arguments have finished arriving.
+	// Input is always nil. An adapter yields it at most once per call, with
+	// the ID the call carries in the final LLMResponse, and never for a
+	// call it has no ID for.
+	ToolCallStart *ToolCall  `json:"tool_call_start,omitempty"`
+	StopReason    StopReason `json:"stop_reason,omitempty"`
+	Usage         *Usage     `json:"usage,omitempty"`
 }
 
 // StreamingLLMClient is an OPTIONAL extension of LLMClient. Adapters that can
@@ -45,7 +52,13 @@ const (
 	EventReasoningDelta EventType = "reasoning_delta"
 	EventRaw            EventType = "raw"
 	EventToolCall       EventType = "tool_call"
-	EventToolResult     EventType = "tool_result"
+	// EventToolCallStart announces, on ToolCall (ID and Name only), a call
+	// the model is still writing, for a tool whose ToolDef sets EarlyStart.
+	// It is emitted from PhaseLLMCall as the call's name streams in; the
+	// same call's EventToolCall, with its full Input, still follows after
+	// PhasePostLLM.
+	EventToolCallStart EventType = "tool_call_start"
+	EventToolResult    EventType = "tool_result"
 	// EventToolResultLive fires the instant a single tool call resolves
 	// (success, failure, or a policy-driven skip — see components/tool.Policy),
 	// carrying the same ToolResult payload shape as EventToolResult. Unlike
